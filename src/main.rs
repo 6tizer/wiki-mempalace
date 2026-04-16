@@ -1,14 +1,18 @@
 mod classifier;
 mod cli;
 mod db;
+mod mcp;
 mod service;
 
 use anyhow::{Context, Result};
 use clap::Parser;
-use cli::{Cli, Commands, MineMode};
+use cli::{BenchMode, Cli, Commands, McpTransport, MineMode, OutputFormat};
+use serde_json::json;
 use service::{
-    Palace, benchmark_recall_at_k, mine_path, mine_path_convos, save_benchmark_report, search,
-    split_mega_file, status, taxonomy, traverse, wake_up,
+    Palace, banner, benchmark_run, kg_add, kg_conflicts, kg_invalidate, kg_query, kg_stats,
+    kg_timeline, load_config, mine_path, mine_path_convos, principles_report,
+    save_benchmark_report, search_with_options, split_mega_file, status, taxonomy, traverse,
+    wake_up,
 };
 
 fn main() {
@@ -19,8 +23,19 @@ fn main() {
 }
 
 fn run() -> Result<()> {
-    let cli = Cli::parse();
+    let cli = match Cli::try_parse() {
+        Ok(v) => v,
+        Err(e) => {
+            println!("{}", banner());
+            e.print()?;
+            return Ok(());
+        }
+    };
     let palace = Palace::new(&cli.palace)?;
+    let config = load_config(&palace.config_path);
+    if !cli.quiet && !matches!(cli.command, Commands::Mcp { .. }) {
+        println!("{}", banner());
+    }
 
     match cli.command {
         Commands::Init { identity } => {
@@ -55,7 +70,11 @@ fn run() -> Result<()> {
                 ),
             }
             .with_context(|| format!("failed to mine {}", path.display()))?;
-            println!("filed {n} drawers");
+            print_out(
+                cli.output,
+                json!({"filed_drawers": n}),
+                &format!("filed {n} drawers"),
+            );
         }
         Commands::Search {
             query,
@@ -66,44 +85,69 @@ fn run() -> Result<()> {
         } => {
             palace.init(None)?;
             let conn = palace.open()?;
-            let rows = search(
+            let rows = search_with_options(
                 &conn,
                 &query,
                 wing.as_deref(),
                 hall.as_deref(),
                 room.as_deref(),
                 limit,
+                &config.retrieval,
+                cli.output == OutputFormat::Json,
             )?;
             if rows.is_empty() {
-                println!("no results");
+                print_out(cli.output, json!({"results": []}), "no results");
                 return Ok(());
             }
-            for (i, r) in rows.iter().enumerate() {
-                println!(
-                    "{}. #{} {} / {} / {}\n   {}\n   {}",
-                    i + 1,
-                    r.id,
-                    r.wing,
-                    r.hall,
-                    r.room,
-                    r.source_path,
-                    r.snippet
+            if cli.output == OutputFormat::Json {
+                print_out(
+                    cli.output,
+                    json!({"results": rows.iter().map(|r| json!({
+                        "id": r.id,
+                        "wing": r.wing,
+                        "hall": r.hall,
+                        "room": r.room,
+                        "source_path": r.source_path,
+                        "snippet": r.snippet,
+                        "score": r.score,
+                        "explain": r.explain
+                    })).collect::<Vec<_>>()}),
+                    "",
                 );
+            } else {
+                for (i, r) in rows.iter().enumerate() {
+                    println!(
+                        "{}. #{} {} / {} / {}\n   {}\n   {}\n   score={:.4}",
+                        i + 1,
+                        r.id,
+                        r.wing,
+                        r.hall,
+                        r.room,
+                        r.source_path,
+                        r.snippet,
+                        r.score
+                    );
+                }
             }
         }
         Commands::Status => {
             palace.init(None)?;
             let conn = palace.open()?;
             let s = status(&conn)?;
-            println!("drawers : {}", s.drawers);
-            println!("wings   : {}", s.wings);
-            println!("tunnels : {}", s.tunnels);
+            print_out(
+                cli.output,
+                json!({"drawers": s.drawers, "wings": s.wings, "tunnels": s.tunnels, "kg_facts": s.kg_facts}),
+                &format!(
+                    "drawers : {}\nwings   : {}\ntunnels : {}\nkg_facts: {}",
+                    s.drawers, s.wings, s.tunnels, s.kg_facts
+                ),
+            );
         }
         Commands::WakeUp { wing } => {
             palace.init(None)?;
             let conn = palace.open()?;
             let text = wake_up(&conn, &palace.identity_path, wing.as_deref())?;
-            println!("{text}");
+            print_out(cli.output, json!({"text": text}), &text);
         }
         Commands::Link {
             from_wing,
@@ -115,18 +159,30 @@ fn run() -> Result<()> {
             let conn = palace.open()?;
             let now = chrono::Utc::now().to_rfc3339();
             db::insert_tunnel(&conn, &from_wing, &from_room, &to_wing, &to_room, &now)?;
-            println!("tunnel linked: {from_wing}/{from_room} -> {to_wing}/{to_room}");
+            print_out(
+                cli.output,
+                json!({"linked": true, "from_wing": from_wing, "from_room": from_room, "to_wing": to_wing, "to_room": to_room}),
+                &format!("tunnel linked: {from_wing}/{from_room} -> {to_wing}/{to_room}"),
+            );
         }
         Commands::Taxonomy => {
             palace.init(None)?;
             let conn = palace.open()?;
             let rows = taxonomy(&conn)?;
             if rows.is_empty() {
-                println!("taxonomy is empty");
+                print_out(cli.output, json!({"taxonomy": []}), "taxonomy is empty");
                 return Ok(());
             }
-            for r in rows {
-                println!("{} / {} / {} => {}", r.wing, r.hall, r.room, r.count);
+            if cli.output == OutputFormat::Json {
+                print_out(
+                    cli.output,
+                    json!({"taxonomy": rows.into_iter().map(|r| json!({"wing":r.wing,"hall":r.hall,"room":r.room,"count":r.count})).collect::<Vec<_>>()}),
+                    "",
+                );
+            } else {
+                for r in rows {
+                    println!("{} / {} / {} => {}", r.wing, r.hall, r.room, r.count);
+                }
             }
         }
         Commands::Traverse { wing, room } => {
@@ -134,14 +190,26 @@ fn run() -> Result<()> {
             let conn = palace.open()?;
             let edges = traverse(&conn, &wing, &room)?;
             if edges.is_empty() {
-                println!("no tunnels found from {wing}/{room}");
+                print_out(
+                    cli.output,
+                    json!({"traverse":[],"wing":wing,"room":room}),
+                    &format!("no tunnels found from {wing}/{room}"),
+                );
                 return Ok(());
             }
-            for e in edges {
-                println!(
-                    "{}:{} / {} -> {} / {}",
-                    e.kind, e.from_wing, e.from_room, e.to_wing, e.to_room
+            if cli.output == OutputFormat::Json {
+                print_out(
+                    cli.output,
+                    json!({"traverse":edges.into_iter().map(|e| json!({"kind":e.kind,"from_wing":e.from_wing,"from_room":e.from_room,"to_wing":e.to_wing,"to_room":e.to_room})).collect::<Vec<_>>()}),
+                    "",
                 );
+            } else {
+                for e in edges {
+                    println!(
+                        "{}:{} / {} -> {} / {}",
+                        e.kind, e.from_wing, e.from_room, e.to_wing, e.to_room
+                    );
+                }
             }
         }
         Commands::Split {
@@ -153,27 +221,199 @@ fn run() -> Result<()> {
             let n = split_mega_file(&path, &marker, min_lines, dry_run)
                 .with_context(|| format!("failed to split {}", path.display()))?;
             if dry_run {
-                println!("dry-run: {n} sessions would be generated");
+                print_out(
+                    cli.output,
+                    json!({"dry_run":true,"sessions":n}),
+                    &format!("dry-run: {n} sessions would be generated"),
+                );
             } else {
-                println!("generated {n} split sessions");
+                print_out(
+                    cli.output,
+                    json!({"dry_run":false,"sessions":n}),
+                    &format!("generated {n} split sessions"),
+                );
             }
         }
         Commands::Bench {
             samples,
             top_k,
+            mode,
             report,
         } => {
             palace.init(None)?;
             let conn = palace.open()?;
-            let b = benchmark_recall_at_k(&conn, samples, top_k)?;
-            println!("samples : {}", b.total);
-            println!("hits    : {}", b.hits);
-            println!("recall@{}: {:.2}%", b.k, b.recall * 100.0);
+            let mode_s = match mode {
+                BenchMode::Random => "random",
+                BenchMode::Fixed => "fixed",
+            };
+            let b = benchmark_run(&conn, samples, top_k, mode_s)?;
+            print_out(
+                cli.output,
+                json!({"mode": b.mode, "samples": b.total, "hits": b.hits, "recall_at_k": b.recall, "k": b.k, "latency_ms": b.latency_ms, "throughput_per_sec": b.throughput_per_sec}),
+                &format!(
+                    "mode    : {}\nsamples : {}\nhits    : {}\nrecall@{}: {:.2}%\nlatency : {} ms\nthroughput: {:.2}/s",
+                    b.mode,
+                    b.total,
+                    b.hits,
+                    b.k,
+                    b.recall * 100.0,
+                    b.latency_ms,
+                    b.throughput_per_sec
+                ),
+            );
             if let Some(report_path) = report {
                 save_benchmark_report(&b, &report_path)?;
                 println!("report  : {}", report_path.display());
             }
         }
+        Commands::Banner => {
+            // Banner is now auto-shown on every CLI startup.
+        }
+        Commands::Principles => {
+            palace.init(None)?;
+            let conn = palace.open()?;
+            let text = principles_report(&conn)?;
+            print_out(cli.output, json!({"principles": text}), &text);
+        }
+        Commands::KgAdd {
+            subject,
+            predicate,
+            object,
+            valid_from,
+            source_drawer_id,
+        } => {
+            palace.init(None)?;
+            let conn = palace.open()?;
+            kg_add(
+                &conn,
+                &subject,
+                &predicate,
+                &object,
+                valid_from.as_deref(),
+                source_drawer_id,
+            )?;
+            println!("kg fact added: {} {} {}", subject, predicate, object);
+        }
+        Commands::KgQuery { subject, as_of } => {
+            palace.init(None)?;
+            let conn = palace.open()?;
+            let rows = kg_query(&conn, &subject, as_of.as_deref())?;
+            if rows.is_empty() {
+                print_out(
+                    cli.output,
+                    json!({"facts":[],"subject":subject}),
+                    &format!("no active facts for subject={subject}"),
+                );
+                return Ok(());
+            }
+            if cli.output == OutputFormat::Json {
+                print_out(
+                    cli.output,
+                    json!({"facts": rows.iter().map(|r| json!({"id":r.id,"subject":r.subject,"predicate":r.predicate,"object":r.object,"valid_from":r.valid_from,"valid_to":r.valid_to,"source_drawer_id":r.source_drawer_id})).collect::<Vec<_>>()}),
+                    "",
+                );
+            } else {
+                for row in rows {
+                    println!(
+                        "#{} {} --{}--> {} [{} .. {}] src={}",
+                        row.id,
+                        row.subject,
+                        row.predicate,
+                        row.object,
+                        row.valid_from,
+                        row.valid_to.unwrap_or_else(|| "open".to_string()),
+                        row.source_drawer_id
+                            .map(|v| v.to_string())
+                            .unwrap_or_else(|| "-".to_string())
+                    );
+                }
+            }
+        }
+        Commands::KgTimeline { subject } => {
+            palace.init(None)?;
+            let conn = palace.open()?;
+            let rows = kg_timeline(&conn, &subject)?;
+            if cli.output == OutputFormat::Json {
+                print_out(
+                    cli.output,
+                    json!({"timeline": rows.iter().map(|r| json!({"id":r.id,"subject":r.subject,"predicate":r.predicate,"object":r.object,"valid_from":r.valid_from,"valid_to":r.valid_to,"source_drawer_id":r.source_drawer_id})).collect::<Vec<_>>()}),
+                    "",
+                );
+            } else {
+                for r in rows {
+                    println!(
+                        "{} {} -> {} [{}..{}]",
+                        r.subject,
+                        r.predicate,
+                        r.object,
+                        r.valid_from,
+                        r.valid_to.unwrap_or_else(|| "open".to_string())
+                    );
+                }
+            }
+        }
+        Commands::KgStats => {
+            palace.init(None)?;
+            let conn = palace.open()?;
+            let s = kg_stats(&conn)?;
+            print_out(
+                cli.output,
+                json!({"facts":s.facts,"subjects":s.subjects,"predicates":s.predicates,"active_facts":s.active_facts}),
+                &format!(
+                    "facts: {}\nsubjects: {}\npredicates: {}\nactive_facts: {}",
+                    s.facts, s.subjects, s.predicates, s.active_facts
+                ),
+            );
+        }
+        Commands::KgConflicts => {
+            palace.init(None)?;
+            let conn = palace.open()?;
+            let conflicts = kg_conflicts(&conn)?;
+            if cli.output == OutputFormat::Json {
+                print_out(
+                    cli.output,
+                    json!({"conflicts": conflicts.iter().map(|c| json!({"subject":c.subject,"predicate":c.predicate,"objects":c.objects})).collect::<Vec<_>>()}),
+                    "",
+                );
+            } else if conflicts.is_empty() {
+                println!("no conflicts");
+            } else {
+                for c in conflicts {
+                    println!("conflict: {} {} => {:?}", c.subject, c.predicate, c.objects);
+                }
+            }
+        }
+        Commands::KgInvalidate {
+            subject,
+            predicate,
+            object,
+            ended,
+        } => {
+            palace.init(None)?;
+            let conn = palace.open()?;
+            let changed = kg_invalidate(&conn, &subject, &predicate, &object, ended.as_deref())?;
+            println!("invalidated {changed} facts");
+        }
+        Commands::Mcp {
+            once,
+            transport,
+            quiet,
+        } => match transport {
+            McpTransport::Stdio => {
+                mcp::run_stdio(&palace, once, quiet || config.mcp.quiet_default)?;
+            }
+        },
     }
     Ok(())
+}
+
+fn print_out(format: OutputFormat, json_value: serde_json::Value, text_value: &str) {
+    match format {
+        OutputFormat::Json => println!("{json_value}"),
+        OutputFormat::Text => {
+            if !text_value.is_empty() {
+                println!("{text_value}");
+            }
+        }
+    };
 }

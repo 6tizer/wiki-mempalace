@@ -34,7 +34,11 @@ pub fn default_rules() -> ClassifierRules {
         wing_keywords: vec![
             KeywordRule {
                 target: "wing_project".to_string(),
-                keywords: vec!["project".to_string(), "repo".to_string(), "workspace".to_string()],
+                keywords: vec![
+                    "project".to_string(),
+                    "repo".to_string(),
+                    "workspace".to_string(),
+                ],
             },
             KeywordRule {
                 target: "wing_ops".to_string(),
@@ -44,23 +48,48 @@ pub fn default_rules() -> ClassifierRules {
         hall_keywords: vec![
             KeywordRule {
                 target: "hall_facts".to_string(),
-                keywords: vec!["decision".to_string(), "choose".to_string(), "tradeoff".to_string(), "because".to_string()],
+                keywords: vec![
+                    "decision".to_string(),
+                    "choose".to_string(),
+                    "tradeoff".to_string(),
+                    "because".to_string(),
+                ],
             },
             KeywordRule {
                 target: "hall_events".to_string(),
-                keywords: vec!["incident".to_string(), "outage".to_string(), "retrospective".to_string(), "timeline".to_string()],
+                keywords: vec![
+                    "incident".to_string(),
+                    "outage".to_string(),
+                    "retrospective".to_string(),
+                    "timeline".to_string(),
+                ],
             },
             KeywordRule {
                 target: "hall_discoveries".to_string(),
-                keywords: vec!["learned".to_string(), "insight".to_string(), "discovered".to_string(), "breakthrough".to_string()],
+                keywords: vec![
+                    "learned".to_string(),
+                    "insight".to_string(),
+                    "discovered".to_string(),
+                    "breakthrough".to_string(),
+                ],
             },
             KeywordRule {
                 target: "hall_preferences".to_string(),
-                keywords: vec!["prefer".to_string(), "style".to_string(), "like".to_string(), "opinion".to_string()],
+                keywords: vec![
+                    "prefer".to_string(),
+                    "style".to_string(),
+                    "like".to_string(),
+                    "opinion".to_string(),
+                ],
             },
             KeywordRule {
                 target: "hall_advice".to_string(),
-                keywords: vec!["recommend".to_string(), "suggest".to_string(), "should".to_string(), "best practice".to_string()],
+                keywords: vec![
+                    "recommend".to_string(),
+                    "suggest".to_string(),
+                    "should".to_string(),
+                    "best practice".to_string(),
+                ],
             },
         ],
     }
@@ -116,16 +145,28 @@ fn infer_hall(path_s: &str, text: &str, rules: Option<&ClassifierRules>) -> Stri
     if contains_any(path_s, text, &["decision", "choose", "tradeoff", "because"]) {
         return "hall_facts".to_string();
     }
-    if contains_any(path_s, text, &["incident", "outage", "retrospective", "timeline"]) {
+    if contains_any(
+        path_s,
+        text,
+        &["incident", "outage", "retrospective", "timeline"],
+    ) {
         return "hall_events".to_string();
     }
-    if contains_any(path_s, text, &["learned", "insight", "discovered", "breakthrough"]) {
+    if contains_any(
+        path_s,
+        text,
+        &["learned", "insight", "discovered", "breakthrough"],
+    ) {
         return "hall_discoveries".to_string();
     }
     if contains_any(path_s, text, &["prefer", "style", "like", "opinion"]) {
         return "hall_preferences".to_string();
     }
-    if contains_any(path_s, text, &["recommend", "suggest", "should", "best practice"]) {
+    if contains_any(
+        path_s,
+        text,
+        &["recommend", "suggest", "should", "best practice"],
+    ) {
         return "hall_advice".to_string();
     }
     "hall_events".to_string()
@@ -158,9 +199,7 @@ fn normalize_slug(s: &str) -> String {
 }
 
 fn contains_any(path_s: &str, text: &str, words: &[&str]) -> bool {
-    words
-        .iter()
-        .any(|w| path_s.contains(w) || text.contains(w))
+    words.iter().any(|w| path_s.contains(w) || text.contains(w))
 }
 
 #[cfg(test)]

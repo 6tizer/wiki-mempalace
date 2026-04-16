@@ -2,11 +2,14 @@ use crate::classifier::{KNOWN_HALLS, classify, default_rules, load_rules};
 use crate::db;
 use anyhow::Result;
 use chrono::Utc;
+use rand::seq::SliceRandom;
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::time::Instant;
 use walkdir::WalkDir;
 
 pub struct Palace {
@@ -14,6 +17,7 @@ pub struct Palace {
     pub db_path: PathBuf,
     pub identity_path: PathBuf,
     pub rules_path: PathBuf,
+    pub config_path: PathBuf,
 }
 
 impl Palace {
@@ -23,23 +27,31 @@ impl Palace {
         let db_path = root.join("palace.db");
         let identity_path = root.join("identity.txt");
         let rules_path = root.join("classifier_rules.json");
+        let config_path = root.join("config.json");
         Ok(Self {
             root,
             db_path,
             identity_path,
             rules_path,
+            config_path,
         })
     }
 
     pub fn init(&self, identity: Option<&str>) -> Result<()> {
         fs::create_dir_all(&self.root)?;
         if !self.identity_path.exists() {
-            let id = identity.unwrap_or("You are my long-term coding partner. Preserve reasoning and decisions.");
+            let id = identity.unwrap_or(
+                "You are my long-term coding partner. Preserve reasoning and decisions.",
+            );
             fs::write(&self.identity_path, id)?;
         }
         if !self.rules_path.exists() {
             let rules = serde_json::to_string_pretty(&default_rules())?;
             fs::write(&self.rules_path, rules)?;
+        }
+        if !self.config_path.exists() {
+            let cfg = serde_json::to_string_pretty(&default_config())?;
+            fs::write(&self.config_path, cfg)?;
         }
         let conn = self.open()?;
         db::init_schema(&conn)?;
@@ -49,6 +61,42 @@ impl Palace {
     pub fn open(&self) -> Result<Connection> {
         db::open(&self.db_path)
     }
+}
+
+#[derive(Debug, Clone, Serialize, serde::Deserialize)]
+pub struct AppConfig {
+    pub retrieval: RetrievalConfig,
+    pub mcp: McpConfig,
+}
+
+#[derive(Debug, Clone, Serialize, serde::Deserialize)]
+pub struct RetrievalConfig {
+    pub lexical_weight: f64,
+    pub vector_weight: f64,
+}
+
+#[derive(Debug, Clone, Serialize, serde::Deserialize)]
+pub struct McpConfig {
+    pub quiet_default: bool,
+}
+
+pub fn default_config() -> AppConfig {
+    AppConfig {
+        retrieval: RetrievalConfig {
+            lexical_weight: 1.0,
+            vector_weight: 1.3,
+        },
+        mcp: McpConfig {
+            quiet_default: true,
+        },
+    }
+}
+
+pub fn load_config(path: &Path) -> AppConfig {
+    let Ok(raw) = fs::read_to_string(path) else {
+        return default_config();
+    };
+    serde_json::from_str(&raw).unwrap_or_else(|_| default_config())
 }
 
 pub fn mine_path(
@@ -103,6 +151,8 @@ pub fn mine_path(
             "INSERT INTO drawers(wing, hall, room, source_path, content, content_hash, created_at) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7)",
             params![wing, hall, room, source_path, content_trimmed, content_hash, now],
         )?;
+        let row_id = conn.last_insert_rowid();
+        upsert_vector(conn, row_id, content_trimmed)?;
         count += 1;
     }
     Ok(count)
@@ -157,6 +207,8 @@ pub fn mine_path_convos(
                 "INSERT INTO drawers(wing, hall, room, source_path, content, content_hash, created_at) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7)",
                 params![wing, hall, room, source_path, chunk.trim(), content_hash, now],
             )?;
+            let row_id = conn.last_insert_rowid();
+            upsert_vector(conn, row_id, chunk.trim())?;
             count += 1;
         }
     }
@@ -170,6 +222,28 @@ pub fn search(
     hall: Option<&str>,
     room: Option<&str>,
     limit: usize,
+) -> Result<Vec<SearchRow>> {
+    search_with_options(
+        conn,
+        query,
+        wing,
+        hall,
+        room,
+        limit,
+        &default_config().retrieval,
+        false,
+    )
+}
+
+pub fn search_with_options(
+    conn: &Connection,
+    query: &str,
+    wing: Option<&str>,
+    hall: Option<&str>,
+    room: Option<&str>,
+    limit: usize,
+    retrieval: &RetrievalConfig,
+    include_explain: bool,
 ) -> Result<Vec<SearchRow>> {
     let fts_query = build_fts_query(query);
     let sql = r#"
@@ -199,6 +273,8 @@ pub fn search(
             source_path: r.get(4)?,
             snippet: r.get(5)?,
             content: r.get(6)?,
+            score: 0.0,
+            explain: None,
         });
     }
     if out.is_empty() {
@@ -225,10 +301,12 @@ pub fn search(
                 source_path: r.get(4)?,
                 snippet: r.get(5)?,
                 content: r.get(5)?,
+                score: 0.0,
+                explain: None,
             });
         }
     }
-    rerank_rows(query, &mut out);
+    rerank_rows(query, &mut out, retrieval, include_explain);
     Ok(out)
 }
 
@@ -241,16 +319,21 @@ pub struct SearchRow {
     pub source_path: String,
     pub snippet: String,
     pub content: String,
+    pub score: f64,
+    pub explain: Option<String>,
 }
 
 pub fn status(conn: &Connection) -> Result<Status> {
     let drawers: i64 = conn.query_row("SELECT COUNT(*) FROM drawers", [], |r| r.get(0))?;
     let tunnels: i64 = conn.query_row("SELECT COUNT(*) FROM tunnels", [], |r| r.get(0))?;
-    let wings: i64 = conn.query_row("SELECT COUNT(DISTINCT wing) FROM drawers", [], |r| r.get(0))?;
+    let wings: i64 =
+        conn.query_row("SELECT COUNT(DISTINCT wing) FROM drawers", [], |r| r.get(0))?;
+    let kg_facts: i64 = conn.query_row("SELECT COUNT(*) FROM kg_facts", [], |r| r.get(0))?;
     Ok(Status {
         drawers,
         wings,
         tunnels,
+        kg_facts,
     })
 }
 
@@ -258,6 +341,224 @@ pub struct Status {
     pub drawers: i64,
     pub wings: i64,
     pub tunnels: i64,
+    pub kg_facts: i64,
+}
+
+pub fn banner_ascii() -> &'static str {
+    r#"
+    ██████╗ ██╗   ██╗███████╗████████╗      ███╗   ███╗███████╗███╗   ███╗
+    ██╔══██╗██║   ██║██╔════╝╚══██╔══╝      ████╗ ████║██╔════╝████╗ ████║
+    ██████╔╝██║   ██║███████╗   ██║         ██╔████╔██║█████╗  ██╔████╔██║
+    ██╔══██╗██║   ██║╚════██║   ██║         ██║╚██╔╝██║██╔══╝  ██║╚██╔╝██║
+    ██║  ██║╚██████╔╝███████║   ██║         ██║ ╚═╝ ██║███████╗██║ ╚═╝ ██║
+    ╚═╝  ╚═╝ ╚═════╝ ╚══════╝   ╚═╝         ╚═╝     ╚═╝╚══════╝╚═╝     ╚═╝
+
+                   Palace Memory CLI  •  local-first  •  verbatim
+"#
+}
+
+pub fn banner() -> String {
+    if std::env::var("NO_COLOR").is_ok() {
+        return banner_ascii().to_string();
+    }
+    let line_colors = [93, 208, 51, 45, 39, 33, 99];
+    let mut out = String::new();
+    for (i, line) in banner_ascii().lines().enumerate() {
+        if line.trim().is_empty() {
+            out.push('\n');
+            continue;
+        }
+        let c = line_colors[i % line_colors.len()];
+        out.push_str(&format!("\x1b[38;5;{c}m{line}\x1b[0m\n"));
+    }
+    out
+}
+
+pub fn principles_report(conn: &Connection) -> Result<String> {
+    let s = status(conn)?;
+    let last_bench = latest_benchmark(conn)?;
+    let mut out = String::new();
+    out.push_str("Core Principles Alignment\n");
+    out.push_str("- raw verbatim storage: done\n");
+    out.push_str("- wing/hall/room structure: done\n");
+    out.push_str("- tunnel navigation: done\n");
+    out.push_str("- local-first runtime: done\n");
+    out.push_str("- wake-up context layers: done (L0/L1)\n");
+    out.push_str("- knowledge graph temporal facts: baseline done\n");
+    out.push_str("- mcp tool interface: done (minimal set)\n");
+    out.push_str("- aaak compression dialect: pending\n");
+    out.push_str(&format!(
+        "\nCurrent palace stats: drawers={}, wings={}, tunnels={}, kg_facts={}",
+        s.drawers, s.wings, s.tunnels, s.kg_facts
+    ));
+    if let Some(b) = last_bench {
+        out.push_str(&format!(
+            "\nLast benchmark: mode={}, recall@{}={:.2}%, latency_ms={}, throughput={:.2}/s",
+            b.mode,
+            b.k,
+            b.recall * 100.0,
+            b.latency_ms,
+            b.throughput_per_sec
+        ));
+    }
+    Ok(out)
+}
+
+pub fn kg_add(
+    conn: &Connection,
+    subject: &str,
+    predicate: &str,
+    object: &str,
+    valid_from: Option<&str>,
+    source_drawer_id: Option<i64>,
+) -> Result<()> {
+    let now = Utc::now().to_rfc3339();
+    conn.execute(
+        "INSERT INTO kg_facts(subject, predicate, object, valid_from, valid_to, source_drawer_id, created_at) VALUES (?1, ?2, ?3, ?4, NULL, ?5, ?6)",
+        params![subject, predicate, object, valid_from.unwrap_or(&now), source_drawer_id, now],
+    )?;
+    Ok(())
+}
+
+pub fn kg_query(conn: &Connection, subject: &str, as_of: Option<&str>) -> Result<Vec<KgFact>> {
+    let as_of_ts = as_of
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| Utc::now().to_rfc3339());
+    let mut stmt = conn.prepare(
+        r#"
+        SELECT id, subject, predicate, object, valid_from, valid_to, source_drawer_id
+        FROM kg_facts
+        WHERE subject = ?1
+          AND valid_from <= ?2
+          AND (valid_to IS NULL OR valid_to > ?2)
+        ORDER BY valid_from DESC, id DESC
+    "#,
+    )?;
+    let mut rows = stmt.query(params![subject, as_of_ts])?;
+    let mut out = Vec::new();
+    while let Some(r) = rows.next()? {
+        out.push(KgFact {
+            id: r.get(0)?,
+            subject: r.get(1)?,
+            predicate: r.get(2)?,
+            object: r.get(3)?,
+            valid_from: r.get(4)?,
+            valid_to: r.get(5)?,
+            source_drawer_id: r.get(6)?,
+        });
+    }
+    Ok(out)
+}
+
+pub fn kg_invalidate(
+    conn: &Connection,
+    subject: &str,
+    predicate: &str,
+    object: &str,
+    ended: Option<&str>,
+) -> Result<usize> {
+    let ended_at = ended
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| Utc::now().to_rfc3339());
+    let changed = conn.execute(
+        "UPDATE kg_facts SET valid_to = ?1 WHERE subject = ?2 AND predicate = ?3 AND object = ?4 AND valid_to IS NULL",
+        params![ended_at, subject, predicate, object],
+    )?;
+    Ok(changed)
+}
+
+pub struct KgFact {
+    pub id: i64,
+    pub subject: String,
+    pub predicate: String,
+    pub object: String,
+    pub valid_from: String,
+    pub valid_to: Option<String>,
+    pub source_drawer_id: Option<i64>,
+}
+
+pub fn kg_timeline(conn: &Connection, subject: &str) -> Result<Vec<KgFact>> {
+    let mut stmt = conn.prepare(
+        r#"
+        SELECT id, subject, predicate, object, valid_from, valid_to, source_drawer_id
+        FROM kg_facts
+        WHERE subject = ?1
+        ORDER BY valid_from ASC, id ASC
+    "#,
+    )?;
+    let mut rows = stmt.query(params![subject])?;
+    let mut out = Vec::new();
+    while let Some(r) = rows.next()? {
+        out.push(KgFact {
+            id: r.get(0)?,
+            subject: r.get(1)?,
+            predicate: r.get(2)?,
+            object: r.get(3)?,
+            valid_from: r.get(4)?,
+            valid_to: r.get(5)?,
+            source_drawer_id: r.get(6)?,
+        });
+    }
+    Ok(out)
+}
+
+pub struct KgStats {
+    pub facts: i64,
+    pub subjects: i64,
+    pub predicates: i64,
+    pub active_facts: i64,
+}
+
+pub fn kg_stats(conn: &Connection) -> Result<KgStats> {
+    let facts: i64 = conn.query_row("SELECT COUNT(*) FROM kg_facts", [], |r| r.get(0))?;
+    let subjects: i64 =
+        conn.query_row("SELECT COUNT(DISTINCT subject) FROM kg_facts", [], |r| {
+            r.get(0)
+        })?;
+    let predicates: i64 =
+        conn.query_row("SELECT COUNT(DISTINCT predicate) FROM kg_facts", [], |r| {
+            r.get(0)
+        })?;
+    let active_facts: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM kg_facts WHERE valid_to IS NULL",
+        [],
+        |r| r.get(0),
+    )?;
+    Ok(KgStats {
+        facts,
+        subjects,
+        predicates,
+        active_facts,
+    })
+}
+
+pub struct KgConflict {
+    pub subject: String,
+    pub predicate: String,
+    pub objects: Vec<String>,
+}
+
+pub fn kg_conflicts(conn: &Connection) -> Result<Vec<KgConflict>> {
+    let mut stmt = conn.prepare(
+        r#"
+        SELECT subject, predicate, GROUP_CONCAT(DISTINCT object) AS objects, COUNT(DISTINCT object) AS n
+        FROM kg_facts
+        WHERE valid_to IS NULL
+        GROUP BY subject, predicate
+        HAVING n > 1
+    "#,
+    )?;
+    let mut rows = stmt.query([])?;
+    let mut out = Vec::new();
+    while let Some(r) = rows.next()? {
+        let obj_csv: String = r.get(2)?;
+        out.push(KgConflict {
+            subject: r.get(0)?,
+            predicate: r.get(1)?,
+            objects: obj_csv.split(',').map(|s| s.to_string()).collect(),
+        });
+    }
+    Ok(out)
 }
 
 pub fn taxonomy(conn: &Connection) -> Result<Vec<TaxonomyRow>> {
@@ -337,17 +638,43 @@ pub struct TraverseEdge {
     pub kind: String,
 }
 
-pub fn benchmark_recall_at_k(conn: &Connection, samples: usize, k: usize) -> Result<BenchmarkResult> {
-    let mut stmt = conn.prepare(
-        "SELECT id, content FROM drawers ORDER BY id DESC LIMIT ?1"
-    )?;
-    let mut rows = stmt.query(params![samples as i64])?;
+pub fn benchmark_run(
+    conn: &Connection,
+    samples: usize,
+    k: usize,
+    mode: &str,
+) -> Result<BenchmarkResult> {
+    let mut stmt = conn.prepare("SELECT id, content FROM drawers ORDER BY id DESC LIMIT 10000")?;
+    let mut rows = stmt.query([])?;
+    let mut corpus = Vec::new();
+    while let Some(r) = rows.next()? {
+        corpus.push((r.get::<_, i64>(0)?, r.get::<_, String>(1)?));
+    }
+    if corpus.is_empty() {
+        return Ok(BenchmarkResult {
+            total: 0,
+            hits: 0,
+            recall: 0.0,
+            k,
+            mode: mode.to_string(),
+            latency_ms: 0,
+            throughput_per_sec: 0.0,
+        });
+    }
+    if mode == "random" {
+        let mut rng = rand::rng();
+        corpus.shuffle(&mut rng);
+    }
+    let chosen: Vec<(i64, String)> = corpus.into_iter().take(samples).collect();
+    let start = Instant::now();
     let mut total = 0usize;
     let mut hits = 0usize;
-    while let Some(r) = rows.next()? {
-        let id: i64 = r.get(0)?;
-        let content: String = r.get(1)?;
-        let query = content.split_whitespace().take(8).collect::<Vec<_>>().join(" ");
+    for (id, content) in chosen {
+        let query = content
+            .split_whitespace()
+            .take(8)
+            .collect::<Vec<_>>()
+            .join(" ");
         if query.trim().is_empty() {
             continue;
         }
@@ -357,8 +684,41 @@ pub fn benchmark_recall_at_k(conn: &Connection, samples: usize, k: usize) -> Res
             hits += 1;
         }
     }
-    let recall = if total == 0 { 0.0 } else { hits as f64 / total as f64 };
-    Ok(BenchmarkResult { total, hits, recall, k })
+    let elapsed = start.elapsed();
+    let latency_ms = elapsed.as_millis() as u64;
+    let throughput_per_sec = if elapsed.as_secs_f64() == 0.0 {
+        total as f64
+    } else {
+        total as f64 / elapsed.as_secs_f64()
+    };
+    let recall = if total == 0 {
+        0.0
+    } else {
+        hits as f64 / total as f64
+    };
+    let out = BenchmarkResult {
+        total,
+        hits,
+        recall,
+        k,
+        mode: mode.to_string(),
+        latency_ms,
+        throughput_per_sec,
+    };
+    conn.execute(
+        "INSERT INTO benchmark_runs(mode, samples, top_k, recall, latency_ms, throughput_per_sec, created_at)
+         VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        params![
+            out.mode,
+            out.total as i64,
+            out.k as i64,
+            out.recall,
+            out.latency_ms as i64,
+            out.throughput_per_sec,
+            Utc::now().to_rfc3339()
+        ],
+    )?;
+    Ok(out)
 }
 
 pub struct BenchmarkResult {
@@ -366,6 +726,30 @@ pub struct BenchmarkResult {
     pub hits: usize,
     pub recall: f64,
     pub k: usize,
+    pub mode: String,
+    pub latency_ms: u64,
+    pub throughput_per_sec: f64,
+}
+
+pub fn latest_benchmark(conn: &Connection) -> Result<Option<BenchmarkResult>> {
+    let row = conn
+        .query_row(
+            "SELECT mode, samples, top_k, recall, latency_ms, throughput_per_sec FROM benchmark_runs ORDER BY id DESC LIMIT 1",
+            [],
+            |r| {
+                Ok(BenchmarkResult {
+                    mode: r.get(0)?,
+                    total: r.get::<_, i64>(1)? as usize,
+                    k: r.get::<_, i64>(2)? as usize,
+                    recall: r.get(3)?,
+                    latency_ms: r.get::<_, i64>(4)? as u64,
+                    throughput_per_sec: r.get(5)?,
+                    hits: 0,
+                })
+            },
+        )
+        .optional()?;
+    Ok(row)
 }
 
 pub fn save_benchmark_report(result: &BenchmarkResult, report_path: &Path) -> Result<()> {
@@ -378,21 +762,27 @@ pub fn save_benchmark_report(result: &BenchmarkResult, report_path: &Path) -> Re
         .eq_ignore_ascii_case("json")
     {
         let payload = BenchmarkReportJson {
+            mode: result.mode.clone(),
             total: result.total,
             hits: result.hits,
             recall: result.recall,
             top_k: result.k,
+            latency_ms: result.latency_ms,
+            throughput_per_sec: result.throughput_per_sec,
             generated_at: Utc::now().to_rfc3339(),
         };
         fs::write(report_path, serde_json::to_string_pretty(&payload)?)?;
     } else {
         let body = format!(
-            "# Benchmark Report\n\n- generated_at: {}\n- samples: {}\n- hits: {}\n- recall@{}: {:.2}%\n",
+            "# Benchmark Report\n\n- generated_at: {}\n- mode: {}\n- samples: {}\n- hits: {}\n- recall@{}: {:.2}%\n- latency_ms: {}\n- throughput_per_sec: {:.2}\n",
             Utc::now().to_rfc3339(),
+            result.mode,
             result.total,
             result.hits,
             result.k,
-            result.recall * 100.0
+            result.recall * 100.0,
+            result.latency_ms,
+            result.throughput_per_sec
         );
         fs::write(report_path, body)?;
     }
@@ -406,7 +796,8 @@ pub fn wake_up(conn: &Connection, identity_path: &Path, wing: Option<&str>) -> R
     out.push_str(identity.trim());
     out.push_str("\n\n# L1 Critical Facts\n");
     for hall in KNOWN_HALLS {
-        let mut sql = String::from("SELECT room, substr(content, 1, 180) FROM drawers WHERE hall = ?1");
+        let mut sql =
+            String::from("SELECT room, substr(content, 1, 180) FROM drawers WHERE hall = ?1");
         if wing.is_some() {
             sql.push_str(" AND wing = ?2 ");
         }
@@ -433,16 +824,35 @@ fn one_line(s: &str) -> String {
     s.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
-fn rerank_rows(query: &str, rows: &mut Vec<SearchRow>) {
+fn rerank_rows(
+    query: &str,
+    rows: &mut Vec<SearchRow>,
+    retrieval: &RetrievalConfig,
+    include_explain: bool,
+) {
     let terms: Vec<String> = query
         .split_whitespace()
         .map(|s| s.to_ascii_lowercase())
         .filter(|s| !s.is_empty())
         .collect();
+    let qvec = sparse_embedding(query);
+    for row in rows.iter_mut() {
+        let lexical = simple_relevance_score(&row.content, &terms, row.id);
+        let dvec = sparse_embedding(&row.content);
+        let vector = cosine_sim(&qvec, &dvec);
+        let final_score = (lexical * retrieval.lexical_weight) + (vector * retrieval.vector_weight);
+        row.score = final_score;
+        if include_explain {
+            row.explain = Some(format!(
+                "lexical={:.4}, vector={:.4}, lw={:.2}, vw={:.2}",
+                lexical, vector, retrieval.lexical_weight, retrieval.vector_weight
+            ));
+        }
+    }
     rows.sort_by(|a, b| {
-        let sa = simple_relevance_score(&a.content, &terms, a.id);
-        let sb = simple_relevance_score(&b.content, &terms, b.id);
-        sb.partial_cmp(&sa).unwrap_or(std::cmp::Ordering::Equal)
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
     });
 }
 
@@ -471,6 +881,49 @@ fn build_fts_query(query: &str) -> String {
     } else {
         tokens.join(" ")
     }
+}
+
+fn upsert_vector(conn: &Connection, drawer_id: i64, content: &str) -> Result<()> {
+    let emb = sparse_embedding(content);
+    let json = serde_json::to_string(&emb)?;
+    conn.execute(
+        "INSERT INTO drawer_vectors(drawer_id, vector_json) VALUES(?1, ?2)
+         ON CONFLICT(drawer_id) DO UPDATE SET vector_json = excluded.vector_json",
+        params![drawer_id, json],
+    )?;
+    Ok(())
+}
+
+fn sparse_embedding(text: &str) -> BTreeMap<String, f64> {
+    let mut map = BTreeMap::new();
+    for token in text
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .filter(|s| s.len() > 2)
+        .map(|s| s.to_ascii_lowercase())
+    {
+        *map.entry(token).or_insert(0.0) += 1.0;
+    }
+    let norm = map.values().map(|v| v * v).sum::<f64>().sqrt();
+    if norm > 0.0 {
+        for v in map.values_mut() {
+            *v /= norm;
+        }
+    }
+    map
+}
+
+fn cosine_sim(a: &BTreeMap<String, f64>, b: &BTreeMap<String, f64>) -> f64 {
+    if a.is_empty() || b.is_empty() {
+        return 0.0;
+    }
+    let mut s = 0.0;
+    let (small, large) = if a.len() < b.len() { (a, b) } else { (b, a) };
+    for (k, v) in small {
+        if let Some(v2) = large.get(k) {
+            s += v * v2;
+        }
+    }
+    s
 }
 
 fn convo_chunks(text: &str) -> Vec<String> {
@@ -548,10 +1001,13 @@ fn trigrams(s: &str) -> std::collections::HashSet<String> {
 
 #[derive(Serialize)]
 struct BenchmarkReportJson {
+    mode: String,
     total: usize,
     hits: usize,
     recall: f64,
     top_k: usize,
+    latency_ms: u64,
+    throughput_per_sec: f64,
     generated_at: String,
 }
 
@@ -594,7 +1050,12 @@ fn is_text_like(path: &Path) -> bool {
     )
 }
 
-pub fn split_mega_file(path: &Path, marker: &str, min_lines: usize, dry_run: bool) -> Result<usize> {
+pub fn split_mega_file(
+    path: &Path,
+    marker: &str,
+    min_lines: usize,
+    dry_run: bool,
+) -> Result<usize> {
     let text = fs::read_to_string(path)?;
     let lines: Vec<&str> = text.lines().collect();
     let mut chunks: Vec<Vec<&str>> = Vec::new();
@@ -613,7 +1074,10 @@ pub fn split_mega_file(path: &Path, marker: &str, min_lines: usize, dry_run: boo
     }
 
     let mut written = 0usize;
-    let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("session");
+    let stem = path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("session");
     let parent = path.parent().unwrap_or_else(|| Path::new("."));
     for (idx, chunk) in chunks.iter().enumerate() {
         if chunk.len() < min_lines {

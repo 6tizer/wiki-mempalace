@@ -10,8 +10,18 @@ use std::path::PathBuf;
 pub struct Cli {
     #[arg(long, global = true, default_value = "~/.mempalace-rs")]
     pub palace: String,
+    #[arg(long, global = true, value_enum, default_value_t = OutputFormat::Text)]
+    pub output: OutputFormat,
+    #[arg(long, global = true)]
+    pub quiet: bool,
     #[command(subcommand)]
     pub command: Commands,
+}
+
+#[derive(Copy, Clone, Debug, ValueEnum, Eq, PartialEq)]
+pub enum OutputFormat {
+    Text,
+    Json,
 }
 
 #[derive(Copy, Clone, Debug, ValueEnum)]
@@ -84,7 +94,64 @@ pub enum Commands {
         samples: usize,
         #[arg(long, default_value_t = 5)]
         top_k: usize,
+        #[arg(long, value_enum, default_value_t = BenchMode::Random)]
+        mode: BenchMode,
         #[arg(long)]
         report: Option<PathBuf>,
     },
+    Banner,
+    Principles,
+    KgAdd {
+        #[arg(long)]
+        subject: String,
+        #[arg(long)]
+        predicate: String,
+        #[arg(long)]
+        object: String,
+        #[arg(long)]
+        valid_from: Option<String>,
+        #[arg(long)]
+        source_drawer_id: Option<i64>,
+    },
+    KgQuery {
+        #[arg(long)]
+        subject: String,
+        #[arg(long)]
+        as_of: Option<String>,
+    },
+    KgTimeline {
+        #[arg(long)]
+        subject: String,
+    },
+    KgStats,
+    KgConflicts,
+    KgInvalidate {
+        #[arg(long)]
+        subject: String,
+        #[arg(long)]
+        predicate: String,
+        #[arg(long)]
+        object: String,
+        #[arg(long)]
+        ended: Option<String>,
+    },
+    Mcp {
+        #[arg(long)]
+        once: bool,
+        #[arg(long, value_enum, default_value_t = McpTransport::Stdio)]
+        transport: McpTransport,
+        #[arg(long)]
+        quiet: bool,
+    },
+}
+
+#[derive(Copy, Clone, Debug, ValueEnum)]
+pub enum BenchMode {
+    Random,
+    Fixed,
+}
+
+#[derive(Copy, Clone, Debug, ValueEnum)]
+pub enum McpTransport {
+    Stdio,
 }

@@ -1,0 +1,10 @@
+{
+  "mode": "fixed",
+  "total": 8,
+  "hits": 8,
+  "recall": 1.0,
+  "top_k": 3,
+  "latency_ms": 92,
+  "throughput_per_sec": 86.30252961236668,
+  "generated_at": "2026-04-15T16:45:27.643497+00:00"
+}

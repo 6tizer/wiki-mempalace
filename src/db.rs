@@ -35,6 +35,35 @@ pub fn init_schema(conn: &Connection) -> Result<()> {
             created_at TEXT NOT NULL
         );
 
+        CREATE TABLE IF NOT EXISTS kg_facts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            subject TEXT NOT NULL,
+            predicate TEXT NOT NULL,
+            object TEXT NOT NULL,
+            valid_from TEXT NOT NULL,
+            valid_to TEXT,
+            source_drawer_id INTEGER,
+            created_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_kg_spo ON kg_facts(subject, predicate, object);
+        CREATE INDEX IF NOT EXISTS idx_kg_subject ON kg_facts(subject);
+
+        CREATE TABLE IF NOT EXISTS drawer_vectors (
+            drawer_id INTEGER PRIMARY KEY,
+            vector_json TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS benchmark_runs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            mode TEXT NOT NULL,
+            samples INTEGER NOT NULL,
+            top_k INTEGER NOT NULL,
+            recall REAL NOT NULL,
+            latency_ms INTEGER NOT NULL,
+            throughput_per_sec REAL NOT NULL,
+            created_at TEXT NOT NULL
+        );
+
         CREATE VIRTUAL TABLE IF NOT EXISTS drawers_fts
         USING fts5(content, wing, hall, room, source_path, content='drawers', content_rowid='id');
 
