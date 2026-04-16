@@ -479,3 +479,79 @@ fn e2e_agent_error_paths() {
         .expect("parse error code");
     assert_eq!(code, -32700, "invalid json should return parse error code");
 }
+
+#[test]
+fn e2e_bank_isolation_search() {
+    let palace = unique_palace_dir();
+    let _guard = TempDir::new(palace.clone());
+    assert_ok(&run(&["init"], &palace), "init");
+    let fa = palace.join("bank_a_note.txt");
+    fs::write(&fa, "UNIQUE_BANK_A_TOKEN only in bank alpha").expect("write");
+    assert_ok(
+        &run(
+            &["mine", fa.to_str().expect("utf8 path"), "--bank", "bank_a"],
+            &palace,
+        ),
+        "mine bank_a",
+    );
+    let fb = palace.join("bank_b_note.txt");
+    fs::write(&fb, "UNIQUE_BANK_B_TOKEN only in bank beta").expect("write");
+    assert_ok(
+        &run(
+            &["mine", fb.to_str().expect("utf8 path"), "--bank", "bank_b"],
+            &palace,
+        ),
+        "mine bank_b",
+    );
+    let out_a = run(
+        &[
+            "--quiet",
+            "--output",
+            "json",
+            "search",
+            "UNIQUE_BANK_A_TOKEN",
+            "--bank",
+            "bank_a",
+            "--limit",
+            "5",
+        ],
+        &palace,
+    );
+    assert_ok(&out_a, "search scoped to bank_a");
+    let ja = json_stdout(&out_a);
+    let results = ja
+        .get("results")
+        .and_then(|v| v.as_array())
+        .expect("results array");
+    assert!(!results.is_empty());
+    assert!(
+        results
+            .iter()
+            .all(|r| r.get("bank_id").and_then(|v| v.as_str()) == Some("bank_a")),
+        "all hits must be bank_a"
+    );
+    let out_none = run(
+        &[
+            "--quiet",
+            "--output",
+            "json",
+            "search",
+            "UNIQUE_BANK_B_TOKEN",
+            "--limit",
+            "5",
+        ],
+        &palace,
+    );
+    assert_ok(&out_none, "search all banks for b token");
+    let jb = json_stdout(&out_none);
+    let rb = jb
+        .get("results")
+        .and_then(|v| v.as_array())
+        .expect("results b");
+    assert!(!rb.is_empty());
+    assert!(
+        rb.iter()
+            .any(|r| r.get("bank_id").and_then(|v| v.as_str()) == Some("bank_b")),
+        "unscoped search should see bank_b"
+    );
+}

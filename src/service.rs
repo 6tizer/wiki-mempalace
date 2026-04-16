@@ -6,7 +6,7 @@ use rand::seq::SliceRandom;
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
@@ -64,15 +64,35 @@ impl Palace {
 }
 
 #[derive(Debug, Clone, Serialize, serde::Deserialize)]
+#[serde(default)]
 pub struct AppConfig {
     pub retrieval: RetrievalConfig,
     pub mcp: McpConfig,
+    pub llm: LlmConfig,
+}
+
+impl Default for AppConfig {
+    fn default() -> Self {
+        default_config()
+    }
+}
+
+fn default_rrf_k() -> f64 {
+    60.0
+}
+
+fn default_rrf_weight() -> f64 {
+    18.0
 }
 
 #[derive(Debug, Clone, Serialize, serde::Deserialize)]
 pub struct RetrievalConfig {
     pub lexical_weight: f64,
     pub vector_weight: f64,
+    #[serde(default = "default_rrf_k")]
+    pub rrf_k: f64,
+    #[serde(default = "default_rrf_weight")]
+    pub rrf_weight: f64,
 }
 
 #[derive(Debug, Clone, Serialize, serde::Deserialize)]
@@ -80,15 +100,36 @@ pub struct McpConfig {
     pub quiet_default: bool,
 }
 
+#[derive(Debug, Clone, Serialize, serde::Deserialize, Default)]
+pub struct LlmConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub base_url: Option<String>,
+    /// Inline API key (discouraged). Never logged.
+    #[serde(default)]
+    pub api_key: Option<String>,
+    /// Read API key from this environment variable name (preferred).
+    #[serde(default)]
+    pub api_key_env: Option<String>,
+    #[serde(default)]
+    pub model: Option<String>,
+    #[serde(default)]
+    pub timeout_secs: Option<u64>,
+}
+
 pub fn default_config() -> AppConfig {
     AppConfig {
         retrieval: RetrievalConfig {
             lexical_weight: 1.0,
             vector_weight: 1.3,
+            rrf_k: 60.0,
+            rrf_weight: 18.0,
         },
         mcp: McpConfig {
             quiet_default: true,
         },
+        llm: LlmConfig::default(),
     }
 }
 
@@ -106,6 +147,7 @@ pub fn mine_path(
     override_wing: Option<&str>,
     override_hall: Option<&str>,
     override_room: Option<&str>,
+    bank_id: Option<&str>,
 ) -> Result<usize> {
     let rules = load_rules(rules_path);
     let mut count = 0usize;
@@ -133,6 +175,7 @@ pub fn mine_path(
         let wing = override_wing.unwrap_or(&auto.wing);
         let hall = override_hall.unwrap_or(&auto.hall);
         let room = override_room.unwrap_or(&auto.room);
+        let bank = bank_id.unwrap_or("default");
         let source_path = entry.path().to_string_lossy().to_string();
         let content_hash = sha256_hex(&source_path, content_trimmed);
         let exists = conn
@@ -148,8 +191,8 @@ pub fn mine_path(
         }
         let now = Utc::now().to_rfc3339();
         conn.execute(
-            "INSERT INTO drawers(wing, hall, room, source_path, content, content_hash, created_at) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-            params![wing, hall, room, source_path, content_trimmed, content_hash, now],
+            "INSERT INTO drawers(wing, hall, room, source_path, content, content_hash, bank_id, created_at) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![wing, hall, room, source_path, content_trimmed, content_hash, bank, now],
         )?;
         let row_id = conn.last_insert_rowid();
         upsert_vector(conn, row_id, content_trimmed)?;
@@ -165,6 +208,7 @@ pub fn mine_path_convos(
     override_wing: Option<&str>,
     override_hall: Option<&str>,
     override_room: Option<&str>,
+    bank_id: Option<&str>,
 ) -> Result<usize> {
     let rules = load_rules(rules_path);
     let mut count = 0usize;
@@ -189,6 +233,7 @@ pub fn mine_path_convos(
             let wing = override_wing.unwrap_or(&auto.wing);
             let hall = override_hall.unwrap_or("hall_events");
             let room = override_room.unwrap_or(&auto.room);
+            let bank = bank_id.unwrap_or("default");
             let source_path = format!("{}#chunk-{}", entry.path().to_string_lossy(), idx + 1);
             let content_hash = sha256_hex(&source_path, &chunk);
             let exists = conn
@@ -204,8 +249,8 @@ pub fn mine_path_convos(
             }
             let now = Utc::now().to_rfc3339();
             conn.execute(
-                "INSERT INTO drawers(wing, hall, room, source_path, content, content_hash, created_at) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-                params![wing, hall, room, source_path, chunk.trim(), content_hash, now],
+                "INSERT INTO drawers(wing, hall, room, source_path, content, content_hash, bank_id, created_at) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                params![wing, hall, room, source_path, chunk.trim(), content_hash, bank, now],
             )?;
             let row_id = conn.last_insert_rowid();
             upsert_vector(conn, row_id, chunk.trim())?;
@@ -221,6 +266,7 @@ pub fn search(
     wing: Option<&str>,
     hall: Option<&str>,
     room: Option<&str>,
+    bank_id: Option<&str>,
     limit: usize,
 ) -> Result<Vec<SearchRow>> {
     search_with_options(
@@ -229,6 +275,7 @@ pub fn search(
         wing,
         hall,
         room,
+        bank_id,
         limit,
         &default_config().retrieval,
         false,
@@ -241,13 +288,17 @@ pub fn search_with_options(
     wing: Option<&str>,
     hall: Option<&str>,
     room: Option<&str>,
+    bank_id: Option<&str>,
     limit: usize,
     retrieval: &RetrievalConfig,
     include_explain: bool,
 ) -> Result<Vec<SearchRow>> {
     let fts_query = build_fts_query(query);
+    let cap = limit.saturating_mul(4).max(32) as i64;
+    let k_rrf = retrieval.rrf_k.max(1.0);
+
     let sql = r#"
-        SELECT d.id, d.wing, d.hall, d.room, d.source_path,
+        SELECT d.id, d.wing, d.hall, d.room, d.source_path, d.bank_id,
                snippet(drawers_fts, 0, '[', ']', ' ... ', 20) AS snippet,
                d.content
         FROM drawers_fts
@@ -256,12 +307,13 @@ pub fn search_with_options(
           AND (?2 IS NULL OR d.wing = ?2)
           AND (?3 IS NULL OR d.hall = ?3)
           AND (?4 IS NULL OR d.room = ?4)
+          AND (?5 IS NULL OR d.bank_id = ?5)
         ORDER BY bm25(drawers_fts), d.id DESC
-        LIMIT ?5
+        LIMIT ?6
     "#;
 
     let mut stmt = conn.prepare(sql)?;
-    let mut rows = stmt.query(params![fts_query, wing, hall, room, limit as i64])?;
+    let mut rows = stmt.query(params![fts_query, wing, hall, room, bank_id, cap])?;
 
     let mut out = Vec::new();
     while let Some(r) = rows.next()? {
@@ -271,9 +323,11 @@ pub fn search_with_options(
             hall: r.get(2)?,
             room: r.get(3)?,
             source_path: r.get(4)?,
-            snippet: r.get(5)?,
-            content: r.get(6)?,
+            bank_id: r.get(5)?,
+            snippet: r.get(6)?,
+            content: r.get(7)?,
             score: 0.0,
+            rrf: 0.0,
             explain: None,
         });
     }
@@ -281,33 +335,74 @@ pub fn search_with_options(
         let like = format!("%{}%", query);
         let mut fallback = conn.prepare(
             r#"
-            SELECT id, wing, hall, room, source_path, substr(content, 1, 220)
+            SELECT id, wing, hall, room, source_path, bank_id, substr(content, 1, 220), content
             FROM drawers
             WHERE content LIKE ?1
               AND (?2 IS NULL OR wing = ?2)
               AND (?3 IS NULL OR hall = ?3)
               AND (?4 IS NULL OR room = ?4)
+              AND (?5 IS NULL OR bank_id = ?5)
             ORDER BY id DESC
-            LIMIT ?5
+            LIMIT ?6
         "#,
         )?;
-        let mut rows = fallback.query(params![like, wing, hall, room, limit as i64])?;
+        let mut rows = fallback.query(params![like, wing, hall, room, bank_id, cap])?;
         while let Some(r) = rows.next()? {
+            let snip: String = r.get(6)?;
             out.push(SearchRow {
                 id: r.get(0)?,
                 wing: r.get(1)?,
                 hall: r.get(2)?,
                 room: r.get(3)?,
                 source_path: r.get(4)?,
-                snippet: r.get(5)?,
-                content: r.get(5)?,
+                bank_id: r.get(5)?,
+                snippet: snip.clone(),
+                content: r.get(7)?,
                 score: 0.0,
+                rrf: 0.0,
                 explain: None,
             });
         }
     }
+
+    apply_rrf_to_candidates(query, &mut out, k_rrf);
+    out.sort_by(|a, b| {
+        b.rrf
+            .partial_cmp(&a.rrf)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| a.id.cmp(&b.id))
+    });
+    out.truncate(limit);
     rerank_rows(query, &mut out, retrieval, include_explain);
     Ok(out)
+}
+
+fn apply_rrf_to_candidates(query: &str, candidates: &mut [SearchRow], k_rrf: f64) {
+    if candidates.is_empty() {
+        return;
+    }
+    let n = candidates.len();
+    let ranks_vec = ranks_by_cosine_order(candidates, query);
+    for (rank_fts, row) in candidates.iter_mut().enumerate() {
+        let r_f = (rank_fts + 1) as f64;
+        let r_v = ranks_vec.get(&row.id).copied().unwrap_or(n + 1) as f64;
+        row.rrf = 1.0 / (k_rrf + r_f) + 1.0 / (k_rrf + r_v);
+    }
+}
+
+fn ranks_by_cosine_order(candidates: &[SearchRow], query: &str) -> HashMap<i64, usize> {
+    let qvec = sparse_embedding(query);
+    let mut idxs: Vec<usize> = (0..candidates.len()).collect();
+    idxs.sort_by(|&i, &j| {
+        let ci = cosine_sim(&qvec, &sparse_embedding(&candidates[i].content));
+        let cj = cosine_sim(&qvec, &sparse_embedding(&candidates[j].content));
+        cj.partial_cmp(&ci).unwrap_or(std::cmp::Ordering::Equal)
+    });
+    let mut out = HashMap::new();
+    for (rank0, &idx) in idxs.iter().enumerate() {
+        out.insert(candidates[idx].id, rank0 + 1);
+    }
+    out
 }
 
 #[derive(Debug)]
@@ -317,9 +412,12 @@ pub struct SearchRow {
     pub hall: String,
     pub room: String,
     pub source_path: String,
+    pub bank_id: String,
     pub snippet: String,
     pub content: String,
     pub score: f64,
+    /// Reciprocal-rank-fusion style score from list order vs cosine order (pre-final rerank).
+    pub rrf: f64,
     pub explain: Option<String>,
 }
 
@@ -418,6 +516,81 @@ pub fn kg_add(
         params![subject, predicate, object, valid_from.unwrap_or(&now), source_drawer_id, now],
     )?;
     Ok(())
+}
+
+pub fn drawer_content(conn: &Connection, id: i64) -> Result<Option<String>> {
+    let v = conn
+        .query_row(
+            "SELECT content FROM drawers WHERE id = ?1",
+            params![id],
+            |r| r.get(0),
+        )
+        .optional()?;
+    Ok(v)
+}
+
+/// Grounded synthesis over top search hits (optional LLM).
+pub fn reflect_answer(
+    conn: &Connection,
+    cfg: &LlmConfig,
+    retrieval: &RetrievalConfig,
+    query: &str,
+    bank_id: Option<&str>,
+    search_limit: usize,
+) -> Result<String> {
+    if !crate::llm::llm_ready(cfg) {
+        anyhow::bail!(
+            "LLM not configured: set llm.enabled=true, llm.base_url, llm.model, and api key via llm.api_key_env or llm.api_key"
+        );
+    }
+    let rows = search_with_options(
+        conn,
+        query,
+        None,
+        None,
+        None,
+        bank_id,
+        search_limit,
+        retrieval,
+        false,
+    )?;
+    let mut ctx = String::new();
+    for r in &rows {
+        let excerpt: String = r.content.chars().take(4000).collect();
+        ctx.push_str(&format!(
+            "--- drawer {} | {} / {} / {} | {}\n{excerpt}\n",
+            r.id, r.wing, r.hall, r.room, r.source_path
+        ));
+    }
+    let system = "You are a careful assistant. Answer using ONLY the CONTEXT below. If the context is insufficient, say you do not know.";
+    let user = format!("CONTEXT:\n{ctx}\n\nQUESTION:\n{query}");
+    crate::llm::chat_completion(cfg, vec![("system", system.to_string()), ("user", user)])
+}
+
+/// LLM-assisted triple extraction into `kg_facts` (optional LLM).
+pub fn extract_to_kg(conn: &Connection, cfg: &LlmConfig, text: &str) -> Result<usize> {
+    if !crate::llm::llm_ready(cfg) {
+        anyhow::bail!(
+            "LLM not configured: set llm.enabled=true, llm.base_url, llm.model, and api key via llm.api_key_env or llm.api_key"
+        );
+    }
+    let system = "Extract grounded triples. Output ONLY a JSON array of objects with keys subject, predicate, and object (all strings). No markdown fences.";
+    let user = format!("TEXT:\n{text}");
+    let body =
+        crate::llm::chat_completion(cfg, vec![("system", system.to_string()), ("user", user)])?;
+    let triples = crate::llm::parse_kg_triples_json(&body)?;
+    let mut n = 0usize;
+    for t in triples {
+        let s = t.subject.trim();
+        let p = t.predicate.trim();
+        let o = t.object.trim();
+        if s.is_empty() || p.is_empty() || o.is_empty() {
+            continue;
+        }
+        kg_add(conn, s, p, o, None, None)?;
+        n += 1;
+    }
+    Ok(n)
 }
 
 pub fn kg_query(conn: &Connection, subject: &str, as_of: Option<&str>) -> Result<Vec<KgFact>> {
@@ -561,16 +734,17 @@ pub fn kg_conflicts(conn: &Connection) -> Result<Vec<KgConflict>> {
     Ok(out)
 }
 
-pub fn taxonomy(conn: &Connection) -> Result<Vec<TaxonomyRow>> {
+pub fn taxonomy(conn: &Connection, bank_id: Option<&str>) -> Result<Vec<TaxonomyRow>> {
     let mut stmt = conn.prepare(
         r#"
         SELECT wing, hall, room, COUNT(*) AS cnt
         FROM drawers
+        WHERE (?1 IS NULL OR bank_id = ?1)
         GROUP BY wing, hall, room
         ORDER BY wing, hall, cnt DESC, room
     "#,
     )?;
-    let mut rows = stmt.query([])?;
+    let mut rows = stmt.query(params![bank_id])?;
     let mut out = Vec::new();
     while let Some(r) = rows.next()? {
         out.push(TaxonomyRow {
@@ -590,7 +764,12 @@ pub struct TaxonomyRow {
     pub count: i64,
 }
 
-pub fn traverse(conn: &Connection, wing: &str, room: &str) -> Result<Vec<TraverseEdge>> {
+pub fn traverse(
+    conn: &Connection,
+    wing: &str,
+    room: &str,
+    bank_id: Option<&str>,
+) -> Result<Vec<TraverseEdge>> {
     let mut out = Vec::new();
     let mut explicit = conn.prepare(
         r#"
@@ -615,9 +794,10 @@ pub fn traverse(conn: &Connection, wing: &str, room: &str) -> Result<Vec<Travers
         SELECT DISTINCT ?1, ?2, wing, room, 'implicit'
         FROM drawers
         WHERE room = ?2 AND wing != ?1
+          AND (?3 IS NULL OR bank_id = ?3)
     "#,
     )?;
-    let mut rows = implicit.query(params![wing, room])?;
+    let mut rows = implicit.query(params![wing, room, bank_id])?;
     while let Some(r) = rows.next()? {
         out.push(TraverseEdge {
             from_wing: r.get(0)?,
@@ -679,7 +859,7 @@ pub fn benchmark_run(
             continue;
         }
         total += 1;
-        let result = search(conn, &query, None, None, None, k)?;
+        let result = search(conn, &query, None, None, None, None, k)?;
         if result.iter().any(|row| row.id == id) {
             hits += 1;
         }
@@ -789,25 +969,26 @@ pub fn save_benchmark_report(result: &BenchmarkResult, report_path: &Path) -> Re
     Ok(())
 }
 
-pub fn wake_up(conn: &Connection, identity_path: &Path, wing: Option<&str>) -> Result<String> {
+pub fn wake_up(
+    conn: &Connection,
+    identity_path: &Path,
+    wing: Option<&str>,
+    bank_id: Option<&str>,
+) -> Result<String> {
     let identity = fs::read_to_string(identity_path).unwrap_or_default();
     let mut out = String::new();
     out.push_str("# L0 Identity\n");
     out.push_str(identity.trim());
     out.push_str("\n\n# L1 Critical Facts\n");
     for hall in KNOWN_HALLS {
-        let mut sql =
-            String::from("SELECT room, substr(content, 1, 180) FROM drawers WHERE hall = ?1");
-        if wing.is_some() {
-            sql.push_str(" AND wing = ?2 ");
-        }
-        sql.push_str(" ORDER BY id DESC LIMIT 2");
-        let mut stmt = conn.prepare(&sql)?;
-        let mut rows = if let Some(w) = wing {
-            stmt.query(params![hall, w])?
-        } else {
-            stmt.query(params![hall])?
-        };
+        let mut stmt = conn.prepare(
+            r#"SELECT room, substr(content, 1, 180) FROM drawers
+               WHERE hall = ?1
+                 AND (?2 IS NULL OR bank_id = ?2)
+                 AND (?3 IS NULL OR wing = ?3)
+               ORDER BY id DESC LIMIT 2"#,
+        )?;
+        let mut rows = stmt.query(params![hall, bank_id, wing])?;
         while let Some(r) = rows.next()? {
             let room_name: String = r.get(0)?;
             let text: String = r.get(1)?;
@@ -840,12 +1021,19 @@ fn rerank_rows(
         let lexical = simple_relevance_score(&row.content, &terms, row.id);
         let dvec = sparse_embedding(&row.content);
         let vector = cosine_sim(&qvec, &dvec);
-        let final_score = (lexical * retrieval.lexical_weight) + (vector * retrieval.vector_weight);
+        let final_score = retrieval.rrf_weight * row.rrf
+            + (lexical * retrieval.lexical_weight)
+            + (vector * retrieval.vector_weight);
         row.score = final_score;
         if include_explain {
             row.explain = Some(format!(
-                "lexical={:.4}, vector={:.4}, lw={:.2}, vw={:.2}",
-                lexical, vector, retrieval.lexical_weight, retrieval.vector_weight
+                "rrf={:.5}, rw={:.2}, lexical={:.4}, vector={:.4}, lw={:.2}, vw={:.2}",
+                row.rrf,
+                retrieval.rrf_weight,
+                lexical,
+                vector,
+                retrieval.lexical_weight,
+                retrieval.vector_weight
             ));
         }
     }

@@ -58,7 +58,9 @@ cargo build --release
 cargo run -- init --identity "You are my coding copilot. Preserve architecture decisions."
 cargo run -- mine /path/to/repo
 cargo run -- mine /path/to/chat-exports --mode convos
-cargo run -- search "why did we choose postgres"
+# 多租户 / 隔离：入库时指定 bank（默认 `default`）；检索可加 `--bank`
+cargo run -- mine ./notes --bank team-alpha
+cargo run -- search "why did we choose postgres" --bank team-alpha
 cargo run -- wake-up
 cargo run -- status
 cargo run -- mcp --quiet
@@ -79,32 +81,52 @@ cargo run -- --help
 ## 数据目录与配置
 
 
-| 路径（相对 palace 根）         | 说明                         |
-| ----------------------- | -------------------------- |
-| `config.json`           | 检索权重、`mcp.quiet_default` 等 |
-| `classifier_rules.json` | wing / hall 路由规则（可编辑、可审计）  |
-| `identity.txt`          | L0 唤醒用身份描述                 |
+| 路径（相对 palace 根）         | 说明                                       |
+| ----------------------- | ---------------------------------------- |
+| `config.json`           | 检索权重（含 RRF）、`mcp`、`llm`（可选 OpenAI 兼容端点）等 |
+| `classifier_rules.json` | wing / hall 路由规则（可编辑、可审计）                |
+| `identity.txt`          | L0 唤醒用身份描述                               |
 
 
-检索权重示例：
+`config.json` 示例：
 
 ```json
 {
   "retrieval": {
     "lexical_weight": 1.0,
-    "vector_weight": 1.3
+    "vector_weight": 1.3,
+    "rrf_k": 60.0,
+    "rrf_weight": 18.0
   },
   "mcp": {
     "quiet_default": true
+  },
+  "llm": {
+    "enabled": false,
+    "base_url": "https://api.openai.com/v1",
+    "api_key_env": "MEMPALACE_LLM_API_KEY",
+    "model": "gpt-4.1-mini",
+    "timeout_secs": 120
   }
 }
 ```
+
+启用后可用 CLI `reflect` / `extract` 或 MCP `mempalace_reflect` / `mempalace_extract`。密钥优先读 `api_key_env` 指向的环境变量；也可配置 `api_key`（不推荐提交到版本库）。请求发往 `{base_url}/chat/completions`（OpenAI 兼容）。
+
+LLM 启用判定（四项需同时满足）：
+
+- `llm.enabled = true`
+- `llm.base_url` 非空
+- `llm.model` 非空
+- 可解析到 API key（先读 `api_key_env` 指向的环境变量，读不到再尝试 `api_key`）
+
+因此，`api_key` 留空并不总是等价于禁用：如果 `api_key_env` 对应环境变量有值，LLM 仍会启用。若你希望明确关闭，建议直接设置 `llm.enabled = false`。
 
 ---
 
 ## 数据模型（概念）
 
-- **drawers**：原文片段及 `wing` / `hall` / `room`、`source_path`、内容哈希等元数据。
+- **drawers**：原文片段及 `wing` / `hall` / `room`、`bank_id`（记忆库/租户隔离）、`source_path`、内容哈希等元数据。
 - **drawers_fts**：FTS5 虚拟表，服务检索。
 - **tunnels**：跨 wing 的显式链接。
 - **kg_facts**：带 `valid_from` / `valid_to` 的 SPO 事实；可与 `source_drawer_id` 关联。
@@ -119,7 +141,7 @@ cargo run -- --help
 - 启动：`rust-mempalace mcp [--once] [--quiet]`
 - 单次探测示例：`echo '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}' | rust-mempalace mcp --once`
 
-当前暴露的工具名：`mempalace_status`、`mempalace_search`、`mempalace_wake_up`、`mempalace_taxonomy`、`mempalace_traverse`、`mempalace_kg_query`、`mempalace_kg_timeline`、`mempalace_kg_stats`。与 CLI 子命令并非一一对应（例如部分 `kg-`* 仅 CLI 提供）。
+当前暴露的工具名：`mempalace_status`、`mempalace_search`（支持 `bank_id`）、`mempalace_wake_up`、`mempalace_taxonomy`、`mempalace_traverse`、`mempalace_kg_query`、`mempalace_kg_timeline`、`mempalace_kg_stats`、`mempalace_reflect`、`mempalace_extract`。与 CLI 子命令并非一一对应（例如部分 `kg-`* 仅 CLI 提供）。
 
 集成异常时，优先确认子进程 **stdout 仅输出 JSON-RPC**（使用 `mcp --quiet` 并避免其它进程污染管道）。
 
@@ -140,7 +162,7 @@ cargo test --bin rust-mempalace
 cargo test --test e2e_core
 ```
 
-`tests/e2e_core.rs` 当前包含 7 个用例，覆盖 CLI 文本/JSON、MCP suite、KG 冲突与时间线、bench 固定/随机模式、Agent 工具链调用及错误路径。
+`tests/e2e_core.rs` 当前包含 8 个用例，覆盖 CLI 文本/JSON、MCP suite、KG 冲突与时间线、bench 固定/随机模式、Agent 工具链调用及错误路径、`bank_id` 检索隔离等。
 
 **CI**（见 `.github/workflows/`）：
 
@@ -161,11 +183,24 @@ src/
   cli.rs         # 参数与输出格式
   db.rs          # SQLite schema 与访问
   service.rs     # 业务编排（mine、search、wake-up、kg、bench 等）
+  llm.rs         # 可选 OpenAI 兼容 Chat Completions 客户端
   mcp.rs         # MCP stdio JSON-RPC
   classifier.rs  # 分类与规则
+docs/
+  longmemeval.md # LongMemEval 与 CI 策略说明
 tests/
   e2e_core.rs    # 端到端用例
 ```
+
+---
+
+## 与同类系统对比（如 Hindsight）
+
+[Hindsight](https://github.com/vectorize-io/hindsight) 面向「Agent 随时间学习」：写入侧用 LLM 抽取实体/关系/时序并归一化，`recall` 并行语义、BM25、图与时序检索，再用 RRF 与 cross-encoder 等重排；提供 `reflect`、Docker/Web UI、多语言 SDK 与云端形态，并在 LongMemEval 等基准上强调召回质量。
+
+**rust-mempalace** 侧重 **本地优先、原文可审计、单二进制**：默认不在入库时调用模型；检索以 SQLite FTS5 与本地稀疏向量混合为主，并在此基础上逐步增强（如 RRF 融合、`bank_id` 隔离、可选 OpenAI 兼容的 `extract` / `reflect`）。若你的首要约束是 **离线、可复现、数据不出境**，本仓库更合适；若首要约束是 **开箱即用的高阶记忆加工与企业集成**，可优先评估 Hindsight 等产品。
+
+更细的差异与路线图见仓库内规划（不随 README 展开论文级细节）。LongMemEval 与 CI 策略见 [docs/longmemeval.md](docs/longmemeval.md)。
 
 ---
 

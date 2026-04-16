@@ -20,6 +20,7 @@ pub fn init_schema(conn: &Connection) -> Result<()> {
             source_path TEXT NOT NULL,
             content TEXT NOT NULL,
             content_hash TEXT NOT NULL,
+            bank_id TEXT NOT NULL DEFAULT 'default',
             created_at TEXT NOT NULL
         );
 
@@ -83,6 +84,28 @@ pub fn init_schema(conn: &Connection) -> Result<()> {
         END;
     "#,
     )?;
+    migrate_schema(conn)?;
+    Ok(())
+}
+
+/// Apply additive migrations for existing palace DBs created before new columns.
+pub fn migrate_schema(conn: &Connection) -> Result<()> {
+    let mut stmt = conn.prepare("PRAGMA table_info(drawers)")?;
+    let mut has_bank = false;
+    let mut rows = stmt.query([])?;
+    while let Some(r) = rows.next()? {
+        let name: String = r.get(1)?;
+        if name == "bank_id" {
+            has_bank = true;
+            break;
+        }
+    }
+    if !has_bank {
+        conn.execute(
+            "ALTER TABLE drawers ADD COLUMN bank_id TEXT NOT NULL DEFAULT 'default'",
+            [],
+        )?;
+    }
     Ok(())
 }
 

@@ -46,6 +46,9 @@ pub enum Commands {
         hall: Option<String>,
         #[arg(long)]
         room: Option<String>,
+        /// Memory bank / tenant id stored on each drawer (default: `default`).
+        #[arg(long, default_value = "default")]
+        bank: String,
     },
     Search {
         query: String,
@@ -55,6 +58,8 @@ pub enum Commands {
         hall: Option<String>,
         #[arg(long)]
         room: Option<String>,
+        #[arg(long)]
+        bank: Option<String>,
         #[arg(long, default_value_t = 8)]
         limit: usize,
     },
@@ -62,6 +67,8 @@ pub enum Commands {
     WakeUp {
         #[arg(long)]
         wing: Option<String>,
+        #[arg(long)]
+        bank: Option<String>,
     },
     Link {
         #[arg(long)]
@@ -73,12 +80,17 @@ pub enum Commands {
         #[arg(long)]
         to_room: String,
     },
-    Taxonomy,
+    Taxonomy {
+        #[arg(long)]
+        bank: Option<String>,
+    },
     Traverse {
         #[arg(long)]
         wing: String,
         #[arg(long)]
         room: String,
+        #[arg(long)]
+        bank: Option<String>,
     },
     Split {
         path: PathBuf,
@@ -134,6 +146,21 @@ pub enum Commands {
         object: String,
         #[arg(long)]
         ended: Option<String>,
+    },
+    /// Synthesize an answer from retrieved drawers (requires `llm` in config).
+    Reflect {
+        query: String,
+        #[arg(long, default_value_t = 8)]
+        search_limit: usize,
+        #[arg(long)]
+        bank: Option<String>,
+    },
+    /// Extract SPO triples via LLM into `kg_facts` (requires `llm` in config).
+    Extract {
+        #[arg(long)]
+        text: Option<String>,
+        #[arg(long)]
+        drawer_id: Option<i64>,
     },
     Mcp {
         #[arg(long)]

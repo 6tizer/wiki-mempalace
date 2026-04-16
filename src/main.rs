@@ -1,6 +1,7 @@
 mod classifier;
 mod cli;
 mod db;
+mod llm;
 mod mcp;
 mod service;
 
@@ -9,10 +10,10 @@ use clap::Parser;
 use cli::{BenchMode, Cli, Commands, McpTransport, MineMode, OutputFormat};
 use serde_json::json;
 use service::{
-    Palace, banner, benchmark_run, kg_add, kg_conflicts, kg_invalidate, kg_query, kg_stats,
-    kg_timeline, load_config, mine_path, mine_path_convos, principles_report,
-    save_benchmark_report, search_with_options, split_mega_file, status, taxonomy, traverse,
-    wake_up,
+    Palace, banner, benchmark_run, drawer_content, extract_to_kg, kg_add, kg_conflicts,
+    kg_invalidate, kg_query, kg_stats, kg_timeline, load_config, mine_path, mine_path_convos,
+    principles_report, reflect_answer, save_benchmark_report, search_with_options, split_mega_file,
+    status, taxonomy, traverse, wake_up,
 };
 
 fn main() {
@@ -48,6 +49,7 @@ fn run() -> Result<()> {
             wing,
             hall,
             room,
+            bank,
         } => {
             palace.init(None)?;
             let conn = palace.open()?;
@@ -59,6 +61,7 @@ fn run() -> Result<()> {
                     wing.as_deref(),
                     hall.as_deref(),
                     room.as_deref(),
+                    Some(bank.as_str()),
                 ),
                 MineMode::Convos => mine_path_convos(
                     &conn,
@@ -67,6 +70,7 @@ fn run() -> Result<()> {
                     wing.as_deref(),
                     hall.as_deref(),
                     room.as_deref(),
+                    Some(bank.as_str()),
                 ),
             }
             .with_context(|| format!("failed to mine {}", path.display()))?;
@@ -81,6 +85,7 @@ fn run() -> Result<()> {
             wing,
             hall,
             room,
+            bank,
             limit,
         } => {
             palace.init(None)?;
@@ -91,6 +96,7 @@ fn run() -> Result<()> {
                 wing.as_deref(),
                 hall.as_deref(),
                 room.as_deref(),
+                bank.as_deref(),
                 limit,
                 &config.retrieval,
                 cli.output == OutputFormat::Json,
@@ -107,6 +113,7 @@ fn run() -> Result<()> {
                         "wing": r.wing,
                         "hall": r.hall,
                         "room": r.room,
+                        "bank_id": r.bank_id,
                         "source_path": r.source_path,
                         "snippet": r.snippet,
                         "score": r.score,
@@ -117,12 +124,13 @@ fn run() -> Result<()> {
             } else {
                 for (i, r) in rows.iter().enumerate() {
                     println!(
-                        "{}. #{} {} / {} / {}\n   {}\n   {}\n   score={:.4}",
+                        "{}. #{} {} / {} / {} [bank={}]\n   {}\n   {}\n   score={:.4}",
                         i + 1,
                         r.id,
                         r.wing,
                         r.hall,
                         r.room,
+                        r.bank_id,
                         r.source_path,
                         r.snippet,
                         r.score
@@ -143,10 +151,15 @@ fn run() -> Result<()> {
                 ),
             );
         }
-        Commands::WakeUp { wing } => {
+        Commands::WakeUp { wing, bank } => {
             palace.init(None)?;
             let conn = palace.open()?;
-            let text = wake_up(&conn, &palace.identity_path, wing.as_deref())?;
+            let text = wake_up(
+                &conn,
+                &palace.identity_path,
+                wing.as_deref(),
+                bank.as_deref(),
+            )?;
             print_out(cli.output, json!({"text": text}), &text);
         }
         Commands::Link {
@@ -165,10 +178,10 @@ fn run() -> Result<()> {
                 &format!("tunnel linked: {from_wing}/{from_room} -> {to_wing}/{to_room}"),
             );
         }
-        Commands::Taxonomy => {
+        Commands::Taxonomy { bank } => {
             palace.init(None)?;
             let conn = palace.open()?;
-            let rows = taxonomy(&conn)?;
+            let rows = taxonomy(&conn, bank.as_deref())?;
             if rows.is_empty() {
                 print_out(cli.output, json!({"taxonomy": []}), "taxonomy is empty");
                 return Ok(());
@@ -185,10 +198,10 @@ fn run() -> Result<()> {
                 }
             }
         }
-        Commands::Traverse { wing, room } => {
+        Commands::Traverse { wing, room, bank } => {
             palace.init(None)?;
             let conn = palace.open()?;
-            let edges = traverse(&conn, &wing, &room)?;
+            let edges = traverse(&conn, &wing, &room, bank.as_deref())?;
             if edges.is_empty() {
                 print_out(
                     cli.output,
@@ -394,13 +407,47 @@ fn run() -> Result<()> {
             let changed = kg_invalidate(&conn, &subject, &predicate, &object, ended.as_deref())?;
             println!("invalidated {changed} facts");
         }
+        Commands::Reflect {
+            query,
+            search_limit,
+            bank,
+        } => {
+            palace.init(None)?;
+            let conn = palace.open()?;
+            let text = reflect_answer(
+                &conn,
+                &config.llm,
+                &config.retrieval,
+                &query,
+                bank.as_deref(),
+                search_limit,
+            )?;
+            print_out(cli.output, json!({"text": text}), &text);
+        }
+        Commands::Extract { text, drawer_id } => {
+            palace.init(None)?;
+            let conn = palace.open()?;
+            let body = match (&text, drawer_id) {
+                (Some(t), None) => t.clone(),
+                (None, Some(id)) => drawer_content(&conn, id)?
+                    .ok_or_else(|| anyhow::anyhow!("drawer id not found"))?,
+                (None, None) => anyhow::bail!("provide --text or --drawer-id"),
+                (Some(_), Some(_)) => anyhow::bail!("use only one of --text or --drawer-id"),
+            };
+            let n = extract_to_kg(&conn, &config.llm, &body)?;
+            print_out(
+                cli.output,
+                json!({"kg_facts_added": n}),
+                &format!("added {n} kg facts from extract"),
+            );
+        }
         Commands::Mcp {
             once,
             transport,
             quiet,
         } => match transport {
             McpTransport::Stdio => {
-                mcp::run_stdio(&palace, once, quiet || config.mcp.quiet_default)?;
+                mcp::run_stdio(&palace, once, quiet || config.mcp.quiet_default, &config)?;
             }
         },
     }
