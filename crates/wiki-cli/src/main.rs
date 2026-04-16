@@ -6,11 +6,15 @@ use wiki_kernel::{write_lint_report, write_projection, LlmWikiEngine, NoopWikiHo
 use wiki_mempalace_bridge::{consume_outbox_ndjson, MempalaceError, MempalaceWikiSink};
 use wiki_storage::{SqliteRepository, WikiRepository};
 
+mod banner;
 mod llm;
 
 #[derive(Parser)]
 #[command(name = "wiki")]
-#[command(about = "LLM Wiki v2 minimal CLI", long_about = None)]
+#[command(
+    about = "rust-llm-wiki — LLM Wiki v2 CLI (Rust kernel, outbox, MemPalace bridge)",
+    long_about = None
+)]
 struct Cli {
     #[arg(long, default_value = "wiki.db")]
     db: PathBuf,
@@ -95,6 +99,7 @@ enum Cmd {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    banner::print_startup_banner();
     let cli = Cli::parse();
     let wiki_root = cli.wiki_dir.clone();
     let sync_wiki = cli.sync_wiki;

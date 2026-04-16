@@ -25,6 +25,7 @@ cargo run -p wiki-cli -- \
 ```
 
 会生成/更新：
+
 - `wiki/index.md`
 - `wiki/log.md`
 - `wiki/pages/`、`wiki/concepts/`、`wiki/sources/`
@@ -54,11 +55,13 @@ cargo run -p wiki-cli -- \
 ### 4) outbox 增量导出与消费确认
 
 增量导出（offset 模式）：
+
 ```bash
 cargo run -p wiki-cli -- --db wiki.db export-outbox-ndjson-from --last-id 100
 ```
 
 消费确认（标记 processed）：
+
 ```bash
 cargo run -p wiki-cli -- --db wiki.db ack-outbox --up-to-id 120 --consumer-tag mempalace
 ```
@@ -86,6 +89,7 @@ cargo test
 ```
 
 测试覆盖：
+
 - wiki 投影输出（`index.md/log.md` 与目录结构）
 - outbox 游标导出与 ack
 - mempalace bridge 的 NDJSON 消费分发
@@ -97,6 +101,7 @@ cargo test
 ```
 
 该脚本会自动执行并断言：
+
 - ingest / file-claim / supersede-claim / query / lint 全链路
 - outbox 增量导出与 ack
 - mempalace 消费结果 `consumed > 0`
@@ -106,3 +111,4 @@ cargo test
 
 - `AGENTS.md`：面向 agent 的稳定工作流规范
 - `docs/plan.md`：里程碑与验收标准
+
