@@ -10,7 +10,7 @@ pub use engine::{EngineError, LlmWikiEngine};
 pub use hooks::{NoopWikiHook, WikiHook};
 pub use memory::InMemoryStore;
 pub use search_ports::{
-    format_claim_doc_id, format_entity_doc_id, format_page_doc_id, EmptySearchPorts,
-    InMemorySearchPorts, SearchPorts,
+    format_claim_doc_id, format_entity_doc_id, format_page_doc_id, merge_graph_rankings,
+    EmptySearchPorts, InMemorySearchPorts, SearchPorts,
 };
 pub use wiki_writer::{write_lint_report, write_projection, ProjectionStats};

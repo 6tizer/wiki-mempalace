@@ -11,6 +11,7 @@ pub mod crystallize;
 pub mod events;
 pub mod graph;
 pub mod lifecycle;
+pub mod llm_ingest_plan;
 pub mod model;
 pub mod page;
 pub mod privacy;
@@ -18,6 +19,7 @@ pub mod quality;
 pub mod query;
 pub mod retention;
 pub mod schema;
+pub mod scope_policy;
 pub mod search;
 
 pub use artifact::RawArtifact;
@@ -30,6 +32,7 @@ pub use lifecycle::{
     advance_tier, apply_time_decay_to_confidence, merge_sources_confidence, reinforce_claim,
     supersede_claim,
 };
+pub use llm_ingest_plan::{parse_memory_tier, LlmClaimDraft, LlmIngestPlanV1};
 pub use model::{
     Claim, ClaimId, Entity, EntityId, EntityKind, MemoryTier, PageId, RelationKind, Scope,
     SourceId, TypedEdge,
@@ -38,6 +41,7 @@ pub use page::WikiPage;
 pub use privacy::{RedactionFinding, SensitiveKind, redact_for_ingest};
 pub use quality::{ContradictionHint, LintFinding, LintSeverity};
 pub use query::QueryContext;
+pub use scope_policy::document_visible_to_viewer;
 pub use retention::{RetentionParams, retention_strength};
 pub use schema::{DomainSchema, SchemaLoadError};
 pub use search::{RankedDoc, reciprocal_rank_fusion};

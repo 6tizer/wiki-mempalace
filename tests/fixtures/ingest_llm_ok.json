@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "summary_title": "Fixture note",
+  "summary_markdown": "## Summary\nFrom fixture file.",
+  "claims": [
+    { "text": "Postgres supports JSONB indexing.", "tier": "semantic" },
+    { "text": "Use connection pooling in production.", "tier": "procedural" }
+  ]
+}

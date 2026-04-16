@@ -1,102 +1,145 @@
-//! Startup banner with optional truecolor gradient (TTY + no `NO_COLOR`).
+//! Startup banner: block-strip `LLM-WIKI` wordmark drawn in Rust (no SVG).
 //!
-//! Printed **before** `clap` parses args so `wiki-cli --help` still shows the logo.
+//! Truecolor paints only `█` when TTY and `NO_COLOR` unset; tagline lives in Clap `about` to avoid duplicate prose.
 
 use std::fmt::Write;
 use std::io::{self, IsTerminal};
 
 const RESET: &str = "\x1b[0m";
 
-/// Inner width between `│` borders (monospace columns).
-const INNER: usize = 56;
+/// Default logo fill: deep navy (`#0c2340`).
+const LOGO_RGB: (u8, u8, u8) = (12, 35, 64);
+/// `WIKI_LOGO_COLOR=black` → pure black blocks.
+const ENV_LOGO_COLOR: &str = "WIKI_LOGO_COLOR";
 
-/// Sky → violet → coral, smooth across [0, 1].
-fn gradient_rgb(t: f32) -> (u8, u8, u8) {
-    let t = t.clamp(0.0, 1.0);
-    let (r1, g1, b1) = (56_u8, 189_u8, 248_u8); // sky
-    let (r2, g2, b2) = (167_u8, 139_u8, 250_u8); // violet
-    let (r3, g3, b3) = (251_u8, 113_u8, 133_u8); // rose
-    if t < 0.5 {
-        let u = t * 2.0;
-        (
-            lerp_u8(r1, r2, u),
-            lerp_u8(g1, g2, u),
-            lerp_u8(b1, b2, u),
-        )
-    } else {
-        let u = (t - 0.5) * 2.0;
-        (
-            lerp_u8(r2, r3, u),
-            lerp_u8(g2, g3, u),
-            lerp_u8(b2, b3, u),
-        )
+fn logo_fill_rgb() -> (u8, u8, u8) {
+    match std::env::var(ENV_LOGO_COLOR)
+        .map(|s| s.to_ascii_lowercase())
+        .as_deref()
+    {
+        Ok("black" | "0") => (0, 0, 0),
+        Ok("blue" | "navy") => LOGO_RGB,
+        _ => LOGO_RGB,
     }
 }
 
-fn lerp_u8(a: u8, b: u8, t: f32) -> u8 {
-    (a as f32 + (b as f32 - a as f32) * t.clamp(0.0, 1.0)).round() as u8
-}
-
-fn paint_line(line: &str, use_color: bool) -> String {
+/// Paint only full-block cells; spaces stay unstyled (terminal background).
+fn paint_logo_line(line: &str, use_color: bool) -> String {
     if !use_color {
         return line.to_string();
     }
-    let n = line.chars().count().max(1);
-    let mut out = String::with_capacity(line.len() + n * 20);
-    for (i, ch) in line.chars().enumerate() {
-        if ch == ' ' {
+    let (r, g, b) = logo_fill_rgb();
+    let mut out = String::with_capacity(line.len() * 2);
+    for ch in line.chars() {
+        if ch == '█' {
+            let _ = write!(out, "\x1b[38;2;{};{};{}m{}{}", r, g, b, ch, RESET);
+        } else {
             out.push(ch);
-            continue;
         }
-        let t = i as f32 / (n.saturating_sub(1).max(1)) as f32;
-        let (r, g, b) = gradient_rgb(t);
-        let _ = write!(out, "\x1b[38;2;{};{};{}m{}{}", r, g, b, ch, RESET);
     }
     out
 }
 
-fn top_rule() -> String {
-    format!("  ╭{}╮", "─".repeat(INNER))
-}
-
-fn bottom_rule() -> String {
-    format!("  ╰{}╯", "─".repeat(INNER))
-}
-
-/// Center `text` inside the inner box; truncates if longer than `INNER`.
-fn row(text: &str) -> String {
-    let mut s = text.trim().to_string();
-    if s.chars().count() > INNER {
-        s = s.chars().take(INNER).collect();
+/// Center `line` in `width` columns (display width == `line.len()` for our ASCII art).
+fn center_line(line: &str, width: usize) -> String {
+    let n = line.chars().count();
+    if n >= width {
+        return line.chars().take(width).collect();
     }
-    let len = s.chars().count();
-    let pad = INNER.saturating_sub(len);
+    let pad = width - n;
     let left = pad / 2;
     let right = pad - left;
-    format!(
-        "  │{}{}{}│",
-        " ".repeat(left),
-        s,
-        " ".repeat(right)
-    )
+    format!("{}{}{}", " ".repeat(left), line, " ".repeat(right))
+}
+
+/// Five-row strip-built letters: `LLM-WIKI` (monospace `█` + space).
+fn llm_wiki_logo_rows() -> [String; 5] {
+    const L: &[&str; 5] = &[
+        "█    ",
+        "█    ",
+        "█    ",
+        "█    ",
+        "█████",
+    ];
+    const M: &[&str; 5] = &[
+        "██   ██",
+        "███ ███",
+        "██ █ ██",
+        "██   ██",
+        "██   ██",
+    ];
+    const HY: &[&str; 5] = &[
+        "   ",
+        "   ",
+        "   ",
+        "███",
+        "   ",
+    ];
+    const W: &[&str; 5] = &[
+        "██     ██",
+        "██     ██",
+        "██  █  ██",
+        "██ ███ ██",
+        "███   ███",
+    ];
+    const I: &[&str; 5] = &[
+        " █ ",
+        " █ ",
+        " █ ",
+        " █ ",
+        " █ ",
+    ];
+    const K: &[&str; 5] = &[
+        "██   ██",
+        "██  █  ",
+        "████   ",
+        "██  █  ",
+        "██   ██",
+    ];
+
+    let parts: &[&[&str; 5]] = &[L, L, M, HY, W, I, K, I];
+    let mut rows = [
+        String::new(),
+        String::new(),
+        String::new(),
+        String::new(),
+        String::new(),
+    ];
+    for (i, p) in parts.iter().enumerate() {
+        for r in 0..5 {
+            if i > 0 {
+                rows[r].push(' ');
+            }
+            rows[r].push_str(p[r]);
+        }
+    }
+    rows
 }
 
 pub fn print_startup_banner() {
     let use_color = std::env::var_os("NO_COLOR").is_none() && io::stdout().is_terminal();
 
-    let lines = [
-        String::new(),
-        top_rule(),
-        row(""),
-        row("rust-llm-wiki"),
-        row("LLM Wiki v2 · persistent knowledge kernel"),
-        row("Rust · event outbox · RRF · MemPalace"),
-        row(""),
-        bottom_rule(),
-        String::new(),
-    ];
+    let logo = llm_wiki_logo_rows();
+    let logo_width = logo[0].chars().count() + 4;
 
-    for line in &lines {
-        println!("{}", paint_line(line, use_color));
+    for ln in &logo {
+        let centered = center_line(ln, logo_width);
+        println!("{}", paint_logo_line(&centered, use_color));
+    }
+    println!();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn logo_rows_uniform_width() {
+        let rows = llm_wiki_logo_rows();
+        let w = rows[0].chars().count();
+        for r in &rows {
+            assert_eq!(r.chars().count(), w, "logo row width mismatch: {r:?}");
+        }
+        assert!(w <= 64, "logo should fit typical box: {w}");
     }
 }

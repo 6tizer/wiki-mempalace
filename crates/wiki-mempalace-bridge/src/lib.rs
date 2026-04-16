@@ -17,6 +17,10 @@ pub trait MempalaceWikiSink: Send + Sync {
     fn on_claim_event(&self, claim_id: ClaimId) -> Result<(), MempalaceError>;
     fn on_claim_superseded(&self, old: ClaimId, new: ClaimId) -> Result<(), MempalaceError>;
     fn on_source_linked(&self, source_id: SourceId, claim_id: ClaimId) -> Result<(), MempalaceError>;
+    /// 原始资料入库（无 claim 关联时）；默认忽略。
+    fn on_source_ingested(&self, _source_id: SourceId) -> Result<(), MempalaceError> {
+        Ok(())
+    }
     fn scope_filter(&self, scope: &Scope) -> bool;
 }
 
@@ -52,6 +56,21 @@ impl MempalaceWikiSink for NoopMempalace {
     }
 }
 
+/// 第三路「图」召回的可插拔扩展：由宿主对接 `rust-mempalace` 的 traverse / kg_query 等。
+pub trait MempalaceGraphRanker: Send + Sync {
+    /// 返回 `entity:` / `claim:` 等 doc id，顺序即相关度优先。
+    fn graph_rank_extras(&self, query: &str, limit: usize) -> Vec<String>;
+}
+
+#[derive(Debug, Default, Clone, Copy)]
+pub struct NoopMempalaceGraphRanker;
+
+impl MempalaceGraphRanker for NoopMempalaceGraphRanker {
+    fn graph_rank_extras(&self, _query: &str, _limit: usize) -> Vec<String> {
+        Vec::new()
+    }
+}
+
 pub fn consume_outbox_ndjson<S: MempalaceWikiSink>(
     sink: &S,
     ndjson: &str,
@@ -67,6 +86,10 @@ pub fn consume_outbox_ndjson<S: MempalaceWikiSink>(
             }
             WikiEvent::ClaimSuperseded { old, new, .. } => {
                 sink.on_claim_superseded(old, new)?;
+                count += 1;
+            }
+            WikiEvent::SourceIngested { source_id, .. } => {
+                sink.on_source_ingested(source_id)?;
                 count += 1;
             }
             _ => {}
@@ -86,6 +109,7 @@ mod tests {
     struct CountingSink {
         upserted: Arc<AtomicUsize>,
         superseded: Arc<AtomicUsize>,
+        sources: Arc<AtomicUsize>,
     }
 
     impl MempalaceWikiSink for CountingSink {
@@ -109,6 +133,11 @@ mod tests {
 
         fn scope_filter(&self, _scope: &Scope) -> bool {
             true
+        }
+
+        fn on_source_ingested(&self, _source_id: SourceId) -> Result<(), MempalaceError> {
+            self.sources.fetch_add(1, Ordering::SeqCst);
+            Ok(())
         }
     }
 
@@ -137,5 +166,24 @@ mod tests {
         assert_eq!(n, 2);
         assert_eq!(sink.upserted.load(Ordering::SeqCst), 1);
         assert_eq!(sink.superseded.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    fn consumes_source_ingested() {
+        let sink = CountingSink {
+            upserted: Arc::new(AtomicUsize::new(0)),
+            superseded: Arc::new(AtomicUsize::new(0)),
+            sources: Arc::new(AtomicUsize::new(0)),
+        };
+        let sid = SourceId(uuid::Uuid::new_v4());
+        let line = serde_json::to_string(&WikiEvent::SourceIngested {
+            source_id: sid,
+            redacted: false,
+            at: time::OffsetDateTime::now_utc(),
+        })
+        .unwrap();
+        let n = consume_outbox_ndjson(&sink, &line).unwrap();
+        assert_eq!(n, 1);
+        assert_eq!(sink.sources.load(Ordering::SeqCst), 1);
     }
 }

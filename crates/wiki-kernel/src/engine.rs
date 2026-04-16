@@ -6,8 +6,8 @@ use std::path::Path;
 use wiki_storage::{StorageError, WikiRepository};
 
 use wiki_core::{
-    advance_tier, apply_time_decay_to_confidence, draft_from_session, redact_for_ingest,
-    reinforce_claim, supersede_claim,
+    advance_tier, apply_time_decay_to_confidence, document_visible_to_viewer, draft_from_session,
+    redact_for_ingest, reinforce_claim, supersede_claim,
     walk_entities, AuditOperation, AuditRecord, Claim, ClaimId, ContradictionHint,
     CrystallizationDraft, DomainSchema, Entity, EntityId, GraphWalkOptions, LintFinding,
     LintSeverity, MemoryTier, QueryContext, RawArtifact, RelationKind, SchemaLoadError,
@@ -30,6 +30,8 @@ pub enum EngineError {
     PromotionDenied,
     #[error(transparent)]
     Storage(#[from] StorageError),
+    #[error("scope denied: resource not visible to this viewer")]
+    ScopeDenied,
 }
 
 /// 编排 ingest / 写入 / 取代 / 结晶 / lint / 混合排序 的内存参考实现。
@@ -195,12 +197,20 @@ impl<H: WikiHook> LlmWikiEngine<H> {
     }
 
     /// 若质量与置信度达到 Schema 阈值，则沿巩固阶梯晋升一级。
-    pub fn promote_if_qualified(&mut self, claim_id: ClaimId, actor: &str) -> Result<(), EngineError> {
+    pub fn promote_if_qualified(
+        &mut self,
+        claim_id: ClaimId,
+        actor: &str,
+        viewer: &Scope,
+    ) -> Result<(), EngineError> {
         let claim = self
             .store
             .claims
             .get(&claim_id)
             .ok_or(EngineError::ClaimNotFound(claim_id))?;
+        if !document_visible_to_viewer(&claim.scope, viewer) {
+            return Err(EngineError::ScopeDenied);
+        }
         if claim.confidence < self.schema.min_confidence_to_promote
             || claim.quality_score < self.schema.min_quality_to_crystallize
         {
@@ -258,11 +268,23 @@ impl<H: WikiHook> LlmWikiEngine<H> {
     }
 
     /// 内置内存三路 stub → RRF → 保留强度加权（不写审计）。
-    pub fn query_ranked_memory(&self, ctx: &QueryContext<'_>, now: OffsetDateTime) -> Vec<(String, f64)> {
-        let ports = crate::InMemorySearchPorts {
-            store: &self.store,
-        };
-        query_ranked_with_ports(&self.schema, &self.store, ctx, &ports, now)
+    pub fn query_ranked_memory(
+        &self,
+        ctx: &QueryContext<'_>,
+        now: OffsetDateTime,
+        vector_rank_override: Option<Vec<String>>,
+        graph_rank_override: Option<Vec<String>>,
+    ) -> Vec<(String, f64)> {
+        let ports = crate::InMemorySearchPorts::new(&self.store, ctx.viewer_scope.clone());
+        query_ranked_with_ports(
+            &self.schema,
+            &self.store,
+            ctx,
+            &ports,
+            now,
+            vector_rank_override,
+            graph_rank_override,
+        )
     }
 
     /// 三路端口召回 → RRF →（对 `claim:`）保留强度加权；并写审计与 `QueryServed` 事件。
@@ -271,8 +293,10 @@ impl<H: WikiHook> LlmWikiEngine<H> {
         ctx: &QueryContext<'_>,
         now: OffsetDateTime,
         actor: &str,
+        vector_rank_override: Option<Vec<String>>,
+        graph_rank_override: Option<Vec<String>>,
     ) -> Vec<(String, f64)> {
-        let ranked = self.query_ranked_memory(ctx, now);
+        let ranked = self.query_ranked_memory(ctx, now, vector_rank_override, graph_rank_override);
         let top: Vec<String> = ranked.iter().take(24).map(|(id, _)| id.clone()).collect();
         self.record_query(ctx.query, top, actor);
         ranked
@@ -285,8 +309,18 @@ impl<H: WikiHook> LlmWikiEngine<H> {
         ports: &P,
         now: OffsetDateTime,
         actor: &str,
+        vector_rank_override: Option<Vec<String>>,
+        graph_rank_override: Option<Vec<String>>,
     ) -> Vec<(String, f64)> {
-        let ranked = query_ranked_with_ports(&self.schema, &self.store, ctx, ports, now);
+        let ranked = query_ranked_with_ports(
+            &self.schema,
+            &self.store,
+            ctx,
+            ports,
+            now,
+            vector_rank_override,
+            graph_rank_override,
+        );
         let top: Vec<String> = ranked.iter().take(24).map(|(id, _)| id.clone()).collect();
         self.record_query(ctx.query, top, actor);
         ranked
@@ -310,9 +344,16 @@ impl<H: WikiHook> LlmWikiEngine<H> {
         rank_fused_with_retention(&self.schema, &self.store, fused, now)
     }
 
-    pub fn run_basic_lint(&mut self, actor: &str) -> Vec<LintFinding> {
+    pub fn run_basic_lint(&mut self, actor: &str, viewer_scope: Option<&Scope>) -> Vec<LintFinding> {
         let mut findings = Vec::new();
+        let visible = |s: &Scope| match viewer_scope {
+            None => true,
+            Some(v) => document_visible_to_viewer(s, v),
+        };
         for c in self.store.claims.values() {
+            if !visible(&c.scope) {
+                continue;
+            }
             if c.quality_score < 0.35 {
                 findings.push(LintFinding {
                     code: "quality.low".into(),
@@ -338,6 +379,9 @@ impl<H: WikiHook> LlmWikiEngine<H> {
             .filter(|t| !t.is_empty())
             .collect();
         for p in self.store.pages.values_mut() {
+            if !visible(&p.scope) {
+                continue;
+            }
             p.refresh_outbound_links();
             if p.title.trim().is_empty() {
                 findings.push(LintFinding {
@@ -360,11 +404,17 @@ impl<H: WikiHook> LlmWikiEngine<H> {
         }
         let mut inbound_count: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
         for p in self.store.pages.values() {
+            if !visible(&p.scope) {
+                continue;
+            }
             for link in &p.outbound_page_titles {
                 *inbound_count.entry(link.clone()).or_insert(0) += 1;
             }
         }
         for p in self.store.pages.values() {
+            if !visible(&p.scope) {
+                continue;
+            }
             if inbound_count.get(&p.title).copied().unwrap_or(0) == 0 {
                 findings.push(LintFinding {
                     code: "page.orphan".into(),
@@ -376,10 +426,16 @@ impl<H: WikiHook> LlmWikiEngine<H> {
         }
         let mut page_text = String::new();
         for p in self.store.pages.values() {
+            if !visible(&p.scope) {
+                continue;
+            }
             page_text.push_str(&p.markdown.to_ascii_lowercase());
             page_text.push('\n');
         }
         for c in self.store.claims.values() {
+            if !visible(&c.scope) {
+                continue;
+            }
             if c.stale {
                 findings.push(LintFinding {
                     code: "claim.stale".into(),
@@ -408,9 +464,19 @@ impl<H: WikiHook> LlmWikiEngine<H> {
         findings
     }
 
-    pub fn naive_contradiction_pairs(&self) -> Vec<ContradictionHint> {
+    pub fn naive_contradiction_pairs(&self, viewer_scope: Option<&Scope>) -> Vec<ContradictionHint> {
         let mut hints = Vec::new();
-        let ids: Vec<ClaimId> = self.store.claims.keys().copied().collect();
+        let visible = |s: &Scope| match viewer_scope {
+            None => true,
+            Some(v) => document_visible_to_viewer(s, v),
+        };
+        let ids: Vec<ClaimId> = self
+            .store
+            .claims
+            .iter()
+            .filter(|(_, c)| visible(&c.scope))
+            .map(|(id, _)| *id)
+            .collect();
         for i in 0..ids.len() {
             for j in (i + 1)..ids.len() {
                 let a = &self.store.claims[&ids[i]];
@@ -527,11 +593,13 @@ pub fn query_ranked_with_ports<P: SearchPorts>(
     ctx: &QueryContext<'_>,
     ports: &P,
     now: OffsetDateTime,
+    vector_rank_override: Option<Vec<String>>,
+    graph_rank_override: Option<Vec<String>>,
 ) -> Vec<(String, f64)> {
     let lim = ctx.per_stream_limit;
     let bm25 = ports.bm25_ranked_ids(ctx.query, lim);
-    let vector = ports.vector_ranked_ids(ctx.query, lim);
-    let graph = ports.graph_ranked_ids(ctx.query, lim);
+    let vector = vector_rank_override.unwrap_or_else(|| ports.vector_ranked_ids(ctx.query, lim));
+    let graph = graph_rank_override.unwrap_or_else(|| ports.graph_ranked_ids(ctx.query, lim));
     let fused = reciprocal_rank_fusion(&[bm25, vector, graph], ctx.rrf_k);
     rank_fused_with_retention(schema, store, &fused, now)
 }
@@ -653,9 +721,13 @@ mod tests {
             MemoryTier::Semantic,
             "t",
         );
-        let ctx = QueryContext::new("Redis API").with_per_stream_limit(20);
+        let ctx = QueryContext::new("Redis API")
+            .with_per_stream_limit(20)
+            .with_viewer_scope(Scope::Private {
+                agent_id: "a".into(),
+            });
         let now = OffsetDateTime::now_utc();
-        let ranked = eng.query_pipeline_memory(&ctx, now, "t");
+        let ranked = eng.query_pipeline_memory(&ctx, now, "t", None, None);
         assert!(!ranked.is_empty());
         assert!(ranked[0].0.starts_with("claim:"));
     }
@@ -687,8 +759,50 @@ mod tests {
             },
         );
         eng.store.pages.insert(p.id, p);
-        let findings = eng.run_basic_lint("tester");
+        let findings = eng.run_basic_lint(
+            "tester",
+            Some(&Scope::Private {
+                agent_id: "a".into(),
+            }),
+        );
         assert!(findings.iter().any(|f| f.code == "page.broken_wikilink"));
+    }
+
+    #[test]
+    fn query_respects_private_scope_isolation() {
+        let mut eng = LlmWikiEngine::new(DomainSchema::permissive_default());
+        eng.file_claim(
+            "agent A secret",
+            Scope::Private {
+                agent_id: "alice".into(),
+            },
+            MemoryTier::Semantic,
+            "t",
+        );
+        eng.file_claim(
+            "agent B secret",
+            Scope::Private {
+                agent_id: "bob".into(),
+            },
+            MemoryTier::Semantic,
+            "t",
+        );
+        let ctx = QueryContext::new("secret")
+            .with_per_stream_limit(20)
+            .with_viewer_scope(Scope::Private {
+                agent_id: "alice".into(),
+            });
+        let now = OffsetDateTime::now_utc();
+        let ranked = eng.query_pipeline_memory(&ctx, now, "t", None, None);
+        assert_eq!(ranked.len(), 1);
+        assert!(ranked[0].0.starts_with("claim:"));
+        let cid: uuid::Uuid = ranked[0].0.strip_prefix("claim:").unwrap().parse().unwrap();
+        assert_eq!(
+            eng.store.claims[&ClaimId(cid)].scope,
+            Scope::Private {
+                agent_id: "alice".into()
+            }
+        );
     }
 
     #[test]
@@ -715,7 +829,15 @@ mod tests {
                 "tester",
             )
             .unwrap();
-        let _ = eng.query_pipeline_memory(&QueryContext::new("Postgres"), OffsetDateTime::now_utc(), "tester");
+        let _ = eng.query_pipeline_memory(
+            &QueryContext::new("Postgres").with_viewer_scope(Scope::Shared {
+                team_id: "t".into(),
+            }),
+            OffsetDateTime::now_utc(),
+            "tester",
+            None,
+            None,
+        );
         eng.save_to_repo(&repo).unwrap();
         let n = eng.flush_outbox_to_repo(&repo).unwrap();
         assert!(n > 0);

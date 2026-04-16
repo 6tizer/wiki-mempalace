@@ -13,3 +13,10 @@ model = "deepseek-chat"
 # Optional knobs (not used by code yet; reserved)
 timeout_seconds = 60
 max_retries = 2
+
+# Optional: OpenAI-compatible embeddings (used with `wiki-cli query --vectors`).
+# If omitted, `--vectors` will error until you add this section.
+# [embed]
+# model = "text-embedding-3-small"
+# base_url = "https://api.openai.com/v1"   # optional; defaults to [llm].base_url
+# api_key = "YOUR_EMBED_KEY"               # optional; defaults to [llm].api_key

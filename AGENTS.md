@@ -9,6 +9,8 @@ cargo run -p wiki-cli -- --db wiki.db --wiki-dir wiki --sync-wiki ingest \
   "file:///notes/a.md" "source body text" --scope private:cli
 ```
 
+可选：`--vectors --llm-config llm-config.toml` 在 ingest 后写入 embedding 行（需 `[embed]`）。
+
 要求：
 - ingest 后必须 `save_snapshot` + `flush_outbox`。
 - 若开启 `--sync-wiki`，必须同步 markdown 投影层。
@@ -20,6 +22,8 @@ cargo run -p wiki-cli -- --db wiki.db --wiki-dir wiki --sync-wiki query \
   "what changed?" --write-page --page-title "analysis-change-log"
 ```
 
+可选：`--viewer-scope private:<agent>` 或 `shared:<team>` 限定检索视角；`--vectors` 启用余弦向量路（需 `[embed]`）；`--graph-extras-file path.txt` 合并外部图候选 doc id 进第三路。
+
 要求：
 - 默认返回 top ranked docs。
 - 若 `--write-page`，将 query 结果写入 wiki 页面，并更新 `index.md`。
@@ -29,6 +33,8 @@ cargo run -p wiki-cli -- --db wiki.db --wiki-dir wiki --sync-wiki query \
 ```bash
 cargo run -p wiki-cli -- --db wiki.db --wiki-dir wiki --sync-wiki lint
 ```
+
+`lint` 与 `promote` 同样支持 `--viewer-scope`，与 `query` 一致。
 
 要求：
 - 关注 `page.orphan`、`claim.stale`、`xref.missing`。
@@ -56,3 +62,12 @@ cargo run -p wiki-cli -- --db wiki.db consume-to-mempalace --last-id 100
 - 新结论优先通过 `supersede` 替换旧 claim。
 - 旧 claim 标记 `stale` 后，不删除，保留审计与可回溯性。
 - lint 中若出现 stale 相关提示，应在页面层补充新旧结论关系。
+
+## 6. LLM 结构化 ingest（可选）
+
+```bash
+cargo run -p wiki-cli -- --db wiki.db --llm-config llm-config.toml \
+  ingest-llm "file:///notes/a.md" "正文……" --scope private:cli
+```
+
+`--dry-run` 仅打印模型 JSON，不落库。失败时不写入 claim（可结合日志排查）。

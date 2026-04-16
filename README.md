@@ -82,6 +82,44 @@ cargo run -p wiki-cli -- --db wiki.db consume-to-mempalace --last-id 100
 
 注意：**不要提交真实 `api_key` 到 git**。
 
+可选 `[embed]` 段用于 **向量检索**（`query --vectors`），见 `llm-config.example.toml`。
+
+## 多 agent 视角（`--viewer-scope`）
+
+`query` / `lint` / `promote` 使用同一视角，默认 `--viewer-scope private:cli`：
+
+- `private:<agent_id>`：仅可见同 agent 的私有 claim/page/entity/source。
+- `shared:<team_id>`：仅可见同 team 的共享数据。
+- 私有视角**不会**隐式看到团队库，避免误泄露；需要团队数据时请显式 `shared:...`。
+
+## 向量检索（`--vectors`）
+
+在已写入 `wiki_embedding` 表的前提下（`ingest` / `file-claim` 且带 `--vectors` 时会自动 embed），查询可走余弦相似度作为第二路：
+
+```bash
+cargo run -p wiki-cli -- --db wiki.db --vectors --llm-config llm-config.toml \
+  --viewer-scope private:cli query "Redis 缓存"
+```
+
+需配置 `[embed]` 与可用的 OpenAI-compatible `/v1/embeddings` 端点。
+
+## LLM 结构化 ingest（`ingest-llm`）
+
+由模型从正文生成 JSON 计划（摘要 + claims），再写入引擎（可先 `--dry-run` 只看 JSON）：
+
+```bash
+cargo run -p wiki-cli -- --db wiki.db --llm-config llm-config.toml \
+  ingest-llm "file:///x.md" "正文……" --scope private:cli --dry-run
+```
+
+## MemPalace 图召回扩展
+
+[`wiki-mempalace-bridge`](crates/wiki-mempalace-bridge/src/lib.rs) 提供 `MempalaceGraphRanker` trait；内核提供 [`merge_graph_rankings`](crates/wiki-kernel/src/search_ports.rs) 将外部候选与内存图路交织去重。
+
+CLI 可用 `--graph-extras-file path.txt`（每行一个 `entity:` / `claim:` doc id，`#` 开头为注释）把 MemPalace 或其它图遍历结果并入 `query` 的第三路。`consume-to-mempalace` 会对 outbox 中的 `SourceIngested` 调用 `on_source_ingested`（默认可忽略，打印型 sink 会打日志）。
+
+可选在本机为 `wiki-mempalace-bridge` 增加 `path` 依赖到 `rust-mempalace` 并实现 `MempalaceGraphRanker` / `MempalaceWikiSink`，无需提交到 CI。
+
 ## 测试
 
 ```bash

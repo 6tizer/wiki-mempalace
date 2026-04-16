@@ -57,6 +57,14 @@ else
   echo "skip: llm-config.toml not found"
 fi
 
+echo "[9] viewer-scope isolation (no ranked lines for wrong private agent)"
+ranked_wrong="$(cargo run -q -p wiki-cli --manifest-path "$REPO_ROOT/Cargo.toml" -- \
+  --db wiki.db --viewer-scope private:intruder query "Redis" 2>/dev/null | grep -E '^[0-9]' || true)"
+if [[ -n "$ranked_wrong" ]]; then
+  echo "expected empty ranked results for private:intruder, got: $ranked_wrong" >&2
+  exit 1
+fi
+
 test -f wiki/index.md
 test -f wiki/log.md
 test -d wiki/reports
