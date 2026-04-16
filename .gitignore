@@ -1,0 +1,4 @@
+/target/
+wiki.db
+wiki/
+llm-config.toml
