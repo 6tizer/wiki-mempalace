@@ -3,6 +3,14 @@ name = "rust-mempalace"
 version = "0.1.0"
 edition = "2024"
 
+[lib]
+name = "rust_mempalace"
+path = "src/lib.rs"
+
+[[bin]]
+name = "rust-mempalace"
+path = "src/main.rs"
+
 [dependencies]
 anyhow = "1"
 chrono = { version = "0.4", features = ["clock"] }

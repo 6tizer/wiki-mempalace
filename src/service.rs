@@ -1071,7 +1071,7 @@ fn build_fts_query(query: &str) -> String {
     }
 }
 
-fn upsert_vector(conn: &Connection, drawer_id: i64, content: &str) -> Result<()> {
+pub fn upsert_vector(conn: &Connection, drawer_id: i64, content: &str) -> Result<()> {
     let emb = sparse_embedding(content);
     let json = serde_json::to_string(&emb)?;
     conn.execute(
@@ -1082,7 +1082,7 @@ fn upsert_vector(conn: &Connection, drawer_id: i64, content: &str) -> Result<()>
     Ok(())
 }
 
-fn sparse_embedding(text: &str) -> BTreeMap<String, f64> {
+pub fn sparse_embedding(text: &str) -> BTreeMap<String, f64> {
     let mut map = BTreeMap::new();
     for token in text
         .split(|c: char| !c.is_ascii_alphanumeric())
