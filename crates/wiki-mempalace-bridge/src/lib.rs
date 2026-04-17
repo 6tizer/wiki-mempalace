@@ -2,11 +2,22 @@
 //! 在引入 `wiki-kernel` 后实现其中的 `WikiHook` trait，在 `on_event` 里把 `WikiEvent` 映射到
 //! Palace 的 `drawers` / `kg_facts` / 向量索引等 API。
 //!
-//! 若本机尚未 clone `rust-mempalace`，可只依赖本 crate 的 trait 边界，或在本 crate 增加 `impl` 与 `path` 依赖。
-//!
-//! 建议路径：`/Users/brzhang/Projects/rust-mempalace`。在本 crate 的 `Cargo.toml` 中加入
-//! `rust-mempalace = { path = "../../../../Projects/rust-mempalace" }`（相对 `OpenClawWorkSpace/llm-wiki/crates/wiki-mempalace-bridge` 时约为 `../../../../Projects/rust-mempalace`，请按实际目录调整），
-//! 然后为 `MempalaceWikiSink` 提供具体类型。
+//! 启用 `live` feature 后，将使用 `rust-mempalace` 的真实实现连接 palace 数据库。
+//! 默认不启用，使用 Noop 实现。
+
+#[cfg(feature = "live")]
+mod live_sink;
+#[cfg(feature = "live")]
+mod live_ranker;
+#[cfg(feature = "live")]
+mod live_search;
+
+#[cfg(feature = "live")]
+pub use live_sink::LiveMempalaceSink;
+#[cfg(feature = "live")]
+pub use live_ranker::LiveMempalaceGraphRanker;
+#[cfg(feature = "live")]
+pub use live_search::MempalaceSearchPorts;
 
 use wiki_core::{Claim, ClaimId, Scope, SourceId};
 use wiki_core::WikiEvent;

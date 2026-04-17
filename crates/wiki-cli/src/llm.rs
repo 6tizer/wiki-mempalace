@@ -70,11 +70,17 @@ Reply with ONLY a single JSON object (no markdown fences), schema:
   "version": 1,
   "summary_title": "short title for a wiki page",
   "summary_markdown": "markdown body for an overview page",
-  "claims": [ { "text": "atomic factual claim in the same language as the source", "tier": "semantic" } ]
+  "claims": [ { "text": "atomic factual claim in the same language as the source", "tier": "semantic" } ],
+  "entities": [ { "label": "EntityName", "kind": "library" } ],
+  "relationships": [ { "from_label": "EntityA", "relation": "uses", "to_label": "EntityB" } ]
 }
 Rules:
 - "tier" must be one of: working, episodic, semantic, procedural
+- "kind" must be one of: person, project, library, concept, file_path, decision, other
+- "relation" must be one of: uses, depends_on, contradicts, caused, fixed, supersedes, related
 - claims: 0–12 items, each one short standalone sentence
+- entities: 0–10 items, extract named entities (people, projects, libraries, concepts, decisions)
+- relationships: 0–10 items, typed directed edges between entities
 - summary_markdown may be empty if not useful
 - Do not include keys other than those listed."#
 }

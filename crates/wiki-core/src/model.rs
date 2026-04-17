@@ -44,6 +44,20 @@ pub enum EntityKind {
     Other(String),
 }
 
+impl EntityKind {
+    pub fn parse(s: &str) -> Self {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "person" => Self::Person,
+            "project" => Self::Project,
+            "library" => Self::Library,
+            "concept" => Self::Concept,
+            "file_path" | "filepath" => Self::FilePath,
+            "decision" => Self::Decision,
+            other => Self::Other(other.to_string()),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RelationKind {
@@ -54,6 +68,20 @@ pub enum RelationKind {
     Fixed,
     Supersedes,
     Related,
+}
+
+impl RelationKind {
+    pub fn parse(s: &str) -> Self {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "uses" => Self::Uses,
+            "depends_on" | "dependson" => Self::DependsOn,
+            "contradicts" => Self::Contradicts,
+            "caused" => Self::Caused,
+            "fixed" => Self::Fixed,
+            "supersedes" => Self::Supersedes,
+            _ => Self::Related,
+        }
+    }
 }
 
 /// 原子断言：可评分、可取代、可随访问强化与半衰期衰减排序。

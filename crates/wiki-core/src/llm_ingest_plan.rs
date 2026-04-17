@@ -12,6 +12,10 @@ pub struct LlmIngestPlanV1 {
     pub summary_markdown: String,
     #[serde(default)]
     pub claims: Vec<LlmClaimDraft>,
+    #[serde(default)]
+    pub entities: Vec<LlmEntityDraft>,
+    #[serde(default)]
+    pub relationships: Vec<LlmRelationDraft>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -19,6 +23,21 @@ pub struct LlmClaimDraft {
     pub text: String,
     /// `working` | `episodic` | `semantic` | `procedural`
     pub tier: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LlmEntityDraft {
+    pub label: String,
+    /// `person` | `project` | `library` | `concept` | `file_path` | `decision` | `other`
+    pub kind: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LlmRelationDraft {
+    pub from_label: String,
+    /// `uses` | `depends_on` | `contradicts` | `caused` | `fixed` | `supersedes` | `related`
+    pub relation: String,
+    pub to_label: String,
 }
 
 pub fn parse_memory_tier(s: &str) -> Result<MemoryTier, String> {

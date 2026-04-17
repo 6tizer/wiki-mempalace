@@ -2,18 +2,20 @@ use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 use time::OffsetDateTime;
 use wiki_core::{
-    document_visible_to_viewer, parse_memory_tier, ClaimId, DomainSchema, EntityId, LlmIngestPlanV1,
-    MemoryTier, PageId, QueryContext, Scope, SessionCrystallizationInput, SourceId, WikiPage,
+    document_visible_to_viewer, parse_memory_tier, ClaimId, DomainSchema, Entity, EntityId,
+    EntityKind, LlmIngestPlanV1, MemoryTier, PageId, QueryContext, RelationKind, Scope,
+    SessionCrystallizationInput, SourceId, TypedEdge, WikiPage,
 };
 use wiki_kernel::{
     format_claim_doc_id, merge_graph_rankings, write_lint_report, write_projection,
     InMemorySearchPorts, InMemoryStore, LlmWikiEngine, NoopWikiHook, SearchPorts,
 };
-use wiki_mempalace_bridge::{consume_outbox_ndjson, MempalaceError, MempalaceWikiSink};
 use wiki_storage::{SqliteRepository, WikiRepository};
+use wiki_mempalace_bridge::{consume_outbox_ndjson, MempalaceError, MempalaceWikiSink};
 
 mod banner;
 mod llm;
+mod mcp;
 
 #[derive(Parser)]
 #[command(name = "wiki")]
@@ -121,11 +123,29 @@ enum Cmd {
         #[arg(long, default_value = "Say 'ok' only.")]
         prompt: String,
     },
+    /// Start a unified MCP server (wiki + mempalace) over stdin/stdout.
+    Mcp {
+        #[arg(long, default_value_t = false)]
+        once: bool,
+        #[arg(long)]
+        palace: Option<String>,
+    },
+    /// Run batch maintenance: confidence decay, lint, promote qualified claims.
+    Maintenance,
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    banner::print_startup_banner();
-    let cli = Cli::parse();
+    let cli = match Cli::try_parse() {
+        Ok(v) => v,
+        Err(e) => {
+            banner::print_startup_banner();
+            e.print()?;
+            std::process::exit(if e.use_stderr() { 2 } else { 0 });
+        }
+    };
+    if !matches!(cli.cmd, Cmd::Mcp { .. }) {
+        banner::print_startup_banner();
+    }
     let viewer = parse_scope(&cli.viewer_scope);
     let wiki_root = cli.wiki_dir.clone();
     let sync_wiki = cli.sync_wiki;
@@ -135,7 +155,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     } else {
         DomainSchema::permissive_default()
     };
-    let mut eng = LlmWikiEngine::load_from_repo(schema, &repo, NoopWikiHook)?;
+    let mut eng = LlmWikiEngine::load_from_repo(schema.clone(), &repo, NoopWikiHook)?;
 
     match cli.cmd {
         Cmd::IngestLlm {
@@ -181,6 +201,37 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     repo.upsert_embedding(&format_claim_doc_id(cid), &vec)?;
                 }
             }
+            for ed in &plan.entities {
+                let kind = EntityKind::parse(&ed.kind);
+                let entity = Entity {
+                    id: EntityId(uuid::Uuid::new_v4()),
+                    kind,
+                    label: ed.label.clone(),
+                    scope: sc.clone(),
+                };
+                eng.add_entity(entity)?;
+            }
+            for rd in &plan.relationships {
+                let from_id = eng.store.entities.values()
+                    .find(|e| e.label.eq_ignore_ascii_case(&rd.from_label))
+                    .map(|e| e.id);
+                let to_id = eng.store.entities.values()
+                    .find(|e| e.label.eq_ignore_ascii_case(&rd.to_label))
+                    .map(|e| e.id);
+                if let (Some(from), Some(to)) = (from_id, to_id) {
+                    let rel = RelationKind::parse(&rd.relation);
+                    let edge = TypedEdge {
+                        from,
+                        to,
+                        relation: rel,
+                        confidence: 0.7,
+                        source_ids: vec![sid],
+                    };
+                    eng.add_edge(edge)?;
+                }
+            }
+            eng.save_to_repo(&repo)?;
+            eng.flush_outbox_to_repo_with_policy(&repo, 128, 3)?;
             if !plan.summary_markdown.trim().is_empty() {
                 let title = if plan.summary_title.trim().is_empty() {
                     "ingest-summary".to_string()
@@ -365,11 +416,39 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let out = llm::smoke_chat_completion(&cfg, &prompt)?;
             println!("{out}");
         }
+        Cmd::Mcp { once, palace } => {
+            mcp::run_mcp(
+                &cli.db,
+                schema,
+                &cli.viewer_scope,
+                once,
+                &cli.llm_config,
+                cli.vectors,
+                wiki_root.as_deref(),
+                palace.as_deref(),
+            )?;
+        }
+        Cmd::Maintenance => {
+            let now = OffsetDateTime::now_utc();
+            eng.apply_confidence_decay_all(now, 30.0);
+            let findings = eng.run_basic_lint("cli", Some(&viewer));
+            let mut promoted = 0u32;
+            let claim_ids: Vec<ClaimId> = eng.store.claims.keys().copied().collect();
+            for cid in claim_ids {
+                if eng.promote_if_qualified(cid, "cli", &viewer).is_ok() {
+                    promoted += 1;
+                }
+            }
+            eng.save_to_repo(&repo)?;
+            eng.flush_outbox_to_repo_with_policy(&repo, 128, 3)?;
+            maybe_sync_projection(sync_wiki, wiki_root.as_deref(), &eng)?;
+            println!("decay=applied lint_findings={} promoted={promoted}", findings.len());
+        }
     }
     Ok(())
 }
 
-fn doc_id_visible_to_viewer(doc_id: &str, store: &InMemoryStore, viewer: &Scope) -> bool {
+pub(crate) fn doc_id_visible_to_viewer(doc_id: &str, store: &InMemoryStore, viewer: &Scope) -> bool {
     if let Some(rest) = doc_id.strip_prefix("claim:") {
         if let Ok(u) = uuid::Uuid::parse_str(rest) {
             return store
@@ -416,7 +495,7 @@ fn truncate_chars(s: &str, max: usize) -> String {
     s.chars().take(max).collect()
 }
 
-fn parse_scope(s: &str) -> Scope {
+pub(crate) fn parse_scope(s: &str) -> Scope {
     if let Some(x) = s.strip_prefix("shared:") {
         Scope::Shared {
             team_id: x.to_string(),
@@ -432,7 +511,7 @@ fn parse_scope(s: &str) -> Scope {
     }
 }
 
-fn parse_tier(s: &str) -> Result<MemoryTier, Box<dyn std::error::Error>> {
+pub(crate) fn parse_tier(s: &str) -> Result<MemoryTier, Box<dyn std::error::Error>> {
     let x = s.trim().to_ascii_lowercase();
     match x.as_str() {
         "working" => Ok(MemoryTier::Working),

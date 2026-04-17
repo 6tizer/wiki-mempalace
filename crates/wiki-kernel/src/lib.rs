@@ -1,11 +1,13 @@
 //! LLM Wiki v2 用例编排：内存参考引擎 + 事件钩子（可接外部记忆系统）。
 
+mod auto_hooks;
 mod engine;
 mod hooks;
 mod memory;
 mod search_ports;
 mod wiki_writer;
 
+pub use auto_hooks::AutoWikiHook;
 pub use engine::{EngineError, LlmWikiEngine};
 pub use hooks::{NoopWikiHook, WikiHook};
 pub use memory::InMemoryStore;

@@ -114,7 +114,7 @@ cargo run -p wiki-cli -- --db wiki.db --llm-config llm-config.toml \
 
 ## MemPalace 图召回扩展
 
-[`wiki-mempalace-bridge`](crates/wiki-mempalace-bridge/src/lib.rs) 提供 `MempalaceGraphRanker` trait；内核提供 [`merge_graph_rankings`](crates/wiki-kernel/src/search_ports.rs) 将外部候选与内存图路交织去重。
+`[wiki-mempalace-bridge](crates/wiki-mempalace-bridge/src/lib.rs)` 提供 `MempalaceGraphRanker` trait；内核提供 `[merge_graph_rankings](crates/wiki-kernel/src/search_ports.rs)` 将外部候选与内存图路交织去重。
 
 CLI 可用 `--graph-extras-file path.txt`（每行一个 `entity:` / `claim:` doc id，`#` 开头为注释）把 MemPalace 或其它图遍历结果并入 `query` 的第三路。`consume-to-mempalace` 会对 outbox 中的 `SourceIngested` 调用 `on_source_ingested`（默认可忽略，打印型 sink 会打日志）。
 
