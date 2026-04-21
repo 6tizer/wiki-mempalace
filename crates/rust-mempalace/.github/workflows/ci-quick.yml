@@ -1,0 +1,27 @@
+name: CI Quick
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+jobs:
+  quick:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Format check
+        run: cargo fmt --all -- --check
+
+      - name: Unit tests (fast gate)
+        run: cargo test --bin rust-mempalace
