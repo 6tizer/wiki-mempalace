@@ -1,10 +1,16 @@
-name: CI Quick
+name: CI Mempalace Quick
 
 on:
   pull_request:
+    paths:
+      - 'crates/rust-mempalace/**'
+      - '.github/workflows/ci-mempalace-*.yml'
   push:
     branches:
       - main
+    paths:
+      - 'crates/rust-mempalace/**'
+      - '.github/workflows/ci-mempalace-*.yml'
 
 jobs:
   quick:
@@ -23,5 +29,5 @@ jobs:
       - name: Format check
         run: cargo fmt --all -- --check
 
-      - name: Unit tests (fast gate)
-        run: cargo test --bin rust-mempalace
+      - name: Unit tests (fast gate, rust-mempalace only)
+        run: cargo test -p rust-mempalace --bin rust-mempalace

@@ -16,4 +16,4 @@ wiki-kernel = { path = "../wiki-kernel" }
 wiki-mempalace-bridge = { path = "../wiki-mempalace-bridge", features = ["live"] }
 wiki-storage = { path = "../wiki-storage" }
 uuid = { version = "1", features = ["v4"] }
-rust-mempalace = { path = "../../../rust-mempalace" }
+rust-mempalace = { path = "../rust-mempalace" }

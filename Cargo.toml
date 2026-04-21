@@ -6,6 +6,7 @@ members = [
   "crates/wiki-mempalace-bridge",
   "crates/wiki-storage",
   "crates/wiki-cli",
+  "crates/rust-mempalace",
 ]
 
 [workspace.package]

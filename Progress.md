@@ -1,6 +1,75 @@
-# llm-wiki 工作进度
+# wiki-mempalace 工作进度
 
 按用户规范逐步记录每一次有意义的工作。每条记录包括：实现的功能 / 遇到的错误 / 解决方式。
+
+> 仓库改名：`llm-wiki` → `wiki-mempalace`（2026-04-21 合并）；早期记录保留原名以还原上下文。
+
+---
+
+## 2026-04-21 · 两仓合并为 monorepo（第 3 轮）
+
+### 背景
+
+`llm-wiki` 与 `rust-mempalace` 两仓经过多轮迭代，已通过 `path` 依赖紧密耦合
+（`wiki-cli` 和 `wiki-mempalace-bridge` 都引用 `../../../rust-mempalace`），但仓库
+边界仍按"独立维护、契约联动"的原设计。架构讨论后判定：自用、无外部消费者、API
+仍在漂移期——合并 monorepo 的收益显著高于保留分仓。
+
+### 实现了哪些功能
+
+1. **gh 创建新仓**：`gh repo create 6tizer/wiki-mempalace --private`。
+2. **subtree 嫁接**：用 `git subtree add --prefix=crates/rust-mempalace` 把
+   `rust-mempalace` 整棵树带 4 个历史 commit 嫁接到 `llm-wiki` 的工作副本，保留
+   完整 blame 能力；合并后 log 可见 llm-wiki 5 个 + rust-mempalace 4 个 + subtree
+   merge commit 共 10 条。
+3. **workspace 接纳**：根 `Cargo.toml` 的 `[workspace] members` 追加
+   `"crates/rust-mempalace"`；`wiki-cli` 与 `wiki-mempalace-bridge` 的 path 依赖
+   从 `../../../rust-mempalace` 改为 `../rust-mempalace`。
+4. **Edition 策略**：采用方案 A，`crates/rust-mempalace/Cargo.toml` 保留独立
+   `edition = "2024"`，不继承 workspace 的 `2021`。Cargo 允许 member override，
+   零代码改动。
+5. **CI workflow 迁移**：原 `crates/rust-mempalace/.github/workflows/{ci-quick,
+   ci-e2e}.yml` 移到仓库根 `.github/workflows/`，改名为 `ci-mempalace-*.yml`，
+   增加 `paths: ['crates/rust-mempalace/**', '.github/workflows/ci-mempalace-*.yml']`
+   过滤器；`cargo test` 命令加 `-p rust-mempalace` 定位 workspace 中的目标 crate。
+6. **文档梳理**：
+   - 根 `README.md` 重写为"统一产品"视角
+   - 新增 `docs/architecture.md` 落盘架构图与 ingest / query 业务流转
+   - `docs/mempalace-linkage.md` 改写为"workspace 内 crate 边界契约"
+   - `article2.md` 移到 `docs/blog/article2.md`（历史长文归档）
+   - `crates/rust-mempalace/docs/longmemeval.md` 上移到顶层 `docs/longmemeval.md`
+   - `crates/rust-mempalace/README.md` 保留，作为 crate 级独立说明
+
+### 遇到了哪些错误
+
+1. **subtree 带入孤儿 `Cargo.lock`**：`crates/rust-mempalace/Cargo.lock` 与
+   workspace 根 `Cargo.lock` 冲突。
+2. **rust-mempalace 原 CI 的 `cargo test --bin rust-mempalace` 在 workspace 模式
+   可能跑错包**（所有 binary crate 都会被索引）。
+
+### 是如何解决这些错误的
+
+1. `rm crates/rust-mempalace/Cargo.lock`，workspace 只保留根 lock。
+2. 迁移后的 workflow 将命令改为 `cargo test -p rust-mempalace --bin rust-mempalace`，
+   用 `-p` 明确包名，避免误匹配。
+
+### 验证
+
+- `cargo check --workspace`：6 个 crate 全部干净编译。
+- `cargo test --workspace`：**49 个测试全绿**（比合并前 40 多 8 个 e2e_core + 1
+  个 rust-mempalace bin test）。
+- `cargo test -p rust-mempalace --test e2e_core`：8 用例 PASS。
+- `./scripts/e2e.sh`：9 步全部 PASS，consumed=4。
+- `git log --oneline --all`：10 个 commit，双方历史完整。
+- `git log --oneline crates/rust-mempalace/` 能独立回溯原 rust-mempalace 历史。
+
+### 未完成项（Phase 6 后续 PR 跟进）
+
+- **Phase 6a**：`wiki-cli/src/mcp.rs` 的 10 个 `mempalace_*` MCP 工具改走 bridge
+  抽象，消除 `crates/wiki-cli/Cargo.toml` 对 `rust-mempalace` 的直接 path 依赖。
+- **Phase 6b**：workspace 整体升 `edition = "2024"`，让所有 crate 对齐。
+- 原仓库 `6tizer/llm-wiki` 与 `6tizer/rust-mempalace` 按决策保持**原样不动**，
+  不 archive 不删除。
 
 ---
 

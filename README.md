@@ -1,152 +1,124 @@
-# llm-wiki
+# wiki-mempalace
 
-`llm-wiki` 是一个“持久、可累积”的 LLM 知识库内核与最小 CLI：不是每次 query 现做 RAG，而是把知识沉淀为可维护的结构化状态，并可投影成可浏览的 Markdown wiki（适配 Obsidian 等）。
+本地优先（local-first）的**统一知识底座**——把 `llm-wiki`（知识生命周期内核）与
+`rust-mempalace`（记忆宫殿 / FTS5 全文检索 / 时序知识图谱）合并为单一 Cargo workspace，
+对 AI Agent 暴露一个 **22 工具的统一 MCP Server**：12 个 `wiki_*` + 10 个 `mempalace_*`。
 
-## 核心理念（对齐 Karpathy LLM Wiki）
+两个引擎的合体意味着：知识**可累积、可衰减、可 supersede、可审计**，同时**可
+全文检索、可按时间回放、可按实体遍历**。
 
-- **Raw sources**：不可变的原始资料（`RawArtifact`）。
-- **Wiki**：可持续维护的 wiki 页面（`WikiPage`，markdown + `[[wikilink]]`）。
-- **Schema**：约束与策略（`DomainSchema`：允许的实体/关系、质量阈值、保留/晋升参数）。
-- **Operations**：`ingest / query / lint / crystallize`，并通过 **outbox** 事件让外部 consumer（如 mempalace）接入。
+> 原始的分仓设计见 `docs/blog/article2.md`（历史长文）。本仓用 `git subtree`
+> 把 `rust-mempalace` 嫁接为 `crates/rust-mempalace/`，保留双方全部历史。
 
-相对 idea-only 的方案，这个仓库更偏“工程内核”：事件、审计、生命周期、RRF 融合检索、保留强度加权、outbox 语义等都已最小落地。
+---
+
+## 仓库结构
+
+```
+wiki-mempalace/
+├── Cargo.toml                 # workspace
+├── DomainSchema.json          # 知识 Schema 实例（v1.0）
+├── AGENTS.md                  # Agent 工作流规范
+├── Progress.md                # 开发日志
+├── scripts/e2e.sh             # 端到端回归脚本
+├── docs/
+│   ├── architecture.md        # 架构图 + 业务流转
+│   ├── mempalace-linkage.md   # workspace 内 crate 协同契约
+│   ├── plan.md                # 里程碑
+│   └── blog/
+│       └── article2.md        # 两仓合并前的工程长文
+└── crates/
+    ├── wiki-core/             # 领域模型：Claim / Entity / Event / Schema
+    ├── wiki-kernel/           # 引擎：ingest / query / lint / promote / crystallize
+    ├── wiki-storage/          # SQLite 持久化
+    ├── wiki-cli/              # 统一 CLI + MCP Server（22 工具）
+    ├── wiki-mempalace-bridge/ # 事件桥 + 搜索 ports（live feature 连 palace）
+    └── rust-mempalace/        # 记忆宫殿（lib + bin）；保留独立 README 与 e2e 测试
+```
 
 ## 快速开始
 
-### 1) 运行一次 ingest（并同步 markdown wiki 投影）
+### 构建
 
 ```bash
+cargo build --workspace --release
+```
+
+### 最小冒烟
+
+```bash
+# 1) ingest 一条原文（脱敏 + 落 SQLite + 投影 Markdown）
 cargo run -p wiki-cli -- \
-  --db wiki.db \
-  --wiki-dir wiki \
-  --sync-wiki \
-  ingest "file:///notes/a.md" "项目使用 Redis\nAuthorization: Bearer secret" \
+  --db wiki.db --wiki-dir wiki --sync-wiki \
+  ingest "file:///notes/a.md" "项目使用 Redis 作缓存" \
   --scope private:cli
+
+# 2) query 混合三路（BM25 + 向量 + 图）
+cargo run -p wiki-cli -- --db wiki.db query "Redis 缓存"
+
+# 3) lint 基线检查（完整度 + 孤儿页 + claim 过期）
+cargo run -p wiki-cli -- --db wiki.db --wiki-dir wiki --sync-wiki lint
+
+# 4) 启动统一 MCP Server（stdio JSON-RPC）
+cargo run -p wiki-cli -- --db wiki.db mcp --palace ~/.mempalace-rs
 ```
 
-会生成/更新：
-
-- `wiki/index.md`
-- `wiki/log.md`
-- `wiki/pages/`、`wiki/concepts/`、`wiki/sources/`
-
-### 2) query（可选落盘为 wiki 页面）
-
-```bash
-cargo run -p wiki-cli -- \
-  --db wiki.db \
-  --wiki-dir wiki \
-  --sync-wiki \
-  query "Redis API" --write-page --page-title "analysis-redis-api"
-```
-
-### 3) lint（并输出报告）
-
-```bash
-cargo run -p wiki-cli -- \
-  --db wiki.db \
-  --wiki-dir wiki \
-  --sync-wiki \
-  lint
-```
-
-会写入 `wiki/reports/lint-*.md`，并在 stdout 打印报告路径。
-
-### 4) outbox 增量导出与消费确认
-
-增量导出（offset 模式）：
-
-```bash
-cargo run -p wiki-cli -- --db wiki.db export-outbox-ndjson-from --last-id 100
-```
-
-消费确认（标记 processed）：
-
-```bash
-cargo run -p wiki-cli -- --db wiki.db ack-outbox --up-to-id 120 --consumer-tag mempalace
-```
-
-### 5) mempalace（最小桥接消费演示）
-
-```bash
-cargo run -p wiki-cli -- --db wiki.db consume-to-mempalace --last-id 100
-```
-
-当前实现为“打印型 sink”，用于验证 outbox 消费链路与事件映射；后续可替换为真实 mempalace 写入实现。
-
-## 模型配置（由你填写）
-
-当前代码库的核心能力不依赖模型调用；如果你要接入 DeepSeek（或其它 OpenAI-compatible API），可先填写模板文件：
-
-- `llm-config.example.toml`：复制为 `llm-config.toml` 后填写 `base_url / api_key / model`
-
-注意：**不要提交真实 `api_key` 到 git**。
-
-可选 `[embed]` 段用于 **向量检索**（`query --vectors`），见 `llm-config.example.toml`。
-
-## 多 agent 视角（`--viewer-scope`）
-
-`query` / `lint` / `promote` 使用同一视角，默认 `--viewer-scope private:cli`：
-
-- `private:<agent_id>`：仅可见同 agent 的私有 claim/page/entity/source。
-- `shared:<team_id>`：仅可见同 team 的共享数据。
-- 私有视角**不会**隐式看到团队库，避免误泄露；需要团队数据时请显式 `shared:...`。
-
-## 向量检索（`--vectors`）
-
-在已写入 `wiki_embedding` 表的前提下（`ingest` / `file-claim` 且带 `--vectors` 时会自动 embed），查询可走余弦相似度作为第二路：
-
-```bash
-cargo run -p wiki-cli -- --db wiki.db --vectors --llm-config llm-config.toml \
-  --viewer-scope private:cli query "Redis 缓存"
-```
-
-需配置 `[embed]` 与可用的 OpenAI-compatible `/v1/embeddings` 端点。
-
-## LLM 结构化 ingest（`ingest-llm`）
-
-由模型从正文生成 JSON 计划（摘要 + claims），再写入引擎（可先 `--dry-run` 只看 JSON）：
-
-```bash
-cargo run -p wiki-cli -- --db wiki.db --llm-config llm-config.toml \
-  ingest-llm "file:///x.md" "正文……" --scope private:cli --dry-run
-```
-
-## MemPalace 图召回扩展
-
-`[wiki-mempalace-bridge](crates/wiki-mempalace-bridge/src/lib.rs)` 提供 `MempalaceGraphRanker` trait；内核提供 `[merge_graph_rankings](crates/wiki-kernel/src/search_ports.rs)` 将外部候选与内存图路交织去重。
-
-CLI 可用 `--graph-extras-file path.txt`（每行一个 `entity:` / `claim:` doc id，`#` 开头为注释）把 MemPalace 或其它图遍历结果并入 `query` 的第三路。`consume-to-mempalace` 会对 outbox 中的 `SourceIngested` 调用 `on_source_ingested`（默认可忽略，打印型 sink 会打日志）。
-
-可选在本机为 `wiki-mempalace-bridge` 增加 `path` 依赖到 `rust-mempalace` 并实现 `MempalaceGraphRanker` / `MempalaceWikiSink`，无需提交到 CI。
-
-## 测试
-
-```bash
-cargo test
-```
-
-测试覆盖：
-
-- wiki 投影输出（`index.md/log.md` 与目录结构）
-- outbox 游标导出与 ack
-- mempalace bridge 的 NDJSON 消费分发
-
-### 端到端回归（推荐）
+### 端到端回归
 
 ```bash
 ./scripts/e2e.sh
 ```
 
-该脚本会自动执行并断言：
+覆盖：ingest → file-claim → supersede → query write-page → lint → outbox export/ack →
+mempalace consumer → viewer-scope 隔离 → llm-smoke（可选）。
 
-- ingest / file-claim / supersede-claim / query / lint 全链路
-- outbox 增量导出与 ack
-- mempalace 消费结果 `consumed > 0`
-- 若存在 `llm-config.toml`，自动执行 `llm-smoke`（DeepSeek 冒烟）
+### 测试
 
-## 文档
+```bash
+# 全量（workspace 约 49 个测试）
+cargo test --workspace
 
-- `AGENTS.md`：面向 agent 的稳定工作流规范
-- `docs/plan.md`：里程碑与验收标准
+# rust-mempalace crate 级 e2e（8 个 e2e_core 用例，子进程级）
+cargo test -p rust-mempalace --test e2e_core
+```
 
+---
+
+## 架构概览
+
+```
+wiki-cli (binary)
+  └─ MCP Server（22 tools）
+       ├─ wiki_*  (12) → wiki-kernel → wiki-core / wiki-storage
+       └─ mempalace_* (10) → rust-mempalace::service  [Phase 6 归一走 bridge]
+
+wiki-kernel emit WikiEvent → outbox → wiki-mempalace-bridge (live) → rust-mempalace
+                                                                          │
+                                                                 palace SQLite
+                                                                   drawers / kg_facts
+                                                                   drawer_vectors
+```
+
+详见 [docs/architecture.md](docs/architecture.md)。
+
+---
+
+## 工作流规范
+
+Agent 或 CLI 使用者请优先阅读 [AGENTS.md](AGENTS.md)，其中定义了 6 步稳定流程：
+`ingest → query / write-page → lint → outbox export / ack → supersede → llm ingest`。
+
+## 文档索引
+
+- [AGENTS.md](AGENTS.md)：面向 Agent 的稳定工作流
+- [DomainSchema.json](DomainSchema.json)：领域 Schema v1.0 实例
+- [docs/architecture.md](docs/architecture.md)：架构图与业务流
+- [docs/mempalace-linkage.md](docs/mempalace-linkage.md)：bridge 契约与数据映射
+- [docs/plan.md](docs/plan.md)：里程碑
+- [Progress.md](Progress.md)：每轮工作日志
+- [crates/rust-mempalace/README.md](crates/rust-mempalace/README.md)：
+  `rust-mempalace` 作为独立 crate 的原始说明（保留）
+
+## 许可
+
+`MIT OR Apache-2.0`

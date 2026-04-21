@@ -1,10 +1,13 @@
-name: CI E2E
+name: CI Mempalace E2E
 
 on:
   workflow_dispatch:
   push:
     branches:
       - main
+    paths:
+      - 'crates/rust-mempalace/**'
+      - '.github/workflows/ci-mempalace-*.yml'
   schedule:
     - cron: "0 2 * * *"
 
@@ -22,5 +25,5 @@ jobs:
       - name: Cache cargo artifacts
         uses: Swatinem/rust-cache@v2
 
-      - name: Full test suite
-        run: cargo test
+      - name: Full test suite (rust-mempalace only)
+        run: cargo test -p rust-mempalace
