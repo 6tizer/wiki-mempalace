@@ -134,8 +134,10 @@ maintenance 调用 cleanup_expired_pages(now, schema)
 
 - [x] T0.1 `wiki schema validate` 子命令
 - [x] T0.2 `--entry-type` 扩档到 Crystallize
-- [ ] T1.A WikiPage.status 字段
-- [ ] T1.B initial_status 解析
-- [ ] T1.C promote_page 命令
+- [x] T1.A WikiPage.status 字段
+- [x] T1.B initial_status 解析
+- [x] T1.C promote_page 命令
+- [x] T1.D stale_days 消费
+- [x] T1.E auto_cleanup 消费
 - [ ] T1.D stale_days 消费
 - [ ] T1.E auto_cleanup 消费

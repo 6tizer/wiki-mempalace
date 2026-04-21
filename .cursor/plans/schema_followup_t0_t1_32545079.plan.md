@@ -22,49 +22,49 @@ todos:
     status: completed
   - id: t0_commit
     content: T0.3：commit + push，观察 CI 全绿
-    status: in_progress
+    status: completed
   - id: t1_a
     content: "T1.A：WikiPage 加 status: EntryStatus（serde default）+ with_status"
-    status: pending
+    status: completed
   - id: t_round_4
     content: 测试轮 4：cargo test -p wiki-core page_status（旧 json 兼容三用例）
-    status: pending
+    status: completed
   - id: t1_b
     content: T1.B：kernel initial_status_for + 三条创建路径（IngestLlm/Query/Crystallize）接入
-    status: pending
+    status: completed
   - id: t_round_5
     content: 测试轮 5：cargo test -p wiki-kernel initial_status
-    status: pending
+    status: completed
   - id: t1_c
     content: T1.C：nkernel promote_page + PromotePageError + CLI Cmd::PromotePage
-    status: pending
+    status: completed
   - id: t_round_6
     content: 测试轮 6：cargo test -p wiki-kernel promote_page（4 条失败 + 1 成功 + force）
-    status: pending
+    status: completed
   - id: t_round_7
     content: 测试轮 7：cargo test -p wiki-cli promote_page（CLI 集成）
-    status: pending
+    status: completed
   - id: t1_d
     content: T1.D：kernel mark_stale_pages + Maintenance 接入 + 计数输出
-    status: pending
+    status: completed
   - id: t_round_8
     content: 测试轮 8：cargo test -p wiki-kernel mark_stale（四个用例）
-    status: pending
+    status: completed
   - id: t1_e
     content: T1.E：kernel cleanup_expired_pages + Maintenance 接入 + PageDeleted 事件
-    status: pending
+    status: completed
   - id: t_round_9
     content: 测试轮 9：cargo test -p wiki-kernel auto_cleanup（三个用例）
-    status: pending
+    status: completed
   - id: t_round_10
     content: 测试轮 10：cargo test --workspace + cargo fmt --check
-    status: pending
+    status: completed
   - id: t_round_11
     content: 测试轮 11：scripts/e2e.sh 端到端
-    status: pending
+    status: completed
   - id: t1_close
     content: T1.F：更新 Progress.md 和 schema-followup-plan.md；commit + push + CI 观察
-    status: pending
+    status: in_progress
 isProject: false
 ---
 

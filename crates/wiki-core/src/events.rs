@@ -1,6 +1,7 @@
 //! 事件驱动自动化：ingest / session / query / 定时任务 的钩子载荷。
 
 use crate::model::{ClaimId, EntityId, PageId, SourceId};
+use crate::schema::EntryStatus;
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
@@ -41,6 +42,19 @@ pub enum WikiEvent {
     },
     LintRunFinished {
         findings: usize,
+        at: OffsetDateTime,
+    },
+    /// 页面生命周期状态变更（promote_page / mark_stale）
+    PageStatusChanged {
+        page_id: PageId,
+        from: EntryStatus,
+        to: EntryStatus,
+        actor: String,
+        at: OffsetDateTime,
+    },
+    /// 页面因 auto_cleanup 被删除
+    PageDeleted {
+        page_id: PageId,
         at: OffsetDateTime,
     },
 }

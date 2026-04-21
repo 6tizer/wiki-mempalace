@@ -7,8 +7,8 @@ use wiki_core::{
     SessionCrystallizationInput, SourceId, TypedEdge, WikiPage,
 };
 use wiki_kernel::{
-    format_claim_doc_id, merge_graph_rankings, write_lint_report, write_projection,
-    InMemorySearchPorts, InMemoryStore, LlmWikiEngine, NoopWikiHook, SearchPorts,
+    format_claim_doc_id, initial_status_for, merge_graph_rankings, write_lint_report,
+    write_projection, InMemorySearchPorts, InMemoryStore, LlmWikiEngine, NoopWikiHook, SearchPorts,
 };
 use wiki_mempalace_bridge::{consume_outbox_ndjson, MempalaceError, MempalaceWikiSink};
 use wiki_storage::{SqliteRepository, WikiRepository};
@@ -98,6 +98,16 @@ enum Cmd {
     Lint,
     Promote {
         claim_id: String,
+    },
+    /// Promote a page's lifecycle status (Draft → InReview → Approved).
+    PromotePage {
+        page_id: String,
+        /// Target status. If omitted, auto-advance to the next status per lifecycle rule.
+        #[arg(long)]
+        to: Option<String>,
+        /// Skip all promotion condition checks.
+        #[arg(long, default_value_t = false)]
+        force: bool,
     },
     Crystallize {
         question: String,
@@ -281,9 +291,11 @@ fn run_with_engine(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                     plan.summary_title.trim().to_string()
                 };
                 let page = WikiPage::new(title, plan.summary_markdown.clone(), sc.clone());
-                let page = match parse_entry_type_opt(&entry_type)? {
-                    Some(et) => page.with_entry_type(et),
-                    None => page,
+                let et = parse_entry_type_opt(&entry_type)?;
+                let status = initial_status_for(et.as_ref(), &schema);
+                let page = match et {
+                    Some(et) => page.with_entry_type(et).with_status(status),
+                    None => page.with_status(status),
                 };
                 eng.store.pages.insert(page.id, page);
                 eng.save_to_repo(&repo)?;
@@ -392,6 +404,7 @@ fn run_with_engine(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                     &ranked,
                     viewer.clone(),
                     parse_entry_type_opt(&entry_type)?,
+                    &schema,
                 );
                 eng.store.pages.insert(page.id, page);
             }
@@ -424,6 +437,35 @@ fn run_with_engine(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             maybe_sync_projection(sync_wiki, wiki_root.as_deref(), &eng)?;
             println!("promoted {claim_id}");
         }
+        Cmd::PromotePage { page_id, to, force } => {
+            let pid = wiki_core::PageId(uuid::Uuid::parse_str(&page_id)?);
+            // 解析目标状态：未指定时按 rule 自动取下一跳
+            let to_status = match to {
+                Some(s) => wiki_core::EntryStatus::parse(&s)
+                    .map_err(|e| Box::<dyn std::error::Error>::from(e.to_string()))?,
+                None => {
+                    // 查找当前 page 的 entry_type → rule → 找 from == page.status 的第一条 promotion
+                    let page = eng.store.pages.get(&pid).ok_or("page not found")?;
+                    let et = page.entry_type.as_ref().ok_or("page has no entry_type")?;
+                    let rule = eng
+                        .schema
+                        .find_lifecycle_rule(et)
+                        .ok_or("no lifecycle rule")?;
+                    let promo = rule
+                        .promotions
+                        .iter()
+                        .find(|p| p.from_status == page.status)
+                        .ok_or("no next promotion available")?;
+                    promo.to_status
+                }
+            };
+            let now = OffsetDateTime::now_utc();
+            eng.promote_page(pid, to_status, "cli", now, force)?;
+            eng.save_to_repo(&repo)?;
+            eng.flush_outbox_to_repo_with_policy(&repo, 128, 3)?;
+            maybe_sync_projection(sync_wiki, wiki_root.as_deref(), &eng)?;
+            println!("promoted page {page_id} to {to_status:?}");
+        }
         Cmd::Crystallize {
             question,
             findings,
@@ -444,11 +486,13 @@ fn run_with_engine(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                 },
                 "cli",
             )?;
-            // crystallize 内部已经 insert page，此处如有 entry_type 则覆盖
-            if let Some(et) = et {
-                if let Some(page) = eng.store.pages.get_mut(&draft.page.id) {
+            // crystallize 内部已经 insert page，此处覆盖 entry_type 和 status
+            let status = initial_status_for(et.as_ref(), &schema);
+            if let Some(page) = eng.store.pages.get_mut(&draft.page.id) {
+                if let Some(et) = et {
                     page.entry_type = Some(et);
                 }
+                page.status = status;
             }
             eng.save_to_repo(&repo)?;
             eng.flush_outbox_to_repo_with_policy(&repo, 128, 3)?;
@@ -505,11 +549,13 @@ fn run_with_engine(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                     promoted += 1;
                 }
             }
+            let pages_marked = eng.mark_stale_pages(now);
+            let pages_cleaned = eng.cleanup_expired_pages(now);
             eng.save_to_repo(&repo)?;
             eng.flush_outbox_to_repo_with_policy(&repo, 128, 3)?;
             maybe_sync_projection(sync_wiki, wiki_root.as_deref(), &eng)?;
             println!(
-                "decay=applied lint_findings={} promoted={promoted}",
+                "decay=applied lint_findings={} promoted={promoted} pages_marked_needs_update={pages_marked} pages_auto_cleaned={pages_cleaned}",
                 findings.len()
             );
         }
@@ -635,12 +681,14 @@ fn query_to_page(
     ranked: &[(String, f64)],
     scope: Scope,
     entry_type: Option<EntryType>,
+    schema: &DomainSchema,
 ) -> WikiPage {
     let mut md = format!("# {title}\n\n## Query\n\n{query}\n\n## Top Results\n\n");
     for (doc, score) in ranked.iter().take(20) {
         md.push_str(&format!("- `{doc}` score={score:.6}\n"));
     }
-    let page = WikiPage::new(title, md, scope);
+    let status = initial_status_for(entry_type.as_ref(), schema);
+    let page = WikiPage::new(title, md, scope).with_status(status);
     match entry_type {
         Some(et) => page.with_entry_type(et),
         None => page,

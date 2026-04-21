@@ -8,7 +8,7 @@ mod search_ports;
 mod wiki_writer;
 
 pub use auto_hooks::AutoWikiHook;
-pub use engine::{EngineError, LlmWikiEngine};
+pub use engine::{initial_status_for, EngineError, LlmWikiEngine, PromotePageError};
 pub use hooks::{NoopWikiHook, WikiHook};
 pub use memory::InMemoryStore;
 pub use search_ports::{

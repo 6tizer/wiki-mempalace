@@ -5,7 +5,7 @@ use wiki_core::{
     parse_memory_tier, ClaimId, DomainSchema, EntryType, MemoryTier, QueryContext, Scope,
     SessionCrystallizationInput, WikiPage,
 };
-use wiki_kernel::{LlmWikiEngine, NoopWikiHook};
+use wiki_kernel::{initial_status_for, LlmWikiEngine, NoopWikiHook};
 use wiki_storage::SqliteRepository;
 
 use crate::{parse_scope, parse_tier};
@@ -488,11 +488,13 @@ fn call_tool(
                     "mcp",
                 )
                 .map_err(|e| e.to_string())?;
-            // crystallize 内部已经 insert page，此处如有 entry_type 则覆盖
-            if let Some(et) = entry_type {
-                if let Some(page) = eng.store.pages.get_mut(&draft.page.id) {
+            // crystallize 内部已经 insert page，此处覆盖 entry_type 和 status
+            let status = initial_status_for(entry_type.as_ref(), &eng.schema.clone());
+            if let Some(page) = eng.store.pages.get_mut(&draft.page.id) {
+                if let Some(et) = entry_type {
                     page.entry_type = Some(et);
                 }
+                page.status = status;
             }
             save_and_flush(eng, repo).map_err(|e| e.to_string())?;
             Ok(json!({

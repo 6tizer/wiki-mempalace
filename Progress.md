@@ -286,3 +286,46 @@
 1. `refactor(bridge): route wiki-cli mempalace_* tools through MempalaceTools trait`
 2. `chore(rust-mempalace): unify edition to workspace (2021) + fmt`
 3. `feat(cli): --entry-type flag on ingest-llm and query --write-page`（本批次）
+
+---
+
+## 2026-04-21 · Schema 后续项 T0 + T1 全闭环
+
+### 背景
+
+基于 `DomainSchema` 中已定义但未被消费的字段（`LifecycleRule`、`TagConfig`、`CompletenessConfig`），
+按 T0/T1/T2/T3 四层分级路线图（见 `docs/schema-followup-plan.md`）实施 T0 + T1 全闭环。
+
+设计裁决：
+- `EntryStatus` 仅挂在 `WikiPage` 上，`Claim` 维持 `MemoryTier` + `stale: bool` 不动。
+- `LifecycleRule.stale_days` 语义：`auto_cleanup = false` → 标记 `NeedsUpdate`；`auto_cleanup = true` → 删除。
+- 向前兼容全靠 `#[serde(default)]`，不写数据迁移命令。
+
+### 实现了哪些功能
+
+**Phase 0 - 路线图落档**
+- 新建 `docs/schema-followup-plan.md`：T0/T1/T2/T3 四层分级、mermaid 状态机图、设计裁决。
+
+**T0 - 两项小改动**
+1. `wiki schema validate [path]` 子命令：调用 `DomainSchema::from_json_path`，合法 exit 0 + 打印 summary，非法 exit 1 + 具体错误。
+2. `--entry-type` 扩档到 Crystallize 链路：CLI `Cmd::Crystallize` 加 `--entry-type` 可选参数，MCP `wiki_crystallize` 工具加 `entry_type` 可选字段。
+
+**T1 - Lifecycle 主线全闭环**
+1. **T1.A**：`WikiPage` 新增 `status: EntryStatus`（serde default = Draft）+ `with_status` builder。
+2. **T1.B**：`wiki-kernel` 新增 `initial_status_for(entry_type, schema)` 纯函数；CLI 三处 page 创建（IngestLlm/Query/Crystallize）+ MCP crystallize 全部接入。
+3. **T1.C**：`promote_page(page_id, to_status, actor, now, force)` 方法 + `PromotePageError` 6 种错误变体 + CLI `Cmd::PromotePage` 子命令。`WikiEvent` 新增 `PageStatusChanged` 事件。
+4. **T1.D**：`mark_stale_pages(now)` 方法 + `Cmd::Maintenance` 接入 + 输出 `pages_marked_needs_update=N`。
+5. **T1.E**：`cleanup_expired_pages(now)` 方法 + `Cmd::Maintenance` 接入 + 输出 `pages_auto_cleaned=N`。`WikiEvent` 新增 `PageDeleted` 事件。
+
+### 遇到了哪些错误
+
+1. **Fixture JSON 使用 PascalCase enum 值**：`DomainSchema` 的 `EntityKind` 等使用 `#[serde(rename_all = "snake_case")]`，fixture 中 `Person` 应为 `person`。修复：所有 fixture 改为 snake_case。
+2. **`--schema` 全局参数放在子命令之后**：clap 要求全局参数在子命令前。修复：调整测试中参数顺序。
+3. **`page.entry_type` move 出 shared reference**：`Option<EntryType>` 不 impl Copy，`page.entry_type.ok_or(...)` 会 move。修复：加 `.clone()`。
+4. **`WikiPage::new` 不自动解析 wikilinks**：测试中 ref_page 的 `outbound_page_titles` 为空。修复：手动调用 `refresh_outbound_links()`。
+5. **`println!` 多余的 `);`**：替换 Maintenance 输出时引入重复分号。修复：删除多余 `);`。
+
+### 提交记录
+
+1. `feat(T0): schema validate 子命令 + crystallize entry_type 扩档 + 路线图文档`
+2. `feat(T1): WikiPage lifecycle 全闭环 — status/promote/stale/cleanup`（本批次）

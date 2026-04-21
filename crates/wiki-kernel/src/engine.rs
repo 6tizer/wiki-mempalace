@@ -11,10 +11,10 @@ use wiki_core::{
     advance_tier, apply_time_decay_to_confidence, document_visible_to_viewer, draft_from_session,
     merge_sources_confidence, reciprocal_rank_fusion, redact_for_ingest, reinforce_claim,
     retention_strength, supersede_claim, walk_entities, AuditOperation, AuditRecord, Claim,
-    ClaimId, ContradictionHint, CrystallizationDraft, DomainSchema, Entity, EntityId,
-    GraphWalkOptions, LintFinding, LintSeverity, MemoryTier, QueryContext, RankedDoc, RawArtifact,
-    RelationKind, SchemaLoadError, Scope, SessionCrystallizationInput, SourceId, TypedEdge,
-    WikiEvent,
+    ClaimId, ContradictionHint, CrystallizationDraft, DomainSchema, Entity, EntityId, EntryStatus,
+    EntryType, GraphWalkOptions, LintFinding, LintSeverity, MemoryTier, PageId, QueryContext,
+    RankedDoc, RawArtifact, RelationKind, SchemaLoadError, Scope, SessionCrystallizationInput,
+    SourceId, TypedEdge, WikiEvent,
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -33,6 +33,27 @@ pub enum EngineError {
     Storage(#[from] StorageError),
     #[error("scope denied: resource not visible to this viewer")]
     ScopeDenied,
+}
+
+/// 页面状态晋升失败的细粒度错误
+#[derive(Debug, thiserror::Error, PartialEq)]
+pub enum PromotePageError {
+    #[error("页面不存在")]
+    UnknownPage,
+    #[error("页面缺少 entry_type，无法匹配生命周期规则")]
+    NoEntryType,
+    #[error("该 entry_type 没有对应的 lifecycle rule")]
+    NoRule,
+    #[error("没有匹配的晋升路径 from={from:?} to={to:?}")]
+    NoPromotion { from: EntryStatus, to: EntryStatus },
+    #[error("创建天数不足：需要 {need} 天，当前 {have} 天")]
+    AgeTooYoung { need: u64, have: u64 },
+    #[error("缺少必需段落：{0:?}")]
+    MissingSections(Vec<String>),
+    #[error("引用次数不足：需要 {need}，当前 {have}")]
+    NotEnoughReferences { need: u32, have: u32 },
+    #[error("冷却期未满：需要 {need} 天，已等待 {have} 天")]
+    Cooldown { need: u64, have: u64 },
 }
 
 /// 编排 ingest / 写入 / 取代 / 结晶 / lint / 混合排序 的内存参考实现。
@@ -225,6 +246,213 @@ impl<H: WikiHook> LlmWikiEngine<H> {
             format!("promoted claim {}", claim_id.0),
         );
         Ok(())
+    }
+
+    /// 页面生命周期状态晋升，按 schema 的 PromotionConditions 逐项检查。
+    /// `force` 为 true 时跳过全部条件检查，直接变更状态。
+    pub fn promote_page(
+        &mut self,
+        page_id: PageId,
+        to_status: EntryStatus,
+        actor: &str,
+        now: OffsetDateTime,
+        force: bool,
+    ) -> Result<(), PromotePageError> {
+        use wiki_core::extract_headings;
+
+        let page = self
+            .store
+            .pages
+            .get(&page_id)
+            .ok_or(PromotePageError::UnknownPage)?;
+
+        let entry_type = page
+            .entry_type
+            .clone()
+            .ok_or(PromotePageError::NoEntryType)?;
+
+        let rule = self
+            .schema
+            .find_lifecycle_rule(&entry_type)
+            .ok_or(PromotePageError::NoRule)?;
+
+        let from_status = page.status;
+
+        // 查找匹配的 promotion rule
+        let promo = rule
+            .promotions
+            .iter()
+            .find(|p| p.from_status == from_status && p.to_status == to_status)
+            .ok_or(PromotePageError::NoPromotion {
+                from: from_status,
+                to: to_status,
+            })?;
+
+        if !force {
+            let conditions = &promo.conditions;
+
+            // min_age_days：基于 page.updated_at
+            let age_secs = (now - page.updated_at).whole_seconds();
+            let age_days = age_secs as u64 / 86400;
+            if age_days < conditions.min_age_days {
+                return Err(PromotePageError::AgeTooYoung {
+                    need: conditions.min_age_days,
+                    have: age_days,
+                });
+            }
+
+            // required_sections：检查 page markdown 中的 heading
+            let headings = extract_headings(&page.markdown);
+            let missing: Vec<String> = conditions
+                .required_sections
+                .iter()
+                .filter(|s| !headings.iter().any(|h| h == *s))
+                .cloned()
+                .collect();
+            if !missing.is_empty() {
+                return Err(PromotePageError::MissingSections(missing));
+            }
+
+            // min_references：统计其它 page 的 outbound_page_titles 中包含本 page title 的数量
+            let title = page.title.clone();
+            let ref_count = self
+                .store
+                .pages
+                .values()
+                .filter(|p| p.id != page_id)
+                .filter(|p| p.outbound_page_titles.contains(&title))
+                .count() as u32;
+            if ref_count < conditions.min_references {
+                return Err(PromotePageError::NotEnoughReferences {
+                    need: conditions.min_references,
+                    have: ref_count,
+                });
+            }
+
+            // cooldown_days
+            if let Some(cd) = conditions.cooldown_days {
+                let cooldown_secs = (now - page.updated_at).whole_seconds();
+                let cooldown_days = cooldown_secs as u64 / 86400;
+                if cooldown_days < cd {
+                    return Err(PromotePageError::Cooldown {
+                        need: cd,
+                        have: cooldown_days,
+                    });
+                }
+            }
+        }
+
+        // 通过检查 → 写入
+        let page = self.store.pages.get_mut(&page_id).unwrap();
+        page.status = to_status;
+        page.updated_at = now;
+
+        self.emit(WikiEvent::PageStatusChanged {
+            page_id,
+            from: from_status,
+            to: to_status,
+            actor: actor.to_string(),
+            at: now,
+        });
+        Ok(())
+    }
+
+    /// 标记过期页面为 NeedsUpdate（auto_cleanup == false 的 rule）。
+    /// 返回被标记的页面数量。
+    pub fn mark_stale_pages(&mut self, now: OffsetDateTime) -> u32 {
+        let mut count = 0u32;
+        // 收集需要检查的 (entry_type_set, stale_days)
+        let mut rules_to_check: Vec<(std::collections::HashSet<EntryType>, u64)> = Vec::new();
+        for rule in &self.schema.lifecycle_rules {
+            if let Some(d) = rule.stale_days {
+                if !rule.auto_cleanup {
+                    let types: std::collections::HashSet<EntryType> =
+                        rule.entry_types.iter().cloned().collect();
+                    rules_to_check.push((types, d));
+                }
+            }
+        }
+        if rules_to_check.is_empty() {
+            return 0;
+        }
+        // 收集需要变更的 page_id（避免借用冲突）
+        let page_ids: Vec<PageId> = self.store.pages.keys().copied().collect();
+        for pid in page_ids {
+            let page = self.store.pages.get(&pid).unwrap();
+            let et = match page.entry_type {
+                Some(ref et) => et.clone(),
+                None => continue,
+            };
+            if page.status == EntryStatus::NeedsUpdate {
+                continue;
+            }
+            let should_mark = rules_to_check.iter().any(|(types, d)| {
+                types.contains(&et) && {
+                    let age_days = (now - page.updated_at).whole_seconds() as u64 / 86400;
+                    age_days > *d
+                }
+            });
+            if should_mark {
+                let page = self.store.pages.get_mut(&pid).unwrap();
+                let from = page.status;
+                page.status = EntryStatus::NeedsUpdate;
+                self.emit(WikiEvent::PageStatusChanged {
+                    page_id: pid,
+                    from,
+                    to: EntryStatus::NeedsUpdate,
+                    actor: "maintenance".to_string(),
+                    at: now,
+                });
+                count += 1;
+            }
+        }
+        count
+    }
+
+    /// 清理过期页面（auto_cleanup == true 的 rule）。
+    /// 返回被删除的页面数量。
+    pub fn cleanup_expired_pages(&mut self, now: OffsetDateTime) -> u32 {
+        let mut count = 0u32;
+        let mut rules_to_check: Vec<(std::collections::HashSet<EntryType>, u64)> = Vec::new();
+        for rule in &self.schema.lifecycle_rules {
+            if let Some(d) = rule.stale_days {
+                if rule.auto_cleanup {
+                    let types: std::collections::HashSet<EntryType> =
+                        rule.entry_types.iter().cloned().collect();
+                    rules_to_check.push((types, d));
+                }
+            }
+        }
+        if rules_to_check.is_empty() {
+            return 0;
+        }
+        let page_ids: Vec<PageId> = self.store.pages.keys().copied().collect();
+        let mut to_remove: Vec<PageId> = Vec::new();
+        for pid in page_ids {
+            let page = self.store.pages.get(&pid).unwrap();
+            let et = match page.entry_type {
+                Some(ref et) => et.clone(),
+                None => continue,
+            };
+            let should_remove = rules_to_check.iter().any(|(types, d)| {
+                types.contains(&et) && {
+                    let age_days = (now - page.updated_at).whole_seconds() as u64 / 86400;
+                    age_days > *d
+                }
+            });
+            if should_remove {
+                to_remove.push(pid);
+            }
+        }
+        for pid in to_remove {
+            self.store.pages.remove(&pid);
+            self.emit(WikiEvent::PageDeleted {
+                page_id: pid,
+                at: now,
+            });
+            count += 1;
+        }
+        count
     }
 
     pub fn set_claim_quality(&mut self, claim_id: ClaimId, q: f64) -> Result<(), EngineError> {
@@ -679,6 +907,25 @@ fn claim_has_page_reference(claim_text: &str, page_text: &str) -> bool {
     keys.iter().any(|k| page_text.contains(k))
 }
 
+/// 根据 EntryType 和 DomainSchema 计算创建时的初始 EntryStatus：
+/// - `entry_type.auto_approved_on_create()` → Approved（Summary / QA / LintReport / Index）
+/// - `schema.find_lifecycle_rule(et)` 命中 → 按 rule.initial_status
+/// - 无 entry_type 或无对应 rule → Draft
+pub fn initial_status_for(entry_type: Option<&EntryType>, schema: &DomainSchema) -> EntryStatus {
+    match entry_type {
+        None => EntryStatus::Draft,
+        Some(et) => {
+            if et.auto_approved_on_create() {
+                return EntryStatus::Approved;
+            }
+            schema
+                .find_lifecycle_rule(et)
+                .map(|r| r.initial_status)
+                .unwrap_or(EntryStatus::Draft)
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -872,5 +1119,423 @@ mod tests {
         assert!(ndjson.contains("query_served"));
         assert!(ndjson.contains("claim_upserted"));
         assert!(ndjson.contains("claim_superseded"));
+    }
+
+    // --- initial_status_for 测试 ---
+
+    fn schema_with_concept_rule(initial: EntryStatus) -> DomainSchema {
+        use wiki_core::{LifecycleRule, PromotionConditions, PromotionRule};
+        let mut schema = DomainSchema::permissive_default();
+        schema.lifecycle_rules = vec![LifecycleRule {
+            entry_types: vec![EntryType::Concept, EntryType::Entity],
+            initial_status: initial,
+            promotions: vec![PromotionRule {
+                from_status: EntryStatus::Draft,
+                to_status: EntryStatus::InReview,
+                conditions: PromotionConditions {
+                    min_age_days: 0,
+                    required_sections: vec![],
+                    min_references: 0,
+                    cooldown_days: None,
+                },
+            }],
+            stale_days: None,
+            auto_cleanup: false,
+        }];
+        schema
+    }
+
+    #[test]
+    fn initial_status_none_entry_type_is_draft() {
+        let schema = DomainSchema::permissive_default();
+        assert_eq!(initial_status_for(None, &schema), EntryStatus::Draft);
+    }
+
+    #[test]
+    fn initial_status_summary_is_approved() {
+        let schema = DomainSchema::permissive_default();
+        // Summary 调用 auto_approved_on_create() → Approved，无论有无 rule
+        assert_eq!(
+            initial_status_for(Some(&EntryType::Summary), &schema),
+            EntryStatus::Approved
+        );
+    }
+
+    #[test]
+    fn initial_status_concept_follows_rule() {
+        let schema = schema_with_concept_rule(EntryStatus::Draft);
+        assert_eq!(
+            initial_status_for(Some(&EntryType::Concept), &schema),
+            EntryStatus::Draft
+        );
+    }
+
+    #[test]
+    fn initial_status_concept_no_rule_falls_back_to_draft() {
+        let schema = DomainSchema::permissive_default(); // 空 lifecycle_rules
+        assert_eq!(
+            initial_status_for(Some(&EntryType::Concept), &schema),
+            EntryStatus::Draft
+        );
+    }
+
+    // --- promote_page 测试 ---
+
+    fn schema_with_full_promotion() -> DomainSchema {
+        use wiki_core::{LifecycleRule, PromotionConditions, PromotionRule};
+        let mut schema = DomainSchema::permissive_default();
+        schema.lifecycle_rules = vec![LifecycleRule {
+            entry_types: vec![EntryType::Concept],
+            initial_status: EntryStatus::Draft,
+            promotions: vec![PromotionRule {
+                from_status: EntryStatus::Draft,
+                to_status: EntryStatus::InReview,
+                conditions: PromotionConditions {
+                    min_age_days: 7,
+                    required_sections: vec!["定义".into()],
+                    min_references: 2,
+                    cooldown_days: Some(3),
+                },
+            }],
+            stale_days: None,
+            auto_cleanup: false,
+        }];
+        schema
+    }
+
+    #[test]
+    fn promote_page_fails_age_too_young() {
+        let mut eng = LlmWikiEngine::new(schema_with_full_promotion());
+        let p = WikiPage::new(
+            "Test",
+            "## 定义\ncontent",
+            Scope::Private {
+                agent_id: "a".into(),
+            },
+        )
+        .with_entry_type(EntryType::Concept);
+        let pid = p.id;
+        eng.store.pages.insert(pid, p);
+        let now = OffsetDateTime::now_utc();
+        let res = eng.promote_page(pid, EntryStatus::InReview, "t", now, false);
+        assert!(matches!(res, Err(PromotePageError::AgeTooYoung { .. })));
+    }
+
+    #[test]
+    fn promote_page_fails_missing_sections() {
+        let mut eng = LlmWikiEngine::new(schema_with_full_promotion());
+        let mut p = WikiPage::new(
+            "Test",
+            "no headings here",
+            Scope::Private {
+                agent_id: "a".into(),
+            },
+        )
+        .with_entry_type(EntryType::Concept);
+        // 模拟 10 天前创建
+        p.updated_at = OffsetDateTime::now_utc() - time::Duration::days(10);
+        let pid = p.id;
+        eng.store.pages.insert(pid, p);
+        let now = OffsetDateTime::now_utc();
+        let res = eng.promote_page(pid, EntryStatus::InReview, "t", now, false);
+        assert!(matches!(res, Err(PromotePageError::MissingSections(_))));
+    }
+
+    #[test]
+    fn promote_page_fails_not_enough_references() {
+        let mut eng = LlmWikiEngine::new(schema_with_full_promotion());
+        let mut p = WikiPage::new(
+            "Test",
+            "## 定义\ncontent",
+            Scope::Private {
+                agent_id: "a".into(),
+            },
+        )
+        .with_entry_type(EntryType::Concept);
+        p.updated_at = OffsetDateTime::now_utc() - time::Duration::days(10);
+        let pid = p.id;
+        eng.store.pages.insert(pid, p);
+        let now = OffsetDateTime::now_utc();
+        let res = eng.promote_page(pid, EntryStatus::InReview, "t", now, false);
+        assert!(matches!(
+            res,
+            Err(PromotePageError::NotEnoughReferences { .. })
+        ));
+    }
+
+    #[test]
+    fn promote_page_fails_cooldown() {
+        use wiki_core::{LifecycleRule, PromotionConditions, PromotionRule};
+        let mut eng = LlmWikiEngine::new(schema_with_full_promotion());
+        let mut p = WikiPage::new(
+            "Test",
+            "## 定义\ncontent",
+            Scope::Private {
+                agent_id: "a".into(),
+            },
+        )
+        .with_entry_type(EntryType::Concept);
+        p.updated_at = OffsetDateTime::now_utc() - time::Duration::days(10);
+        let pid = p.id;
+        let title = p.title.clone();
+        eng.store.pages.insert(pid, p);
+        // 添加 2 个引用 page
+        for i in 0..2u32 {
+            let ref_page = WikiPage::new(
+                format!("Ref{i}"),
+                format!("[[{title}]]"),
+                Scope::Private {
+                    agent_id: "a".into(),
+                },
+            );
+            eng.store.pages.insert(ref_page.id, ref_page);
+        }
+        // 但 cooldown_days=3，updated_at 只过了 10 天（>7 days age + >3 days cooldown 都满足）
+        // 实际上 age 和 cooldown 都基于 updated_at，10 天 > 3 天 cooldown，所以这不会失败
+        // 需要改成：updated_at 在 2 天前（age 不够但 cooldown_days=3 也需要的场景不适用）
+        // 改为直接测试 cooldown 独立失败的场景：min_age_days=0 但 cooldown_days=5
+        let mut schema = DomainSchema::permissive_default();
+        schema.lifecycle_rules = vec![LifecycleRule {
+            entry_types: vec![EntryType::Concept],
+            initial_status: EntryStatus::Draft,
+            promotions: vec![PromotionRule {
+                from_status: EntryStatus::Draft,
+                to_status: EntryStatus::InReview,
+                conditions: PromotionConditions {
+                    min_age_days: 0,
+                    required_sections: vec![],
+                    min_references: 0,
+                    cooldown_days: Some(5),
+                },
+            }],
+            stale_days: None,
+            auto_cleanup: false,
+        }];
+        let mut eng2 = LlmWikiEngine::new(schema);
+        let mut p2 = WikiPage::new(
+            "CooldownTest",
+            "body",
+            Scope::Private {
+                agent_id: "a".into(),
+            },
+        )
+        .with_entry_type(EntryType::Concept);
+        p2.updated_at = OffsetDateTime::now_utc() - time::Duration::days(2);
+        let pid2 = p2.id;
+        eng2.store.pages.insert(pid2, p2);
+        let now = OffsetDateTime::now_utc();
+        let res = eng2.promote_page(pid2, EntryStatus::InReview, "t", now, false);
+        assert!(matches!(res, Err(PromotePageError::Cooldown { .. })));
+    }
+
+    #[test]
+    fn promote_page_success() {
+        let mut eng = LlmWikiEngine::new(schema_with_full_promotion());
+        let mut p = WikiPage::new(
+            "Test",
+            "## 定义\ncontent",
+            Scope::Private {
+                agent_id: "a".into(),
+            },
+        )
+        .with_entry_type(EntryType::Concept);
+        p.updated_at = OffsetDateTime::now_utc() - time::Duration::days(10);
+        let pid = p.id;
+        let title = p.title.clone();
+        eng.store.pages.insert(pid, p);
+        // 添加 2 个引用 page，并刷新 outbound links
+        for i in 0..2u32 {
+            let mut ref_page = WikiPage::new(
+                format!("Ref{i}"),
+                format!("[[{title}]]"),
+                Scope::Private {
+                    agent_id: "a".into(),
+                },
+            );
+            ref_page.refresh_outbound_links();
+            eng.store.pages.insert(ref_page.id, ref_page);
+        }
+        let now = OffsetDateTime::now_utc();
+        eng.promote_page(pid, EntryStatus::InReview, "t", now, false)
+            .unwrap();
+        assert_eq!(eng.store.pages[&pid].status, EntryStatus::InReview);
+    }
+
+    #[test]
+    fn promote_page_force_skips_conditions() {
+        let mut eng = LlmWikiEngine::new(schema_with_full_promotion());
+        let p = WikiPage::new(
+            "Test",
+            "no headings",
+            Scope::Private {
+                agent_id: "a".into(),
+            },
+        )
+        .with_entry_type(EntryType::Concept);
+        let pid = p.id;
+        eng.store.pages.insert(pid, p);
+        let now = OffsetDateTime::now_utc();
+        eng.promote_page(pid, EntryStatus::InReview, "t", now, true)
+            .unwrap();
+        assert_eq!(eng.store.pages[&pid].status, EntryStatus::InReview);
+    }
+
+    // --- mark_stale_pages + cleanup_expired_pages 测试 ---
+
+    fn schema_with_stale_rule(stale_days: u64, auto_cleanup: bool) -> DomainSchema {
+        use wiki_core::{LifecycleRule, PromotionConditions, PromotionRule};
+        let mut schema = DomainSchema::permissive_default();
+        schema.lifecycle_rules = vec![LifecycleRule {
+            entry_types: vec![EntryType::Concept],
+            initial_status: EntryStatus::Draft,
+            promotions: vec![PromotionRule {
+                from_status: EntryStatus::Draft,
+                to_status: EntryStatus::InReview,
+                conditions: PromotionConditions {
+                    min_age_days: 0,
+                    required_sections: vec![],
+                    min_references: 0,
+                    cooldown_days: None,
+                },
+            }],
+            stale_days: Some(stale_days),
+            auto_cleanup,
+        }];
+        schema
+    }
+
+    #[test]
+    fn mark_stale_marks_expired_concept() {
+        let mut eng = LlmWikiEngine::new(schema_with_stale_rule(30, false));
+        let mut p = WikiPage::new(
+            "Old",
+            "body",
+            Scope::Private {
+                agent_id: "a".into(),
+            },
+        )
+        .with_entry_type(EntryType::Concept);
+        p.updated_at = OffsetDateTime::now_utc() - time::Duration::days(60);
+        eng.store.pages.insert(p.id, p);
+        let now = OffsetDateTime::now_utc();
+        let count = eng.mark_stale_pages(now);
+        assert_eq!(count, 1);
+        let pid = eng.store.pages.keys().next().unwrap();
+        assert_eq!(eng.store.pages[pid].status, EntryStatus::NeedsUpdate);
+    }
+
+    #[test]
+    fn mark_stale_skips_not_expired() {
+        let mut eng = LlmWikiEngine::new(schema_with_stale_rule(30, false));
+        let p = WikiPage::new(
+            "Fresh",
+            "body",
+            Scope::Private {
+                agent_id: "a".into(),
+            },
+        )
+        .with_entry_type(EntryType::Concept);
+        eng.store.pages.insert(p.id, p);
+        let now = OffsetDateTime::now_utc();
+        let count = eng.mark_stale_pages(now);
+        assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn mark_stale_skips_already_needs_update() {
+        let mut eng = LlmWikiEngine::new(schema_with_stale_rule(30, false));
+        let mut p = WikiPage::new(
+            "AlreadyStale",
+            "body",
+            Scope::Private {
+                agent_id: "a".into(),
+            },
+        )
+        .with_entry_type(EntryType::Concept)
+        .with_status(EntryStatus::NeedsUpdate);
+        p.updated_at = OffsetDateTime::now_utc() - time::Duration::days(60);
+        eng.store.pages.insert(p.id, p);
+        let now = OffsetDateTime::now_utc();
+        let count = eng.mark_stale_pages(now);
+        assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn mark_stale_noop_without_stale_days() {
+        let mut eng = LlmWikiEngine::new(DomainSchema::permissive_default());
+        let mut p = WikiPage::new(
+            "NoRule",
+            "body",
+            Scope::Private {
+                agent_id: "a".into(),
+            },
+        )
+        .with_entry_type(EntryType::Concept);
+        p.updated_at = OffsetDateTime::now_utc() - time::Duration::days(999);
+        eng.store.pages.insert(p.id, p);
+        let now = OffsetDateTime::now_utc();
+        let count = eng.mark_stale_pages(now);
+        assert_eq!(count, 0);
+    }
+
+    // --- auto_cleanup 测试 ---
+
+    #[test]
+    fn cleanup_removes_expired_autocleanup_page() {
+        let mut eng = LlmWikiEngine::new(schema_with_stale_rule(10, true));
+        let mut p = WikiPage::new(
+            "LintReport",
+            "body",
+            Scope::Private {
+                agent_id: "a".into(),
+            },
+        )
+        .with_entry_type(EntryType::Concept);
+        p.updated_at = OffsetDateTime::now_utc() - time::Duration::days(30);
+        let pid = p.id;
+        eng.store.pages.insert(pid, p);
+        let now = OffsetDateTime::now_utc();
+        let count = eng.cleanup_expired_pages(now);
+        assert_eq!(count, 1);
+        assert!(!eng.store.pages.contains_key(&pid));
+    }
+
+    #[test]
+    fn cleanup_skips_non_autocleanup() {
+        let mut eng = LlmWikiEngine::new(schema_with_stale_rule(10, false));
+        let mut p = WikiPage::new(
+            "Concept",
+            "body",
+            Scope::Private {
+                agent_id: "a".into(),
+            },
+        )
+        .with_entry_type(EntryType::Concept);
+        p.updated_at = OffsetDateTime::now_utc() - time::Duration::days(30);
+        let pid = p.id;
+        eng.store.pages.insert(pid, p);
+        let now = OffsetDateTime::now_utc();
+        let count = eng.cleanup_expired_pages(now);
+        assert_eq!(count, 0);
+        assert!(eng.store.pages.contains_key(&pid));
+    }
+
+    #[test]
+    fn cleanup_skips_not_expired() {
+        let mut eng = LlmWikiEngine::new(schema_with_stale_rule(100, true));
+        let p = WikiPage::new(
+            "Fresh",
+            "body",
+            Scope::Private {
+                agent_id: "a".into(),
+            },
+        )
+        .with_entry_type(EntryType::Concept);
+        let pid = p.id;
+        eng.store.pages.insert(pid, p);
+        let now = OffsetDateTime::now_utc();
+        let count = eng.cleanup_expired_pages(now);
+        assert_eq!(count, 0);
+        assert!(eng.store.pages.contains_key(&pid));
     }
 }

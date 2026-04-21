@@ -1,10 +1,15 @@
 //! Wiki 页：人类可读 Markdown；图结构与之并行而非替代。
 
 use crate::model::{PageId, Scope};
-use crate::schema::EntryType;
+use crate::schema::{EntryStatus, EntryType};
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 use uuid::Uuid;
+
+/// `status` 字段的 serde default：历史 JSON 无此字段时反序列化为 Draft。
+fn default_status() -> EntryStatus {
+    EntryStatus::Draft
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WikiPage {
@@ -18,6 +23,9 @@ pub struct WikiPage {
     /// 为 `None` 时表示该页不参与结构化生命周期（历史页面也能无损反序列化）。
     #[serde(default)]
     pub entry_type: Option<EntryType>,
+    /// 页面生命周期状态，新建默认 Draft；历史 JSON 无该字段时也回落 Draft。
+    #[serde(default = "default_status")]
+    pub status: EntryStatus,
 }
 
 impl WikiPage {
@@ -31,12 +39,19 @@ impl WikiPage {
             updated_at: now,
             outbound_page_titles: Vec::new(),
             entry_type: None,
+            status: EntryStatus::Draft,
         }
     }
 
     /// Builder：显式绑定条目类型，让该页参与 lint 的完整度检查。
     pub fn with_entry_type(mut self, entry_type: EntryType) -> Self {
         self.entry_type = Some(entry_type);
+        self
+    }
+
+    /// Builder：显式设置生命周期状态。
+    pub fn with_status(mut self, status: EntryStatus) -> Self {
+        self.status = status;
         self
     }
 
@@ -101,7 +116,9 @@ pub fn extract_headings(markdown: &str) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{extract_headings, extract_wikilinks};
+    use super::{extract_headings, extract_wikilinks, WikiPage};
+    use crate::model::Scope;
+    use crate::schema::{EntryStatus, EntryType};
 
     #[test]
     fn extracts_unique_wikilinks() {
@@ -122,5 +139,69 @@ mod tests {
         let md = "段落里有 # 号不应被当成标题\n## 真正的标题";
         let got = extract_headings(md);
         assert_eq!(got, vec!["真正的标题"]);
+    }
+
+    fn private_scope() -> Scope {
+        Scope::Private {
+            agent_id: "test".into(),
+        }
+    }
+
+    #[test]
+    fn page_status_default_is_draft() {
+        // 新建 page 默认 Draft
+        let page = WikiPage::new("Title", "body", private_scope());
+        assert_eq!(page.status, EntryStatus::Draft);
+    }
+
+    #[test]
+    fn page_status_with_status_works() {
+        // with_status 链式调用正确写入
+        let page =
+            WikiPage::new("Title", "body", private_scope()).with_status(EntryStatus::Approved);
+        assert_eq!(page.status, EntryStatus::Approved);
+    }
+
+    #[test]
+    fn page_status_old_json_deserializes_to_draft() {
+        // 旧 JSON 无 status 字段 → 反序列化得 Draft
+        let json = r#"{
+            "id": {"0": [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]},
+            "title": "Old Page",
+            "markdown": "body",
+            "scope": {"kind": "private", "agent_id": "cli"},
+            "updated_at": "2024-01-01T00:00:00Z",
+            "outbound_page_titles": [],
+            "entry_type": null
+        }"#;
+        // serde_json 能反序列化 PageId 的 UUID，使用标准 UUID 格式
+        let json2 = r#"{
+            "id": "00000000-0000-0000-0000-000000000000",
+            "title": "Old Page",
+            "markdown": "body",
+            "scope": {"kind": "private", "agent_id": "cli"},
+            "updated_at": "2024-01-01T00:00:00Z",
+            "outbound_page_titles": [],
+            "entry_type": null
+        }"#;
+        // 先序列化一个已有 page，然后去掉 status 字段再反序列化
+        let page = WikiPage::new("Old Page", "body", private_scope());
+        let mut v: serde_json::Value = serde_json::to_value(&page).unwrap();
+        v.as_object_mut().unwrap().remove("status");
+        let deserialized: WikiPage = serde_json::from_value(v).unwrap();
+        assert_eq!(deserialized.status, EntryStatus::Draft);
+        // 确认 json2 变量不被 unused 警告
+        let _ = json;
+        let _ = json2;
+    }
+
+    #[test]
+    fn page_status_with_entry_type_chains() {
+        // with_entry_type + with_status 链式组合
+        let page = WikiPage::new("T", "md", private_scope())
+            .with_entry_type(EntryType::Concept)
+            .with_status(EntryStatus::InReview);
+        assert_eq!(page.entry_type, Some(EntryType::Concept));
+        assert_eq!(page.status, EntryStatus::InReview);
     }
 }
