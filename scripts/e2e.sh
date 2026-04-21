@@ -82,4 +82,25 @@ test -f wiki/index.md
 test -f wiki/log.md
 test -d wiki/reports
 
+echo "[10] backup smoke"
+BACKUP_OUT="$WORKDIR/backups"
+out="$("$REPO_ROOT/scripts/backup.sh" --db "$WORKDIR/wiki.db" --wiki "$WORKDIR/wiki" --out "$BACKUP_OUT")"
+echo "$out"
+backup_db="$(echo "$out" | sed -n 's/^BACKUP_DB=//p')"
+if [[ -z "$backup_db" || ! -f "$backup_db" ]]; then
+  echo "backup 未生成数据库文件: ${backup_db:-empty}" >&2
+  exit 1
+fi
+# 备份库必须能被 sqlite3 打开，且包含业务核心表 wiki_state / wiki_outbox
+tables="$(sqlite3 "$backup_db" "SELECT name FROM sqlite_master WHERE type='table';")"
+for required in wiki_state wiki_outbox; do
+  if ! echo "$tables" | grep -q "^${required}$"; then
+    echo "备份库缺少 ${required} 表，实际 tables: $tables" >&2
+    exit 1
+  fi
+done
+# wiki 目录打包文件应存在
+ls "$BACKUP_OUT"/wiki-*.tar.gz >/dev/null
+echo "  backup smoke OK"
+
 echo "E2E PASS: $WORKDIR"

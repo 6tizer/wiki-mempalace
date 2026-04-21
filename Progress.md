@@ -359,3 +359,89 @@ mempalace consume=4 → llm-smoke skip → viewer-scope 隔离验证）。
 - 改用 no-dep 的 match 辅助函数代替 serde_json 序列化，保持 wiki-kernel 最小依赖。
 - 所有格式问题由 `cargo fmt --all` 统一处理。
 
+---
+
+## D2 — needs_update → approved 反向 promotion（2026-04-21）
+
+### 实现了哪些功能
+
+- `DomainSchema.json`：concept/entity 与 synthesis 两条 lifecycle_rule 各自新增一条反向 promotion：
+  `needs_update → approved`，条件全部置 0（min_age_days=0 / required_sections=[] / min_references=0 / cooldown_days=null）。
+- `crates/wiki-kernel/src/engine.rs` 新增两条单元测试：
+  - `promote_needs_update_to_approved_works` — 反向规则存在时，emit `PageStatusChanged(NeedsUpdate → Approved)`
+  - `promote_needs_update_without_rule_still_errors` — 无规则时仍返回 `NoPromotion` 回归保护
+- 新增 `crates/wiki-cli/tests/fixtures/schema_with_reverse_promotion.json`（无环设计：draft→needs_update→approved）
+- 新增集成测试 `crates/wiki-cli/tests/promote_page_recover_from_stale.rs`：
+  crystallize(concept) → promote --force --to needs_update → promote --to approved（走反向规则，无 force）
+
+### 遇到了哪些错误
+
+1. **`schema invalid: PromotionCycle`**：最初 fixture 同时含 `approved→needs_update` 和 `needs_update→approved` 形成环。Schema 加载期环检测拒绝。
+2. **`ParseChar index=37`**：`parse_page_id` 将整行 `page=<uuid> claims=N` 传入 UUID 解析，空格导致失败。
+3. **`repo_domain_schema_lifecycle_rules_indexable` 断言**：DomainSchema 中 concept promotions 从 2 变 3（加了反向规则），旧断言失败。
+
+### 如何解决
+
+1. 把 fixture 重新设计为 `draft→needs_update→approved` 线性路径（不含反向环），既能覆盖反向规则又满足环检测；真实 `DomainSchema.json` 的 `approved→needs_update` 由 `mark_stale_pages` 直接 mutate 而非 promotion，因此无冲突。
+2. 修改 `parse_page_id`：先 `split_whitespace().next()` 再解析，稳健处理 CLI 多字段输出格式。
+3. 更新 `crates/wiki-core/tests/schema_json.rs` 的 `promotions.len()` 期望值为 3，并补充注释说明三条规则含义。
+
+### 验证
+
+- `cargo run -p wiki-cli -- schema-validate DomainSchema.json` → `schema ok: lifecycle_rules=6`
+- `cargo test --workspace` → 全绿（本次改动涉及的相关 suite 全部通过）
+---
+
+## D3 — ingest-llm 默认 entry_type + MCP 对齐（2026-04-21）
+
+### 实现了哪些功能
+
+- `crates/wiki-cli/src/main.rs` 新增 `effective_ingest_entry_type(Option<EntryType>) -> EntryType`：未显式指定时回退 `EntryType::Concept`。
+- `Cmd::IngestLlm` summary 页面生成改用新 helper：无论 LLM / 用户是否传 `--entry-type`，都会产出带 `entry_type=concept`（或显式值）的页面并正确计算 `initial_status_for`。
+- `crates/wiki-cli/src/mcp.rs` 的 `wiki_ingest_llm` 工具：
+  - `inputSchema.properties` 新增 `entry_type`（string，description 提示默认 concept）；
+  - handler 解析 `entry_type` 参数、调用 `parse_entry_type_opt` 做严格校验、按 `effective_ingest_entry_type` 回退；
+  - 若 `plan.summary_markdown` 非空，补齐 summary page 写入（此前 MCP 路径只落 claims / source，不落 page，与 CLI 行为不一致，现在对齐）；
+  - 向量开关打开时对 claim 做 best-effort 嵌入（对齐 CLI 行为）；
+  - 返回体新增 `summary_page_id`。
+- 单元测试 `mcp::tests::tools_list_wiki_ingest_llm_has_entry_type_param`：断言 `tools/list` 暴露的 schema 含 `entry_type:string` 且描述含 `concept`。
+- 单元测试 `tests::effective_entry_type_defaults_to_concept` / `tests::effective_entry_type_preserves_explicit`。
+
+### 遇到了哪些错误
+
+- 无编译 / 测试失败；一次 `_ = viewer` 赘余赋值被及时删除。
+
+### 如何解决
+
+- 将所有缺省策略集中在 `effective_ingest_entry_type` 单点实现，CLI/MCP 双路径共用。
+- MCP handler 通过 `eng.schema.clone()` 取到 DomainSchema，复用 `initial_status_for` 保持与 CLI 一致的生命周期初始状态。
+
+### 验证
+
+- `cargo fmt --all --check`（隐式 via `cargo fmt --all` 后重跑）
+- `cargo test --workspace`：全绿（所有 test result 均 ok）
+---
+
+## D4 — SQLite 热备份脚本（2026-04-21）
+
+### 实现了哪些功能
+
+- 新增 `scripts/backup.sh`：
+  - 使用 `sqlite3 .backup` 在线热备（兼容 WAL，不阻塞业务写入）；
+  - 参数 `--db / --wiki / --out`，默认 `~/wiki-mempalace/{wiki.db,wiki,backups}`；
+  - 备份后跑 `PRAGMA integrity_check` 校验；
+  - 若 wiki 投影目录存在，额外打包 `wiki-<ts>.tar.gz`；
+  - 输出 `BACKUP_DB=<path>` 便于脚本链式消费。
+- `scripts/e2e.sh` 新增 `[10] backup smoke`：调用脚本、校验备份库可打开并含 `wiki_state` / `wiki_outbox` 表、tar.gz 存在。
+
+### 遇到了哪些错误
+
+1. 首次 smoke 用 `pages` 作为存在性标志，但 SQLite schema 实际是 `wiki_state / wiki_outbox`（page / claim 作为 JSON 存在 `wiki_state.data` 中），导致断言失败。
+
+### 如何解决
+
+- 把断言改为 `wiki_state` + `wiki_outbox` 两张核心表的存在性；与存储层实际 schema 对齐。
+
+### 验证
+
+- `bash scripts/e2e.sh` → `E2E PASS`，`[10] backup smoke OK` 日志正常。
