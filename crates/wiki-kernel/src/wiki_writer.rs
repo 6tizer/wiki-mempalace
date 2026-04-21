@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::io;
 use std::path::Path;
-use wiki_core::{AuditRecord, LintFinding, LintSeverity};
+use wiki_core::{AuditRecord, Claim, LintFinding, LintSeverity, RawArtifact, Scope, WikiPage};
 
 #[derive(Debug, Default, Clone, Copy)]
 pub struct ProjectionStats {
@@ -36,7 +36,7 @@ pub fn write_projection(
     for page in pages {
         let slug = slugify(&page.title, &page.id.0.to_string());
         let path = pages_dir.join(format!("{slug}.md"));
-        fs::write(&path, &page.markdown)?;
+        fs::write(&path, render_page_with_frontmatter(page))?;
         stats.pages_written += 1;
         page_rows.push(format!(
             "- [{}](pages/{}.md) | updated: {}",
@@ -53,17 +53,7 @@ pub fn write_projection(
         let id_short = &short[..8];
         let file = format!("{id_short}.md");
         let path = concepts_dir.join(&file);
-        let md = format!(
-            "# Claim {id_short}\n\n- id: `{}`\n- tier: `{:?}`\n- confidence: `{:.3}`\n- quality: `{:.3}`\n- stale: `{}`\n- sources: `{}`\n\n## Text\n\n{}\n",
-            claim.id.0,
-            claim.tier,
-            claim.confidence,
-            claim.quality_score,
-            claim.stale,
-            claim.source_ids.len(),
-            claim.text
-        );
-        fs::write(path, md)?;
+        fs::write(path, render_claim_with_frontmatter(claim))?;
         stats.claims_written += 1;
         claim_rows.push(format!(
             "- [claim:{}](concepts/{}) | tier={:?} stale={}",
@@ -78,12 +68,7 @@ pub fn write_projection(
         let id_short = &short[..8];
         let file = format!("{id_short}.md");
         let path = sources_dir.join(&file);
-        let preview = preview_text(&source.body, 2000);
-        let md = format!(
-            "# Source {id_short}\n\n- id: `{}`\n- uri: `{}`\n- ingested_at: `{}`\n\n## Preview\n\n{}\n",
-            source.id.0, source.uri, source.ingested_at, preview
-        );
-        fs::write(path, md)?;
+        fs::write(path, render_source_with_frontmatter(source))?;
         stats.sources_written += 1;
         source_rows.push(format!(
             "- [source:{}](sources/{}) | {}",
@@ -140,6 +125,107 @@ pub fn write_lint_report(
     }
     fs::write(&out, md)?;
     Ok(out)
+}
+
+/// EntryStatus → snake_case 字符串（与 serde rename_all 保持一致）。
+fn status_str(s: wiki_core::EntryStatus) -> &'static str {
+    match s {
+        wiki_core::EntryStatus::Draft => "draft",
+        wiki_core::EntryStatus::InReview => "in_review",
+        wiki_core::EntryStatus::Approved => "approved",
+        wiki_core::EntryStatus::NeedsUpdate => "needs_update",
+    }
+}
+
+/// EntryType → snake_case 字符串（与 serde rename_all 保持一致）。
+fn entry_type_str(t: &wiki_core::EntryType) -> &'static str {
+    match t {
+        wiki_core::EntryType::Concept => "concept",
+        wiki_core::EntryType::Entity => "entity",
+        wiki_core::EntryType::Summary => "summary",
+        wiki_core::EntryType::Synthesis => "synthesis",
+        wiki_core::EntryType::Qa => "qa",
+        wiki_core::EntryType::LintReport => "lint_report",
+        wiki_core::EntryType::Index => "index",
+    }
+}
+
+/// YAML 双引号内转义：只处理双引号和反斜杠。
+fn yaml_escape(s: &str) -> String {
+    s.replace('\\', "\\\\").replace('"', "\\\"")
+}
+
+/// 将 Scope 序列化为人类可读字符串（用于 YAML frontmatter）。
+fn scope_label(scope: &Scope) -> String {
+    match scope {
+        Scope::Private { agent_id } => format!("private:{agent_id}"),
+        Scope::Shared { team_id } => format!("shared:{team_id}"),
+    }
+}
+
+/// 渲染 WikiPage 为带 YAML frontmatter 的完整 Markdown。
+fn render_page_with_frontmatter(page: &WikiPage) -> String {
+    let mut fm = String::from("---\n");
+    fm.push_str(&format!("id: \"{}\"\n", page.id.0));
+    fm.push_str(&format!("title: \"{}\"\n", yaml_escape(&page.title)));
+    fm.push_str(&format!("status: {}\n", status_str(page.status)));
+    match &page.entry_type {
+        Some(et) => {
+            fm.push_str(&format!("entry_type: {}\n", entry_type_str(et)));
+        }
+        None => fm.push_str("entry_type: null\n"),
+    }
+    fm.push_str(&format!(
+        "scope: \"{}\"\n",
+        yaml_escape(&scope_label(&page.scope))
+    ));
+    fm.push_str(&format!("updated_at: {}\n", page.updated_at.date()));
+    fm.push_str("---\n\n");
+    fm.push_str(&page.markdown);
+    fm
+}
+
+/// 渲染 Claim 为带 YAML frontmatter 的完整 Markdown。
+fn render_claim_with_frontmatter(claim: &Claim) -> String {
+    let short = claim.id.0.to_string();
+    let id_short = &short[..8];
+    let mut fm = String::from("---\n");
+    fm.push_str(&format!("id: \"{}\"\n", claim.id.0));
+    fm.push_str(&format!("tier: {:?}\n", claim.tier));
+    fm.push_str(&format!("confidence: {:.3}\n", claim.confidence));
+    fm.push_str(&format!("quality: {:.3}\n", claim.quality_score));
+    fm.push_str(&format!("stale: {}\n", claim.stale));
+    fm.push_str(&format!("sources_count: {}\n", claim.source_ids.len()));
+    fm.push_str(&format!("created_at: {}\n", claim.created_at.date()));
+    fm.push_str("---\n\n");
+    // 正文保持原有结构
+    fm.push_str(&format!(
+        "# Claim {id_short}\n\n- tier: `{:?}`\n- confidence: `{:.3}`\n- quality: `{:.3}`\n- stale: `{}`\n- sources: `{}`\n\n## Text\n\n{}\n",
+        claim.tier,
+        claim.confidence,
+        claim.quality_score,
+        claim.stale,
+        claim.source_ids.len(),
+        claim.text
+    ));
+    fm
+}
+
+/// 渲染 RawArtifact (Source) 为带 YAML frontmatter 的完整 Markdown。
+fn render_source_with_frontmatter(source: &RawArtifact) -> String {
+    let short = source.id.0.to_string();
+    let id_short = &short[..8];
+    let preview = preview_text(&source.body, 2000);
+    let mut fm = String::from("---\n");
+    fm.push_str(&format!("id: \"{}\"\n", source.id.0));
+    fm.push_str(&format!("uri: \"{}\"\n", yaml_escape(&source.uri)));
+    fm.push_str(&format!("ingested_at: {}\n", source.ingested_at.date()));
+    fm.push_str("---\n\n");
+    fm.push_str(&format!(
+        "# Source {id_short}\n\n- uri: `{}`\n- ingested_at: `{}`\n\n## Preview\n\n{}\n",
+        source.uri, source.ingested_at, preview
+    ));
+    fm
 }
 
 fn render_index(pages: &[String], claims: &[String], sources: &[String]) -> String {
@@ -217,7 +303,16 @@ fn preview_text(body: &str, max_len: usize) -> String {
 mod tests {
     use super::*;
     use tempfile::tempdir;
-    use wiki_core::{AuditOperation, AuditRecord, Claim, MemoryTier, RawArtifact, Scope, WikiPage};
+    use wiki_core::{
+        schema::{EntryStatus, EntryType},
+        AuditOperation, AuditRecord, Claim, MemoryTier, RawArtifact, Scope, WikiPage,
+    };
+
+    fn private_scope() -> Scope {
+        Scope::Private {
+            agent_id: "test".into(),
+        }
+    }
 
     #[test]
     fn projection_writes_index_log_and_dirs() {
@@ -225,9 +320,7 @@ mod tests {
         let wiki_root = dir.path();
 
         let mut store = InMemoryStore::default();
-        let scope = Scope::Private {
-            agent_id: "t".into(),
-        };
+        let scope = private_scope();
 
         let src = RawArtifact::new("file:///a.md", "hello world", scope.clone());
         store.sources.insert(src.id, src);
@@ -246,5 +339,98 @@ mod tests {
         assert!(wiki_root.join("pages").is_dir());
         assert!(wiki_root.join("concepts").is_dir());
         assert!(wiki_root.join("sources").is_dir());
+
+        // D1 frontmatter 集成断言：投影出的 page 文件第一行必须是 ---
+        let page_files: Vec<_> = std::fs::read_dir(wiki_root.join("pages"))
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.path().extension().is_some_and(|x| x == "md"))
+            .collect();
+        assert!(!page_files.is_empty(), "pages/ 目录应有文件");
+        for entry in &page_files {
+            let content = std::fs::read_to_string(entry.path()).unwrap();
+            assert!(
+                content.starts_with("---\n"),
+                "page 文件应以 frontmatter 开头: {:?}",
+                entry.path()
+            );
+            assert!(
+                content.contains("status:"),
+                "page 文件 frontmatter 应含 status 字段"
+            );
+        }
+    }
+
+    // --- D1 frontmatter 测试 ---
+
+    #[test]
+    fn frontmatter_page_with_status_and_type() {
+        let page = WikiPage::new("Test Page", "# body", private_scope())
+            .with_entry_type(EntryType::Concept)
+            .with_status(EntryStatus::Approved);
+        let rendered = render_page_with_frontmatter(&page);
+        assert!(rendered.starts_with("---\n"));
+        assert!(rendered.contains("status: approved\n"));
+        assert!(rendered.contains("entry_type: concept\n"));
+        assert!(rendered.contains(&format!("id: \"{}\"\n", page.id.0)));
+        assert!(rendered.contains("title: \"Test Page\"\n"));
+    }
+
+    #[test]
+    fn frontmatter_page_entry_type_null_when_absent() {
+        let page = WikiPage::new("NoType", "body", private_scope());
+        let rendered = render_page_with_frontmatter(&page);
+        assert!(rendered.contains("entry_type: null\n"));
+        assert!(rendered.contains("status: draft\n"));
+    }
+
+    #[test]
+    fn frontmatter_page_preserves_body_verbatim() {
+        let body = "# Heading\n\nSome **bold** text\n\n- item 1\n- item 2\n";
+        let page = WikiPage::new("BodyTest", body, private_scope());
+        let rendered = render_page_with_frontmatter(&page);
+        // frontmatter 结束后，body 应逐字符保留
+        let body_start = rendered.find("---\n\n").unwrap() + 5;
+        assert_eq!(&rendered[body_start..], body);
+    }
+
+    #[test]
+    fn frontmatter_claim_contains_tier_and_confidence() {
+        let claim = Claim::new("test claim", private_scope(), MemoryTier::Semantic);
+        let rendered = render_claim_with_frontmatter(&claim);
+        assert!(rendered.starts_with("---\n"));
+        assert!(rendered.contains(&format!("id: \"{}\"\n", claim.id.0)));
+        assert!(rendered.contains("tier: Semantic\n"));
+        assert!(rendered.contains("confidence:"));
+        assert!(rendered.contains("quality:"));
+        assert!(rendered.contains("stale: false\n"));
+        assert!(rendered.contains("sources_count: 0\n"));
+    }
+
+    #[test]
+    fn frontmatter_source_contains_uri() {
+        let source = RawArtifact::new("file:///notes/test.md", "body text", private_scope());
+        let rendered = render_source_with_frontmatter(&source);
+        assert!(rendered.starts_with("---\n"));
+        assert!(rendered.contains(&format!("id: \"{}\"\n", source.id.0)));
+        assert!(rendered.contains("uri: \"file:///notes/test.md\"\n"));
+        assert!(rendered.contains("ingested_at:"));
+        assert!(rendered.contains("## Preview"));
+    }
+
+    #[test]
+    fn frontmatter_idempotent_on_rewrite() {
+        let page =
+            WikiPage::new("Idempotent", "body", private_scope()).with_status(EntryStatus::InReview);
+        let first = render_page_with_frontmatter(&page);
+        let second = render_page_with_frontmatter(&page);
+        assert_eq!(first, second, "两次渲染输出应字节级一致");
+    }
+
+    #[test]
+    fn frontmatter_title_with_quotes_escapes_properly() {
+        let page = WikiPage::new("He said \"hello\" then left", "body", private_scope());
+        let rendered = render_page_with_frontmatter(&page);
+        assert!(rendered.contains(r#"title: "He said \"hello\" then left""#));
     }
 }

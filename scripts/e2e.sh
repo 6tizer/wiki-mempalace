@@ -32,6 +32,19 @@ echo "[5/8] lint + report"
 cargo run -q -p wiki-cli --manifest-path "$REPO_ROOT/Cargo.toml" -- \
   --db wiki.db --wiki-dir wiki --sync-wiki lint
 
+echo "[5.1] frontmatter check"
+# pages/ 下每个 .md 的第一行必须是 ---（YAML frontmatter 存在）
+for f in wiki/pages/*.md; do
+  [[ -f "$f" ]] || continue
+  first_line="$(head -n 1 "$f")"
+  if [[ "$first_line" != "---" ]]; then
+    echo "frontmatter missing in $f (first line: $first_line)" >&2
+    exit 1
+  fi
+  grep -q "^status:" "$f" || { echo "status field missing in $f" >&2; exit 1; }
+done
+echo "  pages frontmatter OK"
+
 echo "[6/8] outbox export + ack"
 cargo run -q -p wiki-cli --manifest-path "$REPO_ROOT/Cargo.toml" -- \
   --db wiki.db export-outbox-ndjson-from --last-id 0 | sed -n '1,5p'
