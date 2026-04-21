@@ -57,8 +57,20 @@ mod tests {
 
     #[test]
     fn supersession_marks_stale() {
-        let mut a = Claim::new("旧结论", Scope::Private { agent_id: "a".into() }, MemoryTier::Semantic);
-        let mut b = Claim::new("新结论", Scope::Private { agent_id: "a".into() }, MemoryTier::Semantic);
+        let mut a = Claim::new(
+            "旧结论",
+            Scope::Private {
+                agent_id: "a".into(),
+            },
+            MemoryTier::Semantic,
+        );
+        let mut b = Claim::new(
+            "新结论",
+            Scope::Private {
+                agent_id: "a".into(),
+            },
+            MemoryTier::Semantic,
+        );
         let now = OffsetDateTime::now_utc();
         supersede_claim(&mut a, &mut b, now);
         assert!(a.stale);

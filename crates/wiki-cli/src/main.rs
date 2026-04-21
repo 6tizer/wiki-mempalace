@@ -10,8 +10,8 @@ use wiki_kernel::{
     format_claim_doc_id, merge_graph_rankings, write_lint_report, write_projection,
     InMemorySearchPorts, InMemoryStore, LlmWikiEngine, NoopWikiHook, SearchPorts,
 };
-use wiki_storage::{SqliteRepository, WikiRepository};
 use wiki_mempalace_bridge::{consume_outbox_ndjson, MempalaceError, MempalaceWikiSink};
+use wiki_storage::{SqliteRepository, WikiRepository};
 
 mod banner;
 mod llm;
@@ -166,12 +166,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         } => {
             let cfg = llm::load_llm_config(&cli.llm_config)?;
             let user = format!("Source URI:\n{uri}\n\nBody:\n{body}");
-            let reply = llm::complete_chat(
-                &cfg,
-                llm::ingest_llm_system_prompt(),
-                &user,
-                1800,
-            )?;
+            let reply = llm::complete_chat(&cfg, llm::ingest_llm_system_prompt(), &user, 1800)?;
             let slice = llm::parse_json_object_slice(&reply);
             let plan: LlmIngestPlanV1 = serde_json::from_str(slice)
                 .map_err(|e| format!("ingest-llm JSON parse error: {e}; raw={reply}"))?;
@@ -190,7 +185,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 repo.upsert_embedding(&format!("source:{}", sid.0), &vec)?;
             }
             for c in &plan.claims {
-                let tier = parse_memory_tier(&c.tier).map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
+                let tier = parse_memory_tier(&c.tier)
+                    .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
                 let cid = eng.file_claim(c.text.clone(), sc.clone(), tier, "cli");
                 eng.attach_sources(cid, &[sid])?;
                 eng.save_to_repo(&repo)?;
@@ -212,10 +208,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 eng.add_entity(entity)?;
             }
             for rd in &plan.relationships {
-                let from_id = eng.store.entities.values()
+                let from_id = eng
+                    .store
+                    .entities
+                    .values()
                     .find(|e| e.label.eq_ignore_ascii_case(&rd.from_label))
                     .map(|e| e.id);
-                let to_id = eng.store.entities.values()
+                let to_id = eng
+                    .store
+                    .entities
+                    .values()
                     .find(|e| e.label.eq_ignore_ascii_case(&rd.to_label))
                     .map(|e| e.id);
                 if let (Some(from), Some(to)) = (from_id, to_id) {
@@ -354,7 +356,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             eng.save_to_repo(&repo)?;
             eng.flush_outbox_to_repo_with_policy(&repo, 128, 3)?;
             if let Some(root) = wiki_root.as_deref() {
-                let report = write_lint_report(root, &format!("lint-{}", timestamp_slug()), &findings)?;
+                let report =
+                    write_lint_report(root, &format!("lint-{}", timestamp_slug()), &findings)?;
                 println!("lint_report={}", report.display());
             }
             maybe_sync_projection(sync_wiki, wiki_root.as_deref(), &eng)?;
@@ -391,7 +394,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             eng.save_to_repo(&repo)?;
             eng.flush_outbox_to_repo_with_policy(&repo, 128, 3)?;
             maybe_sync_projection(sync_wiki, wiki_root.as_deref(), &eng)?;
-            println!("page={} claims={}", draft.page.id.0, draft.claim_candidates.len());
+            println!(
+                "page={} claims={}",
+                draft.page.id.0,
+                draft.claim_candidates.len()
+            );
         }
         Cmd::ExportOutboxNdjson => {
             print!("{}", repo.export_outbox_ndjson()?);
@@ -442,13 +449,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             eng.save_to_repo(&repo)?;
             eng.flush_outbox_to_repo_with_policy(&repo, 128, 3)?;
             maybe_sync_projection(sync_wiki, wiki_root.as_deref(), &eng)?;
-            println!("decay=applied lint_findings={} promoted={promoted}", findings.len());
+            println!(
+                "decay=applied lint_findings={} promoted={promoted}",
+                findings.len()
+            );
         }
     }
     Ok(())
 }
 
-pub(crate) fn doc_id_visible_to_viewer(doc_id: &str, store: &InMemoryStore, viewer: &Scope) -> bool {
+pub(crate) fn doc_id_visible_to_viewer(
+    doc_id: &str,
+    store: &InMemoryStore,
+    viewer: &Scope,
+) -> bool {
     if let Some(rest) = doc_id.strip_prefix("claim:") {
         if let Ok(u) = uuid::Uuid::parse_str(rest) {
             return store
@@ -550,8 +564,7 @@ fn query_to_page(title: &str, query: &str, ranked: &[(String, f64)], scope: Scop
 
 fn read_graph_extras_lines(path: &PathBuf) -> Result<Vec<String>, Box<dyn std::error::Error>> {
     let s = std::fs::read_to_string(path)?;
-    Ok(s
-        .lines()
+    Ok(s.lines()
         .map(str::trim)
         .filter(|l| !l.is_empty() && !l.starts_with('#'))
         .map(|l| l.to_string())

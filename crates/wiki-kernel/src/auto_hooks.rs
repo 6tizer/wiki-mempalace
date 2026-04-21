@@ -1,5 +1,5 @@
-use wiki_core::WikiEvent;
 use crate::hooks::WikiHook;
+use wiki_core::WikiEvent;
 
 pub struct AutoWikiHook {
     pub reinforced_claims: Vec<wiki_core::ClaimId>,

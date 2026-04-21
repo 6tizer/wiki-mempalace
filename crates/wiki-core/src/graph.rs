@@ -25,7 +25,11 @@ impl Default for GraphWalkOptions {
 }
 
 /// 从种子实体出发 BFS，返回访问到的实体（含种子），边过滤可选。
-pub fn walk_entities(graph: &GraphSnapshot, seeds: &[EntityId], opts: &GraphWalkOptions) -> Vec<EntityId> {
+pub fn walk_entities(
+    graph: &GraphSnapshot,
+    seeds: &[EntityId],
+    opts: &GraphWalkOptions,
+) -> Vec<EntityId> {
     let mut adj: HashMap<EntityId, Vec<(EntityId, RelationKind)>> = HashMap::new();
     for (a, b, r) in &graph.edges {
         adj.entry(*a).or_default().push((*b, r.clone()));
@@ -71,10 +75,7 @@ mod tests {
         let b = EntityId(Uuid::new_v4());
         let c = EntityId(Uuid::new_v4());
         let g = GraphSnapshot {
-            edges: vec![
-                (a, b, RelationKind::DependsOn),
-                (b, c, RelationKind::Uses),
-            ],
+            edges: vec![(a, b, RelationKind::DependsOn), (b, c, RelationKind::Uses)],
         };
         let out = walk_entities(
             &g,

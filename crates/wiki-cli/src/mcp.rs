@@ -1,9 +1,9 @@
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use std::io::{self, BufRead, Write};
 use time::OffsetDateTime;
 use wiki_core::{
-    ClaimId, DomainSchema, MemoryTier, QueryContext, Scope, SessionCrystallizationInput,
-    WikiPage, parse_memory_tier,
+    parse_memory_tier, ClaimId, DomainSchema, MemoryTier, QueryContext, Scope,
+    SessionCrystallizationInput, WikiPage,
 };
 use wiki_kernel::{LlmWikiEngine, NoopWikiHook};
 use wiki_storage::SqliteRepository;
@@ -44,7 +44,9 @@ pub fn run_mcp(
                     json!({"jsonrpc":"2.0","id":Value::Null,"error":{"code":-32700,"message":e.to_string()}})
                 )?;
                 stdout.flush()?;
-                if once { break; }
+                if once {
+                    break;
+                }
                 continue;
             }
         };
@@ -54,12 +56,22 @@ pub fn run_mcp(
         let params = req.get("params").cloned().unwrap_or_else(|| json!({}));
 
         let resp = handle_request(
-            method, params, id, &mut eng, &repo, &viewer,
-            llm_config_path, vectors, wiki_dir, palace_path,
+            method,
+            params,
+            id,
+            &mut eng,
+            &repo,
+            &viewer,
+            llm_config_path,
+            vectors,
+            wiki_dir,
+            palace_path,
         );
         writeln!(stdout, "{resp}")?;
         stdout.flush()?;
-        if once { break; }
+        if once {
+            break;
+        }
     }
     Ok(())
 }
@@ -84,7 +96,14 @@ fn handle_request(
         })),
         "tools/list" => Ok(tools_list()),
         "tools/call" => call_tool(
-            params, eng, repo, viewer, llm_config_path, vectors, wiki_dir, palace_path,
+            params,
+            eng,
+            repo,
+            viewer,
+            llm_config_path,
+            vectors,
+            wiki_dir,
+            palace_path,
         ),
         _ => Err(format!("unknown method: {method}")),
     };
@@ -301,11 +320,18 @@ fn call_tool(
             }))
         }
         "wiki_ingest" => {
-            let uri = args.get("uri").and_then(Value::as_str)
+            let uri = args
+                .get("uri")
+                .and_then(Value::as_str)
                 .ok_or("missing uri")?;
-            let body = args.get("body").and_then(Value::as_str)
+            let body = args
+                .get("body")
+                .and_then(Value::as_str)
                 .ok_or("missing body")?;
-            let scope = args.get("scope").and_then(Value::as_str).unwrap_or("private:mcp");
+            let scope = args
+                .get("scope")
+                .and_then(Value::as_str)
+                .unwrap_or("private:mcp");
             let sid = eng.ingest_raw(uri.to_string(), body, parse_scope(scope), "mcp");
             save_and_flush(eng, repo).map_err(|e| e.to_string())?;
             if vectors {
@@ -315,42 +341,68 @@ fn call_tool(
             Ok(json!({"source_id": sid.0.to_string()}))
         }
         "wiki_file_claim" => {
-            let text = args.get("text").and_then(Value::as_str)
+            let text = args
+                .get("text")
+                .and_then(Value::as_str)
                 .ok_or("missing text")?;
-            let scope = args.get("scope").and_then(Value::as_str).unwrap_or("private:mcp");
-            let tier = args.get("tier").and_then(Value::as_str).unwrap_or("working");
+            let scope = args
+                .get("scope")
+                .and_then(Value::as_str)
+                .unwrap_or("private:mcp");
+            let tier = args
+                .get("tier")
+                .and_then(Value::as_str)
+                .unwrap_or("working");
             let tier = parse_tier(tier).map_err(|e| e.to_string())?;
             let cid = eng.file_claim(text.to_string(), parse_scope(scope), tier, "mcp");
             save_and_flush(eng, repo).map_err(|e| e.to_string())?;
             Ok(json!({"claim_id": cid.0.to_string()}))
         }
         "wiki_supersede_claim" => {
-            let old_id_str = args.get("old_claim_id").and_then(Value::as_str)
+            let old_id_str = args
+                .get("old_claim_id")
+                .and_then(Value::as_str)
                 .ok_or("missing old_claim_id")?;
-            let new_text = args.get("new_text").and_then(Value::as_str)
+            let new_text = args
+                .get("new_text")
+                .and_then(Value::as_str)
                 .ok_or("missing new_text")?;
-            let scope = args.get("scope").and_then(Value::as_str).unwrap_or("private:mcp");
-            let tier = args.get("tier").and_then(Value::as_str).unwrap_or("working");
+            let scope = args
+                .get("scope")
+                .and_then(Value::as_str)
+                .unwrap_or("private:mcp");
+            let tier = args
+                .get("tier")
+                .and_then(Value::as_str)
+                .unwrap_or("working");
             let old = ClaimId(uuid::Uuid::parse_str(old_id_str).map_err(|e| e.to_string())?);
             let tier = parse_tier(tier).map_err(|e| e.to_string())?;
-            let new_id = eng.supersede(old, new_text.to_string(), parse_scope(scope), tier, "mcp")
+            let new_id = eng
+                .supersede(old, new_text.to_string(), parse_scope(scope), tier, "mcp")
                 .map_err(|e| e.to_string())?;
             save_and_flush(eng, repo).map_err(|e| e.to_string())?;
             Ok(json!({"new_claim_id": new_id.0.to_string()}))
         }
         "wiki_query" => {
-            let query = args.get("query").and_then(Value::as_str)
+            let query = args
+                .get("query")
+                .and_then(Value::as_str)
                 .ok_or("missing query")?;
             let rrf_k = args.get("rrf_k").and_then(Value::as_f64).unwrap_or(60.0);
-            let limit = args.get("per_stream_limit").and_then(Value::as_u64).unwrap_or(50) as usize;
+            let limit = args
+                .get("per_stream_limit")
+                .and_then(Value::as_u64)
+                .unwrap_or(50) as usize;
             let ctx = QueryContext::new(query)
                 .with_rrf_k(rrf_k)
                 .with_per_stream_limit(limit)
                 .with_viewer_scope(viewer.clone());
-            let ranked = eng.query_pipeline_memory(
-                &ctx, OffsetDateTime::now_utc(), "mcp", None, None,
-            );
-            let write_page = args.get("write_page").and_then(Value::as_bool).unwrap_or(false);
+            let ranked =
+                eng.query_pipeline_memory(&ctx, OffsetDateTime::now_utc(), "mcp", None, None);
+            let write_page = args
+                .get("write_page")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
             if write_page {
                 let title = format!("mcp-query-{}", OffsetDateTime::now_utc().unix_timestamp());
                 let mut md = format!("# {title}\n\n## Query\n\n{query}\n\n## Results\n\n");
@@ -369,10 +421,13 @@ fn call_tool(
             }))
         }
         "wiki_promote_claim" => {
-            let cid_str = args.get("claim_id").and_then(Value::as_str)
+            let cid_str = args
+                .get("claim_id")
+                .and_then(Value::as_str)
                 .ok_or("missing claim_id")?;
             let cid = ClaimId(uuid::Uuid::parse_str(cid_str).map_err(|e| e.to_string())?);
-            eng.promote_if_qualified(cid, "mcp", viewer).map_err(|e| e.to_string())?;
+            eng.promote_if_qualified(cid, "mcp", viewer)
+                .map_err(|e| e.to_string())?;
             save_and_flush(eng, repo).map_err(|e| e.to_string())?;
             let claim = eng.store.claims.get(&cid);
             Ok(json!({
@@ -381,30 +436,52 @@ fn call_tool(
             }))
         }
         "wiki_crystallize" => {
-            let question = args.get("question").and_then(Value::as_str)
+            let question = args
+                .get("question")
+                .and_then(Value::as_str)
                 .ok_or("missing question")?;
-            let findings: Vec<String> = args.get("findings")
+            let findings: Vec<String> = args
+                .get("findings")
                 .and_then(Value::as_array)
-                .map(|a| a.iter().filter_map(Value::as_str).map(String::from).collect())
+                .map(|a| {
+                    a.iter()
+                        .filter_map(Value::as_str)
+                        .map(String::from)
+                        .collect()
+                })
                 .unwrap_or_default();
-            let files: Vec<String> = args.get("files")
+            let files: Vec<String> = args
+                .get("files")
                 .and_then(Value::as_array)
-                .map(|a| a.iter().filter_map(Value::as_str).map(String::from).collect())
+                .map(|a| {
+                    a.iter()
+                        .filter_map(Value::as_str)
+                        .map(String::from)
+                        .collect()
+                })
                 .unwrap_or_default();
-            let lessons: Vec<String> = args.get("lessons")
+            let lessons: Vec<String> = args
+                .get("lessons")
                 .and_then(Value::as_array)
-                .map(|a| a.iter().filter_map(Value::as_str).map(String::from).collect())
+                .map(|a| {
+                    a.iter()
+                        .filter_map(Value::as_str)
+                        .map(String::from)
+                        .collect()
+                })
                 .unwrap_or_default();
-            let draft = eng.crystallize(
-                SessionCrystallizationInput {
-                    question: question.to_string(),
-                    findings,
-                    files_touched: files,
-                    lessons,
-                    scope: viewer.clone(),
-                },
-                "mcp",
-            ).map_err(|e| e.to_string())?;
+            let draft = eng
+                .crystallize(
+                    SessionCrystallizationInput {
+                        question: question.to_string(),
+                        findings,
+                        files_touched: files,
+                        lessons,
+                        scope: viewer.clone(),
+                    },
+                    "mcp",
+                )
+                .map_err(|e| e.to_string())?;
             save_and_flush(eng, repo).map_err(|e| e.to_string())?;
             Ok(json!({
                 "page_id": draft.page.id.0.to_string(),
@@ -429,17 +506,32 @@ fn call_tool(
             let mut context = String::new();
 
             context.push_str("# L2 Active Semantic Knowledge\n\n");
-            let mut top_claims: Vec<_> = eng.store.claims.values()
-                .filter(|c| !c.stale && matches!(c.tier, MemoryTier::Semantic | MemoryTier::Procedural))
+            let mut top_claims: Vec<_> = eng
+                .store
+                .claims
+                .values()
+                .filter(|c| {
+                    !c.stale && matches!(c.tier, MemoryTier::Semantic | MemoryTier::Procedural)
+                })
                 .filter(|c| wiki_core::document_visible_to_viewer(&c.scope, viewer))
                 .collect();
-            top_claims.sort_by(|a, b| b.confidence.partial_cmp(&a.confidence).unwrap_or(std::cmp::Ordering::Equal));
+            top_claims.sort_by(|a, b| {
+                b.confidence
+                    .partial_cmp(&a.confidence)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
             for c in top_claims.iter().take(max_claims) {
-                context.push_str(&format!("- [conf={:.2}, {:?}] {}\n", c.confidence, c.tier, c.text));
+                context.push_str(&format!(
+                    "- [conf={:.2}, {:?}] {}\n",
+                    c.confidence, c.tier, c.text
+                ));
             }
 
             context.push_str("\n# L3 Active Context\n\n");
-            let recent_pages: Vec<_> = eng.store.pages.values()
+            let recent_pages: Vec<_> = eng
+                .store
+                .pages
+                .values()
                 .filter(|p| wiki_core::document_visible_to_viewer(&p.scope, viewer))
                 .collect();
             if !recent_pages.is_empty() {
@@ -449,11 +541,17 @@ fn call_tool(
                 }
             }
 
-            let entity_count = eng.store.entities.values()
+            let entity_count = eng
+                .store
+                .entities
+                .values()
                 .filter(|e| wiki_core::document_visible_to_viewer(&e.scope, viewer))
                 .count();
-            context.push_str(&format!("\n## Knowledge Graph: {} entities, {} edges\n",
-                entity_count, eng.store.edges.len()));
+            context.push_str(&format!(
+                "\n## Knowledge Graph: {} entities, {} edges\n",
+                entity_count,
+                eng.store.edges.len()
+            ));
 
             Ok(json!({"context": context}))
         }
@@ -479,23 +577,38 @@ fn call_tool(
             let mut dot = String::from("digraph wiki {\n  rankdir=LR;\n");
             for e in eng.store.entities.values() {
                 if wiki_core::document_visible_to_viewer(&e.scope, viewer) {
-                    dot.push_str(&format!("  \"{}\" [label=\"{} ({:?})\"];\n", e.id.0, e.label, e.kind));
+                    dot.push_str(&format!(
+                        "  \"{}\" [label=\"{} ({:?})\"];\n",
+                        e.id.0, e.label, e.kind
+                    ));
                 }
             }
             for edge in &eng.store.edges {
-                dot.push_str(&format!("  \"{}\" -> \"{}\" [label=\"{:?}\"];\n",
-                    edge.from.0, edge.to.0, edge.relation));
+                dot.push_str(&format!(
+                    "  \"{}\" -> \"{}\" [label=\"{:?}\"];\n",
+                    edge.from.0, edge.to.0, edge.relation
+                ));
             }
             dot.push_str("}\n");
             Ok(json!({"dot": dot}))
         }
         "wiki_ingest_llm" => {
-            let uri = args.get("uri").and_then(Value::as_str)
+            let uri = args
+                .get("uri")
+                .and_then(Value::as_str)
                 .ok_or("missing uri")?;
-            let body = args.get("body").and_then(Value::as_str)
+            let body = args
+                .get("body")
+                .and_then(Value::as_str)
                 .ok_or("missing body")?;
-            let scope = args.get("scope").and_then(Value::as_str).unwrap_or("private:mcp");
-            let dry_run = args.get("dry_run").and_then(Value::as_bool).unwrap_or(false);
+            let scope = args
+                .get("scope")
+                .and_then(Value::as_str)
+                .unwrap_or("private:mcp");
+            let dry_run = args
+                .get("dry_run")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
 
             let cfg = crate::llm::load_llm_config(llm_config_path).map_err(|e| e.to_string())?;
             let user_msg = format!("Source URI:\n{uri}\n\nBody:\n{body}");
@@ -504,10 +617,11 @@ fn call_tool(
                 crate::llm::ingest_llm_system_prompt(),
                 &user_msg,
                 1800,
-            ).map_err(|e| e.to_string())?;
+            )
+            .map_err(|e| e.to_string())?;
             let slice = crate::llm::parse_json_object_slice(&reply);
-            let plan: wiki_core::LlmIngestPlanV1 = serde_json::from_str(slice)
-                .map_err(|e| format!("JSON parse error: {e}"))?;
+            let plan: wiki_core::LlmIngestPlanV1 =
+                serde_json::from_str(slice).map_err(|e| format!("JSON parse error: {e}"))?;
             if dry_run {
                 return Ok(json!({"plan": serde_json::to_value(&plan).unwrap_or(Value::Null)}));
             }
@@ -527,9 +641,7 @@ fn call_tool(
         }
 
         // ──── Mempalace passthrough tools ────
-        n if n.starts_with("mempalace_") => {
-            call_mempalace_tool(n, &args, palace_path)
-        }
+        n if n.starts_with("mempalace_") => call_mempalace_tool(n, &args, palace_path),
 
         _ => Err(format!("unknown tool: {name}")),
     }
@@ -551,19 +663,36 @@ fn call_mempalace_tool(
     match name {
         "mempalace_status" => {
             let s = status(&conn).map_err(|e| e.to_string())?;
-            Ok(json!({"drawers": s.drawers, "wings": s.wings, "tunnels": s.tunnels, "kg_facts": s.kg_facts}))
+            Ok(
+                json!({"drawers": s.drawers, "wings": s.wings, "tunnels": s.tunnels, "kg_facts": s.kg_facts}),
+            )
         }
         "mempalace_search" => {
-            let query = args.get("query").and_then(Value::as_str).ok_or("missing query")?;
+            let query = args
+                .get("query")
+                .and_then(Value::as_str)
+                .ok_or("missing query")?;
             let wing = args.get("wing").and_then(Value::as_str);
             let hall = args.get("hall").and_then(Value::as_str);
             let room = args.get("room").and_then(Value::as_str);
             let bank_id = args.get("bank_id").and_then(Value::as_str);
             let limit = args.get("limit").and_then(Value::as_u64).unwrap_or(8) as usize;
-            let explain = args.get("explain").and_then(Value::as_bool).unwrap_or(false);
+            let explain = args
+                .get("explain")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
             let rows = search_with_options(
-                &conn, query, wing, hall, room, bank_id, limit, &config.retrieval, explain,
-            ).map_err(|e| e.to_string())?;
+                &conn,
+                query,
+                wing,
+                hall,
+                room,
+                bank_id,
+                limit,
+                &config.retrieval,
+                explain,
+            )
+            .map_err(|e| e.to_string())?;
             Ok(json!({"results": rows.iter().map(|r| json!({
                 "id": r.id, "wing": r.wing, "hall": r.hall, "room": r.room,
                 "bank_id": r.bank_id, "source_path": r.source_path,
@@ -573,23 +702,37 @@ fn call_mempalace_tool(
         "mempalace_wake_up" => {
             let wing = args.get("wing").and_then(Value::as_str);
             let bank_id = args.get("bank_id").and_then(Value::as_str);
-            let text = wake_up(&conn, &palace.identity_path, wing, bank_id).map_err(|e| e.to_string())?;
+            let text =
+                wake_up(&conn, &palace.identity_path, wing, bank_id).map_err(|e| e.to_string())?;
             Ok(json!({"text": text}))
         }
         "mempalace_taxonomy" => {
             let bank_id = args.get("bank_id").and_then(Value::as_str);
             let rows = taxonomy(&conn, bank_id).map_err(|e| e.to_string())?;
-            Ok(json!({"taxonomy": rows.iter().map(|r| json!({"wing":r.wing,"hall":r.hall,"room":r.room,"count":r.count})).collect::<Vec<_>>()}))
+            Ok(
+                json!({"taxonomy": rows.iter().map(|r| json!({"wing":r.wing,"hall":r.hall,"room":r.room,"count":r.count})).collect::<Vec<_>>()}),
+            )
         }
         "mempalace_traverse" => {
-            let wing = args.get("wing").and_then(Value::as_str).ok_or("missing wing")?;
-            let room = args.get("room").and_then(Value::as_str).ok_or("missing room")?;
+            let wing = args
+                .get("wing")
+                .and_then(Value::as_str)
+                .ok_or("missing wing")?;
+            let room = args
+                .get("room")
+                .and_then(Value::as_str)
+                .ok_or("missing room")?;
             let bank_id = args.get("bank_id").and_then(Value::as_str);
             let rows = traverse(&conn, wing, room, bank_id).map_err(|e| e.to_string())?;
-            Ok(json!({"links": rows.iter().map(|r| json!({"kind":r.kind,"from_wing":r.from_wing,"from_room":r.from_room,"to_wing":r.to_wing,"to_room":r.to_room})).collect::<Vec<_>>()}))
+            Ok(
+                json!({"links": rows.iter().map(|r| json!({"kind":r.kind,"from_wing":r.from_wing,"from_room":r.from_room,"to_wing":r.to_wing,"to_room":r.to_room})).collect::<Vec<_>>()}),
+            )
         }
         "mempalace_kg_query" => {
-            let subject = args.get("subject").and_then(Value::as_str).ok_or("missing subject")?;
+            let subject = args
+                .get("subject")
+                .and_then(Value::as_str)
+                .ok_or("missing subject")?;
             let as_of = args.get("as_of").and_then(Value::as_str);
             let rows = kg_query(&conn, subject, as_of).map_err(|e| e.to_string())?;
             Ok(json!({"facts": rows.iter().map(|r| json!({
@@ -598,7 +741,10 @@ fn call_mempalace_tool(
             })).collect::<Vec<_>>()}))
         }
         "mempalace_kg_timeline" => {
-            let subject = args.get("subject").and_then(Value::as_str).ok_or("missing subject")?;
+            let subject = args
+                .get("subject")
+                .and_then(Value::as_str)
+                .ok_or("missing subject")?;
             let rows = kg_timeline(&conn, subject).map_err(|e| e.to_string())?;
             Ok(json!({"timeline": rows.iter().map(|r| json!({
                 "id":r.id,"subject":r.subject,"predicate":r.predicate,"object":r.object,
@@ -607,14 +753,29 @@ fn call_mempalace_tool(
         }
         "mempalace_kg_stats" => {
             let s = kg_stats(&conn).map_err(|e| e.to_string())?;
-            Ok(json!({"facts":s.facts,"subjects":s.subjects,"predicates":s.predicates,"active_facts":s.active_facts}))
+            Ok(
+                json!({"facts":s.facts,"subjects":s.subjects,"predicates":s.predicates,"active_facts":s.active_facts}),
+            )
         }
         "mempalace_reflect" => {
-            let query = args.get("query").and_then(Value::as_str).ok_or("missing query")?;
-            let search_limit = args.get("search_limit").and_then(Value::as_u64).unwrap_or(8) as usize;
+            let query = args
+                .get("query")
+                .and_then(Value::as_str)
+                .ok_or("missing query")?;
+            let search_limit = args
+                .get("search_limit")
+                .and_then(Value::as_u64)
+                .unwrap_or(8) as usize;
             let bank_id = args.get("bank_id").and_then(Value::as_str);
-            let text = reflect_answer(&conn, &config.llm, &config.retrieval, query, bank_id, search_limit)
-                .map_err(|e| e.to_string())?;
+            let text = reflect_answer(
+                &conn,
+                &config.llm,
+                &config.retrieval,
+                query,
+                bank_id,
+                search_limit,
+            )
+            .map_err(|e| e.to_string())?;
             Ok(json!({"text": text}))
         }
         "mempalace_extract" => {

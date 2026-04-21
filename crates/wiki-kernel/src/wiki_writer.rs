@@ -85,7 +85,10 @@ pub fn write_projection(
         );
         fs::write(path, md)?;
         stats.sources_written += 1;
-        source_rows.push(format!("- [source:{}](sources/{}) | {}", id_short, file, source.uri));
+        source_rows.push(format!(
+            "- [source:{}](sources/{}) | {}",
+            id_short, file, source.uri
+        ));
     }
 
     fs::write(

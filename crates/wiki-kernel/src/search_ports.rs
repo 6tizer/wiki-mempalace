@@ -34,7 +34,10 @@ fn query_tokens(query: &str) -> Vec<String> {
 }
 
 fn score_text_lc(haystack_lc: &str, tokens: &[String]) -> usize {
-    tokens.iter().filter(|t| haystack_lc.contains(t.as_str())).count()
+    tokens
+        .iter()
+        .filter(|t| haystack_lc.contains(t.as_str()))
+        .count()
 }
 
 /// 基于子串/token 重叠的内存 stub：BM25 与 vector 两路顺序刻意不同以检验 RRF。
@@ -133,7 +136,11 @@ pub fn format_entity_doc_id(id: EntityId) -> String {
 }
 
 /// 将内核图路与外部（如 MemPalace traverse）候选按轮次交织合并，去重后截断。
-pub fn merge_graph_rankings(primary: Vec<String>, secondary: Vec<String>, limit: usize) -> Vec<String> {
+pub fn merge_graph_rankings(
+    primary: Vec<String>,
+    secondary: Vec<String>,
+    limit: usize,
+) -> Vec<String> {
     let mut seen = HashSet::new();
     let mut out = Vec::new();
     let rounds = primary.len().max(secondary.len());

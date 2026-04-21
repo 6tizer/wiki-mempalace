@@ -18,7 +18,11 @@ pub trait WikiRepository {
     fn append_outbox(&self, event: &WikiEvent) -> Result<(), StorageError>;
     fn export_outbox_ndjson(&self) -> Result<String, StorageError>;
     fn export_outbox_ndjson_from_id(&self, last_id: i64) -> Result<String, StorageError>;
-    fn mark_outbox_processed(&self, up_to_id: i64, consumer_tag: &str) -> Result<usize, StorageError>;
+    fn mark_outbox_processed(
+        &self,
+        up_to_id: i64,
+        consumer_tag: &str,
+    ) -> Result<usize, StorageError>;
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -78,8 +82,10 @@ CREATE TABLE IF NOT EXISTS wiki_embedding (
     }
 
     pub fn delete_embedding(&self, doc_id: &str) -> Result<(), StorageError> {
-        self.conn
-            .execute("DELETE FROM wiki_embedding WHERE doc_id = ?1", params![doc_id])?;
+        self.conn.execute(
+            "DELETE FROM wiki_embedding WHERE doc_id = ?1",
+            params![doc_id],
+        )?;
         Ok(())
     }
 
@@ -93,7 +99,9 @@ CREATE TABLE IF NOT EXISTS wiki_embedding (
         if qn <= 1e-12 || limit == 0 {
             return Ok(Vec::new());
         }
-        let mut stmt = self.conn.prepare("SELECT doc_id, dim, vec FROM wiki_embedding")?;
+        let mut stmt = self
+            .conn
+            .prepare("SELECT doc_id, dim, vec FROM wiki_embedding")?;
         let mut rows = stmt.query([])?;
         let mut scored: Vec<(String, f32)> = Vec::new();
         while let Some(r) = rows.next()? {
@@ -141,11 +149,11 @@ fn l2_norm(v: &[f32]) -> f32 {
 
 impl WikiRepository for SqliteRepository {
     fn load_snapshot(&self) -> Result<StorageSnapshot, StorageError> {
-        let row = self.conn.query_row(
-            "SELECT payload_json FROM wiki_state WHERE id=1",
-            [],
-            |r| r.get::<_, String>(0),
-        );
+        let row = self
+            .conn
+            .query_row("SELECT payload_json FROM wiki_state WHERE id=1", [], |r| {
+                r.get::<_, String>(0)
+            });
         match row {
             Ok(payload) => Ok(serde_json::from_str(&payload)?),
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(StorageSnapshot::default()),
@@ -190,7 +198,11 @@ impl WikiRepository for SqliteRepository {
         Ok(out)
     }
 
-    fn mark_outbox_processed(&self, up_to_id: i64, consumer_tag: &str) -> Result<usize, StorageError> {
+    fn mark_outbox_processed(
+        &self,
+        up_to_id: i64,
+        consumer_tag: &str,
+    ) -> Result<usize, StorageError> {
         let n = self.conn.execute(
             "UPDATE wiki_outbox
              SET processed_at = datetime('now'), consumer_tag = ?2
@@ -263,4 +275,3 @@ mod tests {
         assert!(hits[0].1 > hits[2].1);
     }
 }
-

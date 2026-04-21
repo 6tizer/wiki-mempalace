@@ -5,17 +5,17 @@ use crate::memory::InMemoryStore;
 use std::path::Path;
 use wiki_storage::{StorageError, WikiRepository};
 
+use crate::search_ports::SearchPorts;
+use wiki_core::quality::check_page_completeness;
 use wiki_core::{
     advance_tier, apply_time_decay_to_confidence, document_visible_to_viewer, draft_from_session,
-    redact_for_ingest, reinforce_claim, supersede_claim,
-    walk_entities, AuditOperation, AuditRecord, Claim, ClaimId, ContradictionHint,
-    CrystallizationDraft, DomainSchema, Entity, EntityId, GraphWalkOptions, LintFinding,
-    LintSeverity, MemoryTier, QueryContext, RawArtifact, RelationKind, SchemaLoadError,
-    Scope, SessionCrystallizationInput, SourceId, TypedEdge, WikiEvent,
-    merge_sources_confidence, reciprocal_rank_fusion, retention_strength, RankedDoc,
+    merge_sources_confidence, reciprocal_rank_fusion, redact_for_ingest, reinforce_claim,
+    retention_strength, supersede_claim, walk_entities, AuditOperation, AuditRecord, Claim,
+    ClaimId, ContradictionHint, CrystallizationDraft, DomainSchema, Entity, EntityId,
+    GraphWalkOptions, LintFinding, LintSeverity, MemoryTier, QueryContext, RankedDoc, RawArtifact,
+    RelationKind, SchemaLoadError, Scope, SessionCrystallizationInput, SourceId, TypedEdge,
+    WikiEvent,
 };
-use wiki_core::quality::check_page_completeness;
-use crate::search_ports::SearchPorts;
 
 #[derive(Debug, thiserror::Error)]
 pub enum EngineError {
@@ -119,11 +119,7 @@ impl<H: WikiHook> LlmWikiEngine<H> {
         let c = Claim::new(text, scope, tier);
         let id = c.id;
         self.store.claims.insert(id, c);
-        self.audit(
-            AuditOperation::WriteClaim,
-            actor,
-            format!("claim {}", id.0),
-        );
+        self.audit(AuditOperation::WriteClaim, actor, format!("claim {}", id.0));
         self.emit(WikiEvent::ClaimUpserted {
             claim_id: id,
             at: OffsetDateTime::now_utc(),
@@ -131,7 +127,11 @@ impl<H: WikiHook> LlmWikiEngine<H> {
         id
     }
 
-    pub fn attach_sources(&mut self, claim_id: ClaimId, sources: &[SourceId]) -> Result<(), EngineError> {
+    pub fn attach_sources(
+        &mut self,
+        claim_id: ClaimId,
+        sources: &[SourceId],
+    ) -> Result<(), EngineError> {
         let claim = self
             .store
             .claims
@@ -341,11 +341,19 @@ impl<H: WikiHook> LlmWikiEngine<H> {
         self.rank_docs_with_retention(fused, now)
     }
 
-    fn rank_docs_with_retention(&self, fused: &[RankedDoc], now: OffsetDateTime) -> Vec<(String, f64)> {
+    fn rank_docs_with_retention(
+        &self,
+        fused: &[RankedDoc],
+        now: OffsetDateTime,
+    ) -> Vec<(String, f64)> {
         rank_fused_with_retention(&self.schema, &self.store, fused, now)
     }
 
-    pub fn run_basic_lint(&mut self, actor: &str, viewer_scope: Option<&Scope>) -> Vec<LintFinding> {
+    pub fn run_basic_lint(
+        &mut self,
+        actor: &str,
+        viewer_scope: Option<&Scope>,
+    ) -> Vec<LintFinding> {
         let mut findings = Vec::new();
         let visible = |s: &Scope| match viewer_scope {
             None => true,
@@ -405,7 +413,8 @@ impl<H: WikiHook> LlmWikiEngine<H> {
             // 完整度基线：仅当 page.entry_type 非空且 schema 配置了对应段落时生效
             findings.extend(check_page_completeness(&self.schema, p));
         }
-        let mut inbound_count: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+        let mut inbound_count: std::collections::HashMap<String, usize> =
+            std::collections::HashMap::new();
         for p in self.store.pages.values() {
             if !visible(&p.scope) {
                 continue;
@@ -467,7 +476,10 @@ impl<H: WikiHook> LlmWikiEngine<H> {
         findings
     }
 
-    pub fn naive_contradiction_pairs(&self, viewer_scope: Option<&Scope>) -> Vec<ContradictionHint> {
+    pub fn naive_contradiction_pairs(
+        &self,
+        viewer_scope: Option<&Scope>,
+    ) -> Vec<ContradictionHint> {
         let mut hints = Vec::new();
         let visible = |s: &Scope| match viewer_scope {
             None => true,
@@ -513,11 +525,7 @@ impl<H: WikiHook> LlmWikiEngine<H> {
         actor: &str,
     ) {
         let fp = query_fingerprint.into();
-        self.audit(
-            AuditOperation::RunQuery,
-            actor,
-            format!("query fp={fp}"),
-        );
+        self.audit(AuditOperation::RunQuery, actor, format!("query fp={fp}"));
         self.emit(WikiEvent::QueryServed {
             query_fingerprint: fp,
             top_doc_ids,
@@ -626,9 +634,7 @@ fn rank_fused_with_retention(
                             .get(&c.tier)
                             .copied()
                             .unwrap_or(schema.default_retention.half_life_days);
-                        let rp = wiki_core::RetentionParams {
-                            half_life_days: hl,
-                        };
+                        let rp = wiki_core::RetentionParams { half_life_days: hl };
                         retention_strength(c, now, rp)
                     })
                     .unwrap_or(1.0)
@@ -746,7 +752,17 @@ mod tests {
             MemoryTier::Semantic,
             "u",
         );
-        let new = eng.supersede(old, "v2", Scope::Shared { team_id: "t1".into() }, MemoryTier::Semantic, "u").unwrap();
+        let new = eng
+            .supersede(
+                old,
+                "v2",
+                Scope::Shared {
+                    team_id: "t1".into(),
+                },
+                MemoryTier::Semantic,
+                "u",
+            )
+            .unwrap();
         assert!(eng.store.claims[&old].stale);
         assert_eq!(eng.store.claims[&new].supersedes, Some(old));
     }
@@ -827,7 +843,9 @@ mod tests {
             .supersede(
                 c1,
                 "SQLite is default DB",
-                Scope::Shared { team_id: "t".into() },
+                Scope::Shared {
+                    team_id: "t".into(),
+                },
                 MemoryTier::Semantic,
                 "tester",
             )
@@ -845,12 +863,9 @@ mod tests {
         let n = eng.flush_outbox_to_repo(&repo).unwrap();
         assert!(n > 0);
 
-        let reloaded = LlmWikiEngine::load_from_repo(
-            DomainSchema::permissive_default(),
-            &repo,
-            NoopWikiHook,
-        )
-        .unwrap();
+        let reloaded =
+            LlmWikiEngine::load_from_repo(DomainSchema::permissive_default(), &repo, NoopWikiHook)
+                .unwrap();
         assert_eq!(reloaded.store.claims.len(), 2);
 
         let ndjson = repo.export_outbox_ndjson().unwrap();

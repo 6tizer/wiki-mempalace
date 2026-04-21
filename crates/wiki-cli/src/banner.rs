@@ -43,18 +43,11 @@ mod tests {
 
     #[test]
     fn logo_rows_uniform_width() {
-        let lines: Vec<&str> = banner_ascii()
-            .lines()
-            .filter(|l| l.contains('█'))
-            .collect();
+        let lines: Vec<&str> = banner_ascii().lines().filter(|l| l.contains('█')).collect();
         assert!(!lines.is_empty());
         let w = lines[0].chars().count();
         for l in &lines {
-            assert_eq!(
-                l.chars().count(),
-                w,
-                "logo row width mismatch: {l:?}"
-            );
+            assert_eq!(l.chars().count(), w, "logo row width mismatch: {l:?}");
         }
         assert!(w <= 80, "logo should fit typical terminal: {w}");
     }

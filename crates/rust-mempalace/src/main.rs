@@ -3,13 +3,13 @@ mod cli;
 use anyhow::{Context, Result};
 use clap::Parser;
 use cli::{BenchMode, Cli, Commands, McpTransport, MineMode, OutputFormat};
-use rust_mempalace::{db, mcp};
 use rust_mempalace::service::{
     Palace, banner, benchmark_run, drawer_content, extract_to_kg, kg_add, kg_conflicts,
     kg_invalidate, kg_query, kg_stats, kg_timeline, load_config, mine_path, mine_path_convos,
     principles_report, reflect_answer, save_benchmark_report, search_with_options, split_mega_file,
     status, taxonomy, traverse, wake_up,
 };
+use rust_mempalace::{db, mcp};
 use serde_json::json;
 
 fn main() {

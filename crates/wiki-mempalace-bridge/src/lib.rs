@@ -6,28 +6,32 @@
 //! 默认不启用，使用 Noop 实现。
 
 #[cfg(feature = "live")]
-mod live_sink;
-#[cfg(feature = "live")]
 mod live_ranker;
 #[cfg(feature = "live")]
 mod live_search;
-
 #[cfg(feature = "live")]
-pub use live_sink::LiveMempalaceSink;
+mod live_sink;
+
 #[cfg(feature = "live")]
 pub use live_ranker::LiveMempalaceGraphRanker;
 #[cfg(feature = "live")]
 pub use live_search::MempalaceSearchPorts;
+#[cfg(feature = "live")]
+pub use live_sink::LiveMempalaceSink;
 
-use wiki_core::{Claim, ClaimId, Scope, SourceId};
 use wiki_core::WikiEvent;
+use wiki_core::{Claim, ClaimId, Scope, SourceId};
 
 /// 写入外部「记忆宫殿」引擎的最小事件面（ingest / reinforce / 淘汰）。
 pub trait MempalaceWikiSink: Send + Sync {
     fn on_claim_upserted(&self, claim: &Claim) -> Result<(), MempalaceError>;
     fn on_claim_event(&self, claim_id: ClaimId) -> Result<(), MempalaceError>;
     fn on_claim_superseded(&self, old: ClaimId, new: ClaimId) -> Result<(), MempalaceError>;
-    fn on_source_linked(&self, source_id: SourceId, claim_id: ClaimId) -> Result<(), MempalaceError>;
+    fn on_source_linked(
+        &self,
+        source_id: SourceId,
+        claim_id: ClaimId,
+    ) -> Result<(), MempalaceError>;
     /// 原始资料入库（无 claim 关联时）；默认忽略。
     fn on_source_ingested(&self, _source_id: SourceId) -> Result<(), MempalaceError> {
         Ok(())
@@ -58,7 +62,11 @@ impl MempalaceWikiSink for NoopMempalace {
         Ok(())
     }
 
-    fn on_source_linked(&self, _source_id: SourceId, _claim_id: ClaimId) -> Result<(), MempalaceError> {
+    fn on_source_linked(
+        &self,
+        _source_id: SourceId,
+        _claim_id: ClaimId,
+    ) -> Result<(), MempalaceError> {
         Ok(())
     }
 
@@ -138,7 +146,11 @@ mod tests {
             Ok(())
         }
 
-        fn on_source_linked(&self, _source_id: SourceId, _claim_id: ClaimId) -> Result<(), MempalaceError> {
+        fn on_source_linked(
+            &self,
+            _source_id: SourceId,
+            _claim_id: ClaimId,
+        ) -> Result<(), MempalaceError> {
             Ok(())
         }
 

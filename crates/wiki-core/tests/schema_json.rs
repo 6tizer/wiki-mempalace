@@ -4,9 +4,7 @@
 
 use std::path::PathBuf;
 
-use wiki_core::{
-    DomainSchema, EntityKind, EntryStatus, EntryType, MemoryTier, RelationKind,
-};
+use wiki_core::{DomainSchema, EntityKind, EntryStatus, EntryType, MemoryTier, RelationKind};
 
 /// 定位仓库根目录下的 `DomainSchema.json`：
 /// `CARGO_MANIFEST_DIR` 指向 `crates/wiki-core`，向上两级即到仓库根。
@@ -87,8 +85,7 @@ fn repo_domain_schema_lifecycle_rules_indexable() {
 fn round_trip_serialize_deserialize() {
     let original = DomainSchema::from_json_path(&repo_schema_path()).expect("schema 加载失败");
     let bytes = serde_json::to_vec(&original).expect("序列化 schema 失败");
-    let roundtripped =
-        DomainSchema::from_json_slice(&bytes).expect("反序列化 round-trip 结果失败");
+    let roundtripped = DomainSchema::from_json_slice(&bytes).expect("反序列化 round-trip 结果失败");
 
     assert_eq!(roundtripped.title, original.title);
     assert_eq!(

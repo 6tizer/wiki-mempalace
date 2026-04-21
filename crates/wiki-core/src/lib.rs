@@ -28,7 +28,7 @@ pub use audit::{AuditOperation, AuditRecord};
 pub use collab::{WorkItem, WorkState};
 pub use crystallize::{draft_from_session, CrystallizationDraft, SessionCrystallizationInput};
 pub use events::WikiEvent;
-pub use graph::{GraphSnapshot, GraphWalkOptions, walk_entities};
+pub use graph::{walk_entities, GraphSnapshot, GraphWalkOptions};
 pub use lifecycle::{
     advance_tier, apply_time_decay_to_confidence, merge_sources_confidence, reinforce_claim,
     supersede_claim,
@@ -41,14 +41,14 @@ pub use model::{
     SourceId, TypedEdge,
 };
 pub use page::{extract_headings, extract_wikilinks, WikiPage};
-pub use privacy::{RedactionFinding, SensitiveKind, redact_for_ingest};
+pub use privacy::{redact_for_ingest, RedactionFinding, SensitiveKind};
 pub use quality::{check_page_completeness, ContradictionHint, LintFinding, LintSeverity};
 pub use query::QueryContext;
-pub use scope_policy::document_visible_to_viewer;
-pub use retention::{RetentionParams, retention_strength};
+pub use retention::{retention_strength, RetentionParams};
 pub use schema::{
     CompletenessConfig, DomainSchema, EntryStatus, EntryType, LifecycleRule, PromotionConditions,
     PromotionRule, SchemaLoadError, SchemaValidationError, TagConfig, DEFAULT_MAINTENANCE_BATCH,
 };
-pub use search::{RankedDoc, reciprocal_rank_fusion};
+pub use scope_policy::document_visible_to_viewer;
+pub use search::{reciprocal_rank_fusion, RankedDoc};
 pub use search_ports::SearchPorts;

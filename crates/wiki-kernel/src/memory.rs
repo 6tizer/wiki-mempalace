@@ -2,8 +2,8 @@ use std::collections::HashMap;
 use wiki_storage::StorageSnapshot;
 
 use wiki_core::{
-    Claim, ClaimId, Entity, EntityId, GraphSnapshot, RawArtifact, SourceId, TypedEdge, WikiPage,
-    PageId,
+    Claim, ClaimId, Entity, EntityId, GraphSnapshot, PageId, RawArtifact, SourceId, TypedEdge,
+    WikiPage,
 };
 
 #[derive(Debug, Default)]

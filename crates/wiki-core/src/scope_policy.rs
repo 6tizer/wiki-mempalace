@@ -11,7 +11,9 @@ pub fn document_visible_to_viewer(doc: &Scope, viewer: &Scope) -> bool {
             Scope::Private {
                 agent_id: viewer_agent,
             },
-            Scope::Private { agent_id: doc_agent },
+            Scope::Private {
+                agent_id: doc_agent,
+            },
         ) => viewer_agent == doc_agent,
         (
             Scope::Shared {

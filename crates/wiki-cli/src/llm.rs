@@ -161,7 +161,10 @@ pub fn smoke_chat_completion(
 }
 
 /// OpenAI-compatible `/v1/embeddings`，使用 `AppConfig.embed`（需配置 `[embed]`）。
-pub fn embed_texts(app: &AppConfig, input: &[String]) -> Result<Vec<Vec<f32>>, Box<dyn std::error::Error>> {
+pub fn embed_texts(
+    app: &AppConfig,
+    input: &[String],
+) -> Result<Vec<Vec<f32>>, Box<dyn std::error::Error>> {
     let embed = app
         .embed
         .as_ref()
@@ -170,10 +173,7 @@ pub fn embed_texts(app: &AppConfig, input: &[String]) -> Result<Vec<Vec<f32>>, B
         .base_url
         .as_deref()
         .unwrap_or(app.llm.base_url.as_str());
-    let key = embed
-        .api_key
-        .as_deref()
-        .unwrap_or(app.llm.api_key.as_str());
+    let key = embed.api_key.as_deref().unwrap_or(app.llm.api_key.as_str());
     let url = embeddings_url(base);
     let client = reqwest::blocking::Client::builder()
         .timeout(Duration::from_secs(app.llm.timeout_seconds))
@@ -196,7 +196,9 @@ pub fn embed_texts(app: &AppConfig, input: &[String]) -> Result<Vec<Vec<f32>>, B
 
 pub fn embed_first(app: &AppConfig, text: &str) -> Result<Vec<f32>, Box<dyn std::error::Error>> {
     let v = embed_texts(app, &[text.to_string()])?;
-    v.into_iter().next().ok_or_else(|| "empty embedding response".into())
+    v.into_iter()
+        .next()
+        .ok_or_else(|| "empty embedding response".into())
 }
 
 fn do_embed_once(
@@ -266,11 +268,7 @@ fn do_chat_once(
         "temperature": 0.0
     });
 
-    let resp = client
-        .post(url)
-        .bearer_auth(api_key)
-        .json(&body)
-        .send()?;
+    let resp = client.post(url).bearer_auth(api_key).json(&body).send()?;
 
     let status = resp.status();
     let text = resp.text()?;

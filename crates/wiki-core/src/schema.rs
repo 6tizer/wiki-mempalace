@@ -80,7 +80,10 @@ impl EntryType {
 
     /// 该类型创建时是否直接设为已审核
     pub fn auto_approved_on_create(&self) -> bool {
-        matches!(self, Self::Summary | Self::Qa | Self::LintReport | Self::Index)
+        matches!(
+            self,
+            Self::Summary | Self::Qa | Self::LintReport | Self::Index
+        )
     }
 }
 
@@ -404,11 +407,7 @@ impl Default for TagConfig {
 impl Default for CompletenessConfig {
     fn default() -> Self {
         Self {
-            concept_required_sections: vec![
-                "定义".into(),
-                "关键要点".into(),
-                "来源引用".into(),
-            ],
+            concept_required_sections: vec!["定义".into(), "关键要点".into(), "来源引用".into()],
             entity_required_sections: vec!["简介".into(), "关键数据".into(), "来源引用".into()],
             synthesis_required_sections: vec![
                 "研究问题".into(),
@@ -456,7 +455,10 @@ mod tests {
             EntryType::parse("zzz"),
             Err(SchemaValidationError::ParseEntryType(_))
         ));
-        assert!(matches!(EntryType::parse("lint-report"), Ok(EntryType::LintReport)));
+        assert!(matches!(
+            EntryType::parse("lint-report"),
+            Ok(EntryType::LintReport)
+        ));
     }
 
     #[test]
@@ -477,7 +479,9 @@ mod tests {
         ];
         assert!(matches!(
             schema.validate(),
-            Err(SchemaValidationError::DuplicateEntryType(EntryType::Concept))
+            Err(SchemaValidationError::DuplicateEntryType(
+                EntryType::Concept
+            ))
         ));
     }
 
@@ -505,7 +509,10 @@ mod tests {
                 (EntryStatus::Approved, EntryStatus::Draft),
             ],
         )];
-        assert_eq!(schema.validate(), Err(SchemaValidationError::PromotionCycle));
+        assert_eq!(
+            schema.validate(),
+            Err(SchemaValidationError::PromotionCycle)
+        );
     }
 
     #[test]

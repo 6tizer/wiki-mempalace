@@ -1,6 +1,6 @@
 use crate::{MempalaceError, MempalaceWikiSink};
 use chrono::Utc;
-use rusqlite::{Connection, OptionalExtension, params};
+use rusqlite::{params, Connection, OptionalExtension};
 use rust_mempalace::{db, service};
 use sha2::{Digest, Sha256};
 use std::sync::Mutex;
@@ -93,14 +93,8 @@ impl MempalaceWikiSink for LiveMempalaceSink {
             let object = format!("claim:{}", old.0);
             service::kg_add(conn, &subject, "supersedes", &object, None, None)
                 .map_err(|e| MempalaceError::Backend(e.to_string()))?;
-            service::kg_invalidate(
-                conn,
-                &format!("claim:{}", old.0),
-                "is_active",
-                "true",
-                None,
-            )
-            .map_err(|e| MempalaceError::Backend(e.to_string()))?;
+            service::kg_invalidate(conn, &format!("claim:{}", old.0), "is_active", "true", None)
+                .map_err(|e| MempalaceError::Backend(e.to_string()))?;
             Ok(())
         })
     }
