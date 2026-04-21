@@ -107,6 +107,9 @@ enum Cmd {
         files: Vec<String>,
         #[arg(long = "lesson")]
         lessons: Vec<String>,
+        /// 为 crystallize 生成的 page 绑定 EntryType。
+        #[arg(long)]
+        entry_type: Option<String>,
     },
     ExportOutboxNdjson,
     ExportOutboxNdjsonFrom {
@@ -136,6 +139,11 @@ enum Cmd {
         #[arg(long)]
         palace: Option<String>,
     },
+    /// Validate a DomainSchema JSON file and print summary.
+    SchemaValidate {
+        /// JSON 文件路径，默认 DomainSchema.json
+        path: Option<PathBuf>,
+    },
     /// Run batch maintenance: confidence decay, lint, promote qualified claims.
     Maintenance,
 }
@@ -149,9 +157,34 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             std::process::exit(if e.use_stderr() { 2 } else { 0 });
         }
     };
-    if !matches!(cli.cmd, Cmd::Mcp { .. }) {
+    if !matches!(cli.cmd, Cmd::Mcp { .. } | Cmd::SchemaValidate { .. }) {
         banner::print_startup_banner();
     }
+
+    // SchemaValidate 不需要 DB / engine，直接短路
+    if let Cmd::SchemaValidate { path } = cli.cmd {
+        let p = path.unwrap_or_else(|| PathBuf::from("DomainSchema.json"));
+        match DomainSchema::from_json_path(&p) {
+            Ok(schema) => {
+                println!(
+                    "schema ok: title={} lifecycle_rules={}",
+                    schema.title,
+                    schema.lifecycle_rules.len()
+                );
+                Ok(())
+            }
+            Err(e) => {
+                eprintln!("schema invalid: {e}");
+                std::process::exit(1);
+            }
+        }
+    } else {
+        run_with_engine(cli)
+    }
+}
+
+/// 所有需要 DB / engine 的子命令走这里。
+fn run_with_engine(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
     let viewer = parse_scope(&cli.viewer_scope);
     let wiki_root = cli.wiki_dir.clone();
     let sync_wiki = cli.sync_wiki;
@@ -396,7 +429,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             findings,
             files,
             lessons,
+            entry_type,
         } => {
+            let et = parse_entry_type_opt(&entry_type)?;
             let draft = eng.crystallize(
                 SessionCrystallizationInput {
                     question,
@@ -409,6 +444,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 },
                 "cli",
             )?;
+            // crystallize 内部已经 insert page，此处如有 entry_type 则覆盖
+            if let Some(et) = et {
+                if let Some(page) = eng.store.pages.get_mut(&draft.page.id) {
+                    page.entry_type = Some(et);
+                }
+            }
             eng.save_to_repo(&repo)?;
             eng.flush_outbox_to_repo_with_policy(&repo, 128, 3)?;
             maybe_sync_projection(sync_wiki, wiki_root.as_deref(), &eng)?;
@@ -472,6 +513,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 findings.len()
             );
         }
+        // SchemaValidate 已在 main() 中短路，此处不可达
+        Cmd::SchemaValidate { .. } => unreachable!(),
     }
     Ok(())
 }

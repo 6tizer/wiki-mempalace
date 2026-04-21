@@ -1,0 +1,59 @@
+{
+	"title": "test-valid-schema",
+	"allowed_entity_kinds": ["person", "project"],
+	"allowed_relations": ["uses", "depends_on"],
+	"min_quality_to_crystallize": 0.5,
+	"min_confidence_to_promote": 0.6,
+	"default_retention": { "half_life_days": 30.0 },
+	"tier_half_life_days": {
+		"working": 3.0,
+		"episodic": 14.0,
+		"semantic": 60.0,
+		"procedural": 120.0
+	},
+	"lifecycle_rules": [
+		{
+			"entry_types": ["concept", "entity"],
+			"initial_status": "draft",
+			"promotions": [
+				{
+					"from_status": "draft",
+					"to_status": "in_review",
+					"conditions": {
+						"min_age_days": 0,
+						"required_sections": [],
+						"min_references": 0
+					}
+				},
+				{
+					"from_status": "in_review",
+					"to_status": "approved",
+					"conditions": {
+						"min_age_days": 7,
+						"required_sections": ["定义"],
+						"min_references": 2
+					}
+				}
+			],
+			"stale_days": 180,
+			"auto_cleanup": false
+		}
+	],
+	"tag_config": {
+		"seed_tags": ["rust", "wiki"],
+		"deprecated_tags": [],
+		"allow_auto_extend": true,
+		"max_tag_name_length": 32,
+		"max_new_tags_per_ingest": 5,
+		"activity_window_days": 90,
+		"orphan_threshold": 1,
+		"dormant_threshold": 3
+	},
+	"completeness_config": {
+		"concept_required_sections": ["定义", "关键要点"],
+		"entity_required_sections": ["简介"],
+		"synthesis_required_sections": ["研究问题"],
+		"min_structured_references": 1
+	},
+	"maintenance_batch_size": 64
+}

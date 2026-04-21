@@ -2,7 +2,7 @@ use serde_json::{json, Value};
 use std::io::{self, BufRead, Write};
 use time::OffsetDateTime;
 use wiki_core::{
-    parse_memory_tier, ClaimId, DomainSchema, MemoryTier, QueryContext, Scope,
+    parse_memory_tier, ClaimId, DomainSchema, EntryType, MemoryTier, QueryContext, Scope,
     SessionCrystallizationInput, WikiPage,
 };
 use wiki_kernel::{LlmWikiEngine, NoopWikiHook};
@@ -175,7 +175,8 @@ fn tools_list() -> Value {
                     "question":{"type":"string","description":"The session's main question"},
                     "findings":{"type":"array","items":{"type":"string"},"description":"Key findings"},
                     "files":{"type":"array","items":{"type":"string"},"description":"Files touched"},
-                    "lessons":{"type":"array","items":{"type":"string"},"description":"Lessons learned"}
+                    "lessons":{"type":"array","items":{"type":"string"},"description":"Lessons learned"},
+                    "entry_type":{"type":"string","description":"Optional EntryType for the generated page (e.g. concept, entity, qa)"}
                 },"required":["question"]}
             },
             {
@@ -470,6 +471,11 @@ fn call_tool(
                         .collect()
                 })
                 .unwrap_or_default();
+            let entry_type_raw = args.get("entry_type").and_then(Value::as_str);
+            let entry_type = match entry_type_raw {
+                Some(s) => Some(EntryType::parse(s).map_err(|e| e.to_string())?),
+                None => None,
+            };
             let draft = eng
                 .crystallize(
                     SessionCrystallizationInput {
@@ -482,6 +488,12 @@ fn call_tool(
                     "mcp",
                 )
                 .map_err(|e| e.to_string())?;
+            // crystallize 内部已经 insert page，此处如有 entry_type 则覆盖
+            if let Some(et) = entry_type {
+                if let Some(page) = eng.store.pages.get_mut(&draft.page.id) {
+                    page.entry_type = Some(et);
+                }
+            }
             save_and_flush(eng, repo).map_err(|e| e.to_string())?;
             Ok(json!({
                 "page_id": draft.page.id.0.to_string(),

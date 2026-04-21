@@ -1,0 +1,37 @@
+{
+	"title": "promotion-cycle",
+	"allowed_entity_kinds": ["person"],
+	"allowed_relations": ["uses"],
+	"min_quality_to_crystallize": 0.5,
+	"min_confidence_to_promote": 0.6,
+	"default_retention": { "half_life_days": 30.0 },
+	"tier_half_life_days": { "working": 3.0 },
+	"lifecycle_rules": [
+		{
+			"entry_types": ["concept"],
+			"initial_status": "draft",
+			"promotions": [
+				{
+					"from_status": "draft",
+					"to_status": "in_review",
+					"conditions": {
+						"min_age_days": 0,
+						"required_sections": [],
+						"min_references": 0
+					}
+				},
+				{
+					"from_status": "in_review",
+					"to_status": "draft",
+					"conditions": {
+						"min_age_days": 0,
+						"required_sections": [],
+						"min_references": 0
+					}
+				}
+			],
+			"stale_days": null,
+			"auto_cleanup": false
+		}
+	]
+}
