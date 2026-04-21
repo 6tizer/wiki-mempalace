@@ -35,8 +35,7 @@
 ```
 
 `wiki-cli` 依赖所有其他 crate。`wiki-mempalace-bridge` 的 `live` feature 会把
-`rust-mempalace` 作为进程内 library 调用。`wiki-cli` 当前直接 `use
-rust_mempalace::service::*` 以实现 10 个 `mempalace_*` MCP 工具——这条旁路在
+`rust-mempalace` 作为进程内 library 调用。`wiki-cli` 当前直接 `use rust_mempalace::service::*` 以实现 10 个 `mempalace_*` MCP 工具——这条旁路在
 Phase 6 会收敛到 bridge。
 
 ---
@@ -45,10 +44,12 @@ Phase 6 会收敛到 bridge。
 
 有两份独立 SQLite：
 
-| 文件 | 归属 | 用途 |
-|---|---|---|
-| `wiki.db` | wiki-storage | snapshots / outbox / embeddings / audits |
+
+| 文件                          | 归属             | 用途                                            |
+| --------------------------- | -------------- | --------------------------------------------- |
+| `wiki.db`                   | wiki-storage   | snapshots / outbox / embeddings / audits      |
 | `~/.mempalace-rs/palace.db` | rust-mempalace | drawers / drawer_vectors / kg_facts / tunnels |
+
 
 两个库**不共享连接池**，靠事件桥（outbox NDJSON）保持最终一致。
 
@@ -147,10 +148,12 @@ WikiPage::new → engine.file_page → store.pages → write_projection
 
 ## 5. MCP Server 工具清单（22 tools）
 
-| 前缀 | 工具 | 实现路径 |
-|---|---|---|
-| `wiki_*` | status, ingest, file_claim, supersede_claim, query, promote_claim, crystallize, lint, wake_up, maintenance, export_graph_dot, ingest_llm | 走 `wiki-kernel::LlmWikiEngine` |
-| `mempalace_*` | status, search, wake_up, taxonomy, traverse, kg_query, kg_timeline, kg_stats, reflect, extract | 当前直接 `use rust_mempalace::service::*`（Phase 6 归一到 bridge） |
+
+| 前缀            | 工具                                                                                                                                       | 实现路径                                                      |
+| ------------- | ---------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------- |
+| `wiki_*`      | status, ingest, file_claim, supersede_claim, query, promote_claim, crystallize, lint, wake_up, maintenance, export_graph_dot, ingest_llm | 走 `wiki-kernel::LlmWikiEngine`                            |
+| `mempalace_*` | status, search, wake_up, taxonomy, traverse, kg_query, kg_timeline, kg_stats, reflect, extract                                           | 当前直接 `use rust_mempalace::service::*`（Phase 6 归一到 bridge） |
+
 
 启动方式：`cargo run -p wiki-cli -- --db wiki.db mcp --palace ~/.mempalace-rs`。
 
@@ -158,14 +161,16 @@ WikiPage::new → engine.file_page → store.pages → write_projection
 
 ## 6. 数据模型映射（wiki ↔ mempalace）
 
-| wiki-core | rust-mempalace | 说明 |
-|---|---|---|
-| `RawArtifact` | `drawers` 行 | 原始资料正文进入 drawer content |
-| `Claim` | `kg_facts` | `(subject, predicate, object)` SPO 三元组 |
-| `Claim.supersedes` / `stale` | `kg_facts.valid_to` | 新结论写入后 `kg_invalidate` 旧事实 |
-| `WikiEvent::SourceIngested` | `mine_path` 入库事件 | 桥接触发 drawer 写入 |
-| `WikiEvent::ClaimUpserted` | `kg_facts` 插入 | 事件驱动 |
-| `Entity` / `TypedEdge` | `kg_query` + `traverse` | 图路召回来源 |
+
+| wiki-core                    | rust-mempalace          | 说明                                     |
+| ---------------------------- | ----------------------- | -------------------------------------- |
+| `RawArtifact`                | `drawers` 行             | 原始资料正文进入 drawer content                |
+| `Claim`                      | `kg_facts`              | `(subject, predicate, object)` SPO 三元组 |
+| `Claim.supersedes` / `stale` | `kg_facts.valid_to`     | 新结论写入后 `kg_invalidate` 旧事实             |
+| `WikiEvent::SourceIngested`  | `mine_path` 入库事件        | 桥接触发 drawer 写入                         |
+| `WikiEvent::ClaimUpserted`   | `kg_facts` 插入           | 事件驱动                                   |
+| `Entity` / `TypedEdge`       | `kg_query` + `traverse` | 图路召回来源                                 |
+
 
 映射细节见 [docs/mempalace-linkage.md](mempalace-linkage.md)。
 
@@ -174,9 +179,10 @@ WikiPage::new → engine.file_page → store.pages → write_projection
 ## 7. 已知架构债（Phase 6 修复）
 
 1. **旁路依赖**：`wiki-cli/src/mcp.rs` 绕开 `wiki-mempalace-bridge` 直接 `use
-   rust_mempalace::service::*`。应让所有外部依赖收敛到 bridge，
+  rust_mempalace::service::`*。应让所有外部依赖收敛到 bridge，
    未来替换 mempalace 后端改一处即可。
 2. **Edition 版本不齐**：workspace `edition = "2021"`，`rust-mempalace` 独立
-   `edition = "2024"`。等 workspace 整体升 2024 再统一。
+  `edition = "2024"`。等 workspace 整体升 2024 再统一。
 3. **两份 SQLite 最终一致**：依赖 outbox 消费器手动触发。未来可考虑内核 hook 直连
-   bridge live sink，实现准实时一致。
+  bridge live sink，实现准实时一致。
+

@@ -16,4 +16,3 @@
 
 - Hindsight 与 LongMemEval 的公开论述见其 [README](https://github.com/vectorize-io/hindsight) 与文档站点。
 - 本仓库检索与 bench 实现见 `src/service.rs` 中 `search_with_options`、`benchmark_run`。
-

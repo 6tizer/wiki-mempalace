@@ -5,14 +5,16 @@
 
 ## 1) 概念映射
 
+
 | wiki-core                    | rust-mempalace          | 说明                                  |
 | ---------------------------- | ----------------------- | ----------------------------------- |
 | `RawArtifact`                | `drawers` 行             | 原始资料正文进入 drawer content             |
 | `Claim`                      | `kg_facts`              | 可映射为 `(subject, predicate, object)` |
 | `Claim.supersedes` / `stale` | `kg_facts.valid_to`     | 新结论写入后，旧事实 `kg_invalidate`          |
-| `WikiEvent::SourceIngested`  | `mine_path` / 入库流程触发   | 写侧事件驱动                              |
+| `WikiEvent::SourceIngested`  | `mine_path` / 入库流程触发    | 写侧事件驱动                              |
 | `WikiEvent::QueryServed`     | benchmark / telemetry   | 可用于检索效果观测                           |
 | `Entity` / `TypedEdge`       | `kg_query` + `traverse` | 图路召回来源                              |
+
 
 ## 2) 当前联动形态：进程内（bridge live feature）
 
@@ -55,13 +57,12 @@ cargo run -p wiki-cli -- --db wiki.db ack-outbox --up-to-id 999 --consumer-tag m
 
 1. `wiki-cli` ingest → `wiki-kernel` 写入 sources / claims / pages → flush outbox
 2. bridge live sink（或外部 consumer）按 outbox 顺序处理 `ClaimUpserted` /
-   `ClaimSuperseded` / `SourceIngested`
+  `ClaimSuperseded` / `SourceIngested`
 3. 在 mempalace 侧写 `drawers` / `kg_facts`，必要时执行 `kg_invalidate`
 4. 读侧查询继续由各自系统负责，`MempalaceSearchPorts` 把 mempalace 的候选注入 RRF
 
 ## 6) 未来收敛方向（Phase 6）
 
-当前 `wiki-cli/src/mcp.rs` 的 10 个 `mempalace_*` MCP 工具**绕开 bridge**直接 `use
-rust_mempalace::service::*;`，违反本契约的抽象边界。Phase 6 会把这些工具的实现
+当前 `wiki-cli/src/mcp.rs` 的 10 个 `mempalace_*` MCP 工具**绕开 bridge**直接 `use rust_mempalace::service::*;`，违反本契约的抽象边界。Phase 6 会把这些工具的实现
 挪到 bridge（新增一个 `MempalaceTools` trait 或扩展现有 trait），让 `wiki-cli`
 不再直接依赖 `rust-mempalace`，bridge 成为唯一的对 mempalace 访问层。

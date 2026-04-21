@@ -64,7 +64,7 @@ todos:
     status: completed
   - id: t1_close
     content: T1.F：更新 Progress.md 和 schema-followup-plan.md；commit + push + CI 观察
-    status: in_progress
+    status: completed
 isProject: false
 ---
 
