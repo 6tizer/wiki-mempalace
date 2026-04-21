@@ -1,0 +1,159 @@
+{
+	"title": "知识 Wiki 本地化 Schema v1.0",
+	"allowed_entity_kinds": [
+		"person",
+		"project",
+		"library",
+		"concept",
+		"file_path",
+		"decision"
+	],
+	"allowed_relations": [
+		"uses",
+		"depends_on",
+		"contradicts",
+		"caused",
+		"fixed",
+		"supersedes",
+		"related"
+	],
+	"min_quality_to_crystallize": 0.55,
+	"min_confidence_to_promote": 0.62,
+	"default_retention": {
+		"half_life_days": 30.0
+	},
+	"tier_half_life_days": {
+		"working": 3.0,
+		"episodic": 14.0,
+		"semantic": 60.0,
+		"procedural": 120.0
+	},
+	"maintenance_batch_size": 128,
+	"lifecycle_rules": [
+		{
+			"entry_types": ["concept", "entity"],
+			"initial_status": "draft",
+			"promotions": [
+				{
+					"from_status": "draft",
+					"to_status": "in_review",
+					"conditions": {
+						"min_age_days": 7,
+						"required_sections": ["定义", "关键要点", "来源引用"],
+						"min_references": 0,
+						"cooldown_days": null
+					}
+				},
+				{
+					"from_status": "in_review",
+					"to_status": "approved",
+					"conditions": {
+						"min_age_days": 0,
+						"required_sections": [],
+						"min_references": 2,
+						"cooldown_days": null
+					}
+				}
+			],
+			"stale_days": 30,
+			"auto_cleanup": false
+		},
+		{
+			"entry_types": ["summary"],
+			"initial_status": "approved",
+			"promotions": [],
+			"stale_days": 90,
+			"auto_cleanup": false
+		},
+		{
+			"entry_types": ["synthesis"],
+			"initial_status": "draft",
+			"promotions": [
+				{
+					"from_status": "draft",
+					"to_status": "in_review",
+					"conditions": {
+						"min_age_days": 1,
+						"required_sections": [
+							"研究问题",
+							"综合分析",
+							"关键发现",
+							"来源列表"
+						],
+						"min_references": 0,
+						"cooldown_days": null
+					}
+				},
+				{
+					"from_status": "in_review",
+					"to_status": "approved",
+					"conditions": {
+						"min_age_days": 0,
+						"required_sections": [],
+						"min_references": 0,
+						"cooldown_days": 3
+					}
+				}
+			],
+			"stale_days": 90,
+			"auto_cleanup": false
+		},
+		{
+			"entry_types": ["qa"],
+			"initial_status": "approved",
+			"promotions": [],
+			"stale_days": 90,
+			"auto_cleanup": false
+		},
+		{
+			"entry_types": ["lint_report"],
+			"initial_status": "approved",
+			"promotions": [],
+			"stale_days": 7,
+			"auto_cleanup": true
+		},
+		{
+			"entry_types": ["index"],
+			"initial_status": "approved",
+			"promotions": [],
+			"stale_days": null,
+			"auto_cleanup": false
+		}
+	],
+	"tag_config": {
+		"seed_tags": [
+			"Agent 编排",
+			"LLM",
+			"Coding Agent",
+			"Agent 技能",
+			"商业/生态",
+			"工作流",
+			"开发工具",
+			"Crypto/DeFi",
+			"记忆系统",
+			"知识管理",
+			"OpenClaw",
+			"安全/隐私",
+			"Agent 框架",
+			"内容创作"
+		],
+		"deprecated_tags": ["AI Agent", "MCP", "Notion"],
+		"allow_auto_extend": true,
+		"max_tag_name_length": 10,
+		"max_new_tags_per_ingest": 1,
+		"activity_window_days": 30,
+		"orphan_threshold": 5,
+		"dormant_threshold": 10
+	},
+	"completeness_config": {
+		"concept_required_sections": ["定义", "关键要点", "来源引用"],
+		"entity_required_sections": ["简介", "关键数据", "来源引用"],
+		"synthesis_required_sections": [
+			"研究问题",
+			"综合分析",
+			"关键发现",
+			"来源列表"
+		],
+		"min_structured_references": 1
+	}
+}

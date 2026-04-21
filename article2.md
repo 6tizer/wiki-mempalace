@@ -167,35 +167,39 @@ cargo run -p wiki-cli -- mcp
 
 **12 个 Wiki 原生工具：**
 
-| 工具 | 能力 |
-|---|---|
-| `wiki_status` | 知识库统计 |
-| `wiki_ingest` | 原始文本入库（自动脱敏） |
-| `wiki_ingest_llm` | LLM 驱动的结构化入库 |
-| `wiki_file_claim` | 创建知识断言 |
-| `wiki_supersede_claim` | 取代旧断言 |
-| `wiki_query` | 三路 RRF 混合检索 |
-| `wiki_promote_claim` | 断言晋级（Working→Semantic） |
-| `wiki_crystallize` | 会话结晶为 wiki 页面 |
-| `wiki_lint` | 健康检查 |
-| `wiki_wake_up` | Agent 唤醒上下文（L2 语义知识 + L3 活跃上下文） |
-| `wiki_maintenance` | 批量维护：衰减 + 检查 + 晋级 |
-| `wiki_export_graph_dot` | 导出知识图谱 DOT 格式 |
+
+| 工具                      | 能力                              |
+| ----------------------- | ------------------------------- |
+| `wiki_status`           | 知识库统计                           |
+| `wiki_ingest`           | 原始文本入库（自动脱敏）                    |
+| `wiki_ingest_llm`       | LLM 驱动的结构化入库                    |
+| `wiki_file_claim`       | 创建知识断言                          |
+| `wiki_supersede_claim`  | 取代旧断言                           |
+| `wiki_query`            | 三路 RRF 混合检索                     |
+| `wiki_promote_claim`    | 断言晋级（Working→Semantic）          |
+| `wiki_crystallize`      | 会话结晶为 wiki 页面                   |
+| `wiki_lint`             | 健康检查                            |
+| `wiki_wake_up`          | Agent 唤醒上下文（L2 语义知识 + L3 活跃上下文） |
+| `wiki_maintenance`      | 批量维护：衰减 + 检查 + 晋级               |
+| `wiki_export_graph_dot` | 导出知识图谱 DOT 格式                   |
+
 
 **10 个 MemPalace 穿透工具：**
 
-| 工具 | 能力 |
-|---|---|
-| `mempalace_search` | FTS5 混合检索 |
-| `mempalace_status` | Palace 概览 |
-| `mempalace_wake_up` | L0 身份 + L1 关键事实 |
-| `mempalace_taxonomy` | Wing/Hall/Room 分类树 |
-| `mempalace_traverse` | 跟随记忆宫殿隧道 |
-| `mempalace_kg_query` | 时序知识图谱查询 |
-| `mempalace_kg_timeline` | 实体时间线 |
-| `mempalace_kg_stats` | 知识图谱统计 |
-| `mempalace_reflect` | RAG：搜索 + LLM 综合 |
-| `mempalace_extract` | LLM 三元组抽取 |
+
+| 工具                      | 能力                 |
+| ----------------------- | ------------------ |
+| `mempalace_search`      | FTS5 混合检索          |
+| `mempalace_status`      | Palace 概览          |
+| `mempalace_wake_up`     | L0 身份 + L1 关键事实    |
+| `mempalace_taxonomy`    | Wing/Hall/Room 分类树 |
+| `mempalace_traverse`    | 跟随记忆宫殿隧道           |
+| `mempalace_kg_query`    | 时序知识图谱查询           |
+| `mempalace_kg_timeline` | 实体时间线              |
+| `mempalace_kg_stats`    | 知识图谱统计             |
+| `mempalace_reflect`     | RAG：搜索 + LLM 综合    |
+| `mempalace_extract`     | LLM 三元组抽取          |
+
 
 一个实际调用的例子：
 
@@ -348,26 +352,28 @@ cargo run -p wiki-cli -- --db wiki.db maintenance
 
 ## 和 LLM Wiki v2 Gist 的对照
 
-| Gist 描述的能力 | 我们的实现状态 |
-|---|---|
-| 置信度评分 | ✅ 多源凹合并 + 时间衰减 |
-| 取代链 | ✅ 链式追溯，旧 claim 保留 |
-| 遗忘曲线 | ✅ Ebbinghaus 指数衰减 + 访问强化 |
-| 四层巩固 | ✅ W→E→S→P，schema 驱动的晋级阈值 |
-| 知识图谱 | ✅ 7 种实体 + 7 种关系 + BFS 遍历 |
-| 类型化关系 | ✅ Uses/DependsOn/Contradicts/... |
-| 混合检索 (BM25+Vector+Graph) | ✅ 三路 RRF，FTS5 真实 BM25 |
-| 自动化 hooks | ✅ AutoWikiHook + maintenance 命令 |
-| 质量检查 / lint | ✅ 断链/孤页/过时 claim/缺失交叉引用 |
-| 矛盾检测 | ✅ 启发式对检测 |
-| 多 Agent 隔离 | ✅ Private/Shared scope 严格过滤 |
-| 隐私脱敏 | ✅ Bearer/AWS Key/RSA 自动擦除 |
-| 审计追踪 | ✅ UUID + actor + operation + timestamp |
-| 结晶化 | ✅ 会话 → wiki 页面 + 候选 claim |
-| LLM 自动入库 | ✅ claim + entity + relationship 一次提取 |
-| MCP Agent 接口 | ✅ 22 工具统一 MCP Server |
-| 唤醒协议 | ✅ L0 身份 + L1 事实 + L2 语义 + L3 上下文 |
-| Schema 驱动 | ✅ JSON 可配置的领域 schema |
+
+| Gist 描述的能力               | 我们的实现状态                                |
+| ------------------------ | -------------------------------------- |
+| 置信度评分                    | ✅ 多源凹合并 + 时间衰减                         |
+| 取代链                      | ✅ 链式追溯，旧 claim 保留                      |
+| 遗忘曲线                     | ✅ Ebbinghaus 指数衰减 + 访问强化               |
+| 四层巩固                     | ✅ W→E→S→P，schema 驱动的晋级阈值               |
+| 知识图谱                     | ✅ 7 种实体 + 7 种关系 + BFS 遍历               |
+| 类型化关系                    | ✅ Uses/DependsOn/Contradicts/...       |
+| 混合检索 (BM25+Vector+Graph) | ✅ 三路 RRF，FTS5 真实 BM25                  |
+| 自动化 hooks                | ✅ AutoWikiHook + maintenance 命令        |
+| 质量检查 / lint              | ✅ 断链/孤页/过时 claim/缺失交叉引用                |
+| 矛盾检测                     | ✅ 启发式对检测                               |
+| 多 Agent 隔离               | ✅ Private/Shared scope 严格过滤            |
+| 隐私脱敏                     | ✅ Bearer/AWS Key/RSA 自动擦除              |
+| 审计追踪                     | ✅ UUID + actor + operation + timestamp |
+| 结晶化                      | ✅ 会话 → wiki 页面 + 候选 claim              |
+| LLM 自动入库                 | ✅ claim + entity + relationship 一次提取   |
+| MCP Agent 接口             | ✅ 22 工具统一 MCP Server                   |
+| 唤醒协议                     | ✅ L0 身份 + L1 事实 + L2 语义 + L3 上下文       |
+| Schema 驱动                | ✅ JSON 可配置的领域 schema                   |
+
 
 Karpathy 描述了一个"不断复利的知识 wiki"的构想。rohitg00 补充了生命周期、图谱、自动化的工程细节。**我们把这些全部用 Rust 落了地，而且做了 gist 里没提到的东西**：事件 outbox、MCP 协议、双引擎联动、时序知识图谱。
 

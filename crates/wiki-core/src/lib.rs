@@ -40,12 +40,15 @@ pub use model::{
     Claim, ClaimId, Entity, EntityId, EntityKind, MemoryTier, PageId, RelationKind, Scope,
     SourceId, TypedEdge,
 };
-pub use page::WikiPage;
+pub use page::{extract_headings, extract_wikilinks, WikiPage};
 pub use privacy::{RedactionFinding, SensitiveKind, redact_for_ingest};
-pub use quality::{ContradictionHint, LintFinding, LintSeverity};
+pub use quality::{check_page_completeness, ContradictionHint, LintFinding, LintSeverity};
 pub use query::QueryContext;
 pub use scope_policy::document_visible_to_viewer;
 pub use retention::{RetentionParams, retention_strength};
-pub use schema::{DomainSchema, SchemaLoadError};
+pub use schema::{
+    CompletenessConfig, DomainSchema, EntryStatus, EntryType, LifecycleRule, PromotionConditions,
+    PromotionRule, SchemaLoadError, SchemaValidationError, TagConfig, DEFAULT_MAINTENANCE_BATCH,
+};
 pub use search::{RankedDoc, reciprocal_rank_fusion};
 pub use search_ports::SearchPorts;

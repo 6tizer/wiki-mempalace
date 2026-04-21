@@ -9,6 +9,7 @@
 - Query 支持 `--write-page`，将回答结果沉淀为 wiki 页面。
 
 验收标准：
+
 - 连续 ingest 后，`index.md` 和 `log.md` 都产生增量。
 - query 结果可选择落盘并出现在 `index.md` 中。
 
@@ -22,6 +23,7 @@
 - outbox flush 改为分批 + 重试策略。
 
 验收标准：
+
 - lint 结果可直接用于 wiki 修复。
 - consumer 可以 offset 重放并标记消费进度。
 
@@ -32,5 +34,6 @@
 - 增加 `AGENTS.md` 规范新会话可重复执行。
 
 验收标准：
+
 - 演示 ingest -> outbox -> consume -> query -> file back 全流程。
 - 关键操作不依赖隐式记忆，按规范文档可复现。

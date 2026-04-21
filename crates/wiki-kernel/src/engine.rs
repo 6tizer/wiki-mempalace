@@ -14,6 +14,7 @@ use wiki_core::{
     Scope, SessionCrystallizationInput, SourceId, TypedEdge, WikiEvent,
     merge_sources_confidence, reciprocal_rank_fusion, retention_strength, RankedDoc,
 };
+use wiki_core::quality::check_page_completeness;
 use crate::search_ports::SearchPorts;
 
 #[derive(Debug, thiserror::Error)]
@@ -401,6 +402,8 @@ impl<H: WikiHook> LlmWikiEngine<H> {
                     });
                 }
             }
+            // 完整度基线：仅当 page.entry_type 非空且 schema 配置了对应段落时生效
+            findings.extend(check_page_completeness(&self.schema, p));
         }
         let mut inbound_count: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
         for p in self.store.pages.values() {

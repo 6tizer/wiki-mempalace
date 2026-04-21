@@ -46,3 +46,4 @@
 2. 消费器按 outbox 顺序处理 `ClaimUpserted`/`ClaimSuperseded`
 3. 在 mempalace 中写 `kg_facts`，必要时执行 `kg_invalidate`
 4. 读侧查询继续由各自系统负责，结果可在上层做 RRF 融合
+
