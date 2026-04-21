@@ -1900,7 +1900,6 @@ version = "0.1.0"
 dependencies = [
  "clap",
  "reqwest",
- "rust-mempalace",
  "serde",
  "serde_json",
  "time",
@@ -1945,6 +1944,7 @@ dependencies = [
  "rust-mempalace",
  "serde_json",
  "sha2",
+ "shellexpand",
  "thiserror",
  "time",
  "uuid",

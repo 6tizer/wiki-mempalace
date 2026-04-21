@@ -652,21 +652,11 @@ fn call_mempalace_tool(
     args: &Value,
     palace_path: Option<&str>,
 ) -> Result<Value, String> {
-    use rust_mempalace::service::*;
-
-    let palace_root = palace_path.unwrap_or("~/.mempalace-rs");
-    let palace = Palace::new(palace_root).map_err(|e| e.to_string())?;
-    palace.init(None).map_err(|e| e.to_string())?;
-    let conn = palace.open().map_err(|e| e.to_string())?;
-    let config = load_config(&palace.config_path);
+    let tools = wiki_mempalace_bridge::make_tools(palace_path).map_err(|e| e.to_string())?;
 
     match name {
-        "mempalace_status" => {
-            let s = status(&conn).map_err(|e| e.to_string())?;
-            Ok(
-                json!({"drawers": s.drawers, "wings": s.wings, "tunnels": s.tunnels, "kg_facts": s.kg_facts}),
-            )
-        }
+        "mempalace_status" => tools.status().map_err(|e| e.to_string()),
+
         "mempalace_search" => {
             let query = args
                 .get("query")
@@ -681,38 +671,22 @@ fn call_mempalace_tool(
                 .get("explain")
                 .and_then(Value::as_bool)
                 .unwrap_or(false);
-            let rows = search_with_options(
-                &conn,
-                query,
-                wing,
-                hall,
-                room,
-                bank_id,
-                limit,
-                &config.retrieval,
-                explain,
-            )
-            .map_err(|e| e.to_string())?;
-            Ok(json!({"results": rows.iter().map(|r| json!({
-                "id": r.id, "wing": r.wing, "hall": r.hall, "room": r.room,
-                "bank_id": r.bank_id, "source_path": r.source_path,
-                "snippet": r.snippet, "score": r.score, "explain": r.explain
-            })).collect::<Vec<_>>()}))
+            tools
+                .search(query, wing, hall, room, bank_id, limit, explain)
+                .map_err(|e| e.to_string())
         }
+
         "mempalace_wake_up" => {
             let wing = args.get("wing").and_then(Value::as_str);
             let bank_id = args.get("bank_id").and_then(Value::as_str);
-            let text =
-                wake_up(&conn, &palace.identity_path, wing, bank_id).map_err(|e| e.to_string())?;
-            Ok(json!({"text": text}))
+            tools.wake_up(wing, bank_id).map_err(|e| e.to_string())
         }
+
         "mempalace_taxonomy" => {
             let bank_id = args.get("bank_id").and_then(Value::as_str);
-            let rows = taxonomy(&conn, bank_id).map_err(|e| e.to_string())?;
-            Ok(
-                json!({"taxonomy": rows.iter().map(|r| json!({"wing":r.wing,"hall":r.hall,"room":r.room,"count":r.count})).collect::<Vec<_>>()}),
-            )
+            tools.taxonomy(bank_id).map_err(|e| e.to_string())
         }
+
         "mempalace_traverse" => {
             let wing = args
                 .get("wing")
@@ -723,40 +697,30 @@ fn call_mempalace_tool(
                 .and_then(Value::as_str)
                 .ok_or("missing room")?;
             let bank_id = args.get("bank_id").and_then(Value::as_str);
-            let rows = traverse(&conn, wing, room, bank_id).map_err(|e| e.to_string())?;
-            Ok(
-                json!({"links": rows.iter().map(|r| json!({"kind":r.kind,"from_wing":r.from_wing,"from_room":r.from_room,"to_wing":r.to_wing,"to_room":r.to_room})).collect::<Vec<_>>()}),
-            )
+            tools
+                .traverse(wing, room, bank_id)
+                .map_err(|e| e.to_string())
         }
+
         "mempalace_kg_query" => {
             let subject = args
                 .get("subject")
                 .and_then(Value::as_str)
                 .ok_or("missing subject")?;
             let as_of = args.get("as_of").and_then(Value::as_str);
-            let rows = kg_query(&conn, subject, as_of).map_err(|e| e.to_string())?;
-            Ok(json!({"facts": rows.iter().map(|r| json!({
-                "id":r.id,"subject":r.subject,"predicate":r.predicate,"object":r.object,
-                "valid_from":r.valid_from,"valid_to":r.valid_to,"source_drawer_id":r.source_drawer_id
-            })).collect::<Vec<_>>()}))
+            tools.kg_query(subject, as_of).map_err(|e| e.to_string())
         }
+
         "mempalace_kg_timeline" => {
             let subject = args
                 .get("subject")
                 .and_then(Value::as_str)
                 .ok_or("missing subject")?;
-            let rows = kg_timeline(&conn, subject).map_err(|e| e.to_string())?;
-            Ok(json!({"timeline": rows.iter().map(|r| json!({
-                "id":r.id,"subject":r.subject,"predicate":r.predicate,"object":r.object,
-                "valid_from":r.valid_from,"valid_to":r.valid_to,"source_drawer_id":r.source_drawer_id
-            })).collect::<Vec<_>>()}))
+            tools.kg_timeline(subject).map_err(|e| e.to_string())
         }
-        "mempalace_kg_stats" => {
-            let s = kg_stats(&conn).map_err(|e| e.to_string())?;
-            Ok(
-                json!({"facts":s.facts,"subjects":s.subjects,"predicates":s.predicates,"active_facts":s.active_facts}),
-            )
-        }
+
+        "mempalace_kg_stats" => tools.kg_stats().map_err(|e| e.to_string()),
+
         "mempalace_reflect" => {
             let query = args
                 .get("query")
@@ -767,32 +731,17 @@ fn call_mempalace_tool(
                 .and_then(Value::as_u64)
                 .unwrap_or(8) as usize;
             let bank_id = args.get("bank_id").and_then(Value::as_str);
-            let text = reflect_answer(
-                &conn,
-                &config.llm,
-                &config.retrieval,
-                query,
-                bank_id,
-                search_limit,
-            )
-            .map_err(|e| e.to_string())?;
-            Ok(json!({"text": text}))
+            tools
+                .reflect(query, search_limit, bank_id)
+                .map_err(|e| e.to_string())
         }
+
         "mempalace_extract" => {
-            let body = match (
-                args.get("text").and_then(Value::as_str),
-                args.get("drawer_id").and_then(Value::as_i64),
-            ) {
-                (Some(t), None) => t.to_string(),
-                (None, Some(id)) => drawer_content(&conn, id)
-                    .map_err(|e| e.to_string())?
-                    .ok_or("drawer id not found")?,
-                (None, None) => return Err("provide text or drawer_id".to_string()),
-                (Some(_), Some(_)) => return Err("use only one of text or drawer_id".to_string()),
-            };
-            let n = extract_to_kg(&conn, &config.llm, &body).map_err(|e| e.to_string())?;
-            Ok(json!({"kg_facts_added": n}))
+            let text = args.get("text").and_then(Value::as_str);
+            let drawer_id = args.get("drawer_id").and_then(Value::as_i64);
+            tools.extract(text, drawer_id).map_err(|e| e.to_string())
         }
+
         _ => Err(format!("unknown mempalace tool: {name}")),
     }
 }

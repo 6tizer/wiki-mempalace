@@ -11,6 +11,8 @@ mod live_ranker;
 mod live_search;
 #[cfg(feature = "live")]
 mod live_sink;
+#[cfg(feature = "live")]
+mod live_tools;
 
 #[cfg(feature = "live")]
 pub use live_ranker::LiveMempalaceGraphRanker;
@@ -18,6 +20,11 @@ pub use live_ranker::LiveMempalaceGraphRanker;
 pub use live_search::MempalaceSearchPorts;
 #[cfg(feature = "live")]
 pub use live_sink::LiveMempalaceSink;
+#[cfg(feature = "live")]
+pub use live_tools::LiveMempalaceTools;
+
+mod tools;
+pub use tools::{make_tools, MempalaceTools, NoopMempalaceTools};
 
 use wiki_core::WikiEvent;
 use wiki_core::{Claim, ClaimId, Scope, SourceId};
