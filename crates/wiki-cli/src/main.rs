@@ -291,12 +291,10 @@ fn run_with_engine(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                     plan.summary_title.trim().to_string()
                 };
                 let page = WikiPage::new(title, plan.summary_markdown.clone(), sc.clone());
-                let et = parse_entry_type_opt(&entry_type)?;
-                let status = initial_status_for(et.as_ref(), &schema);
-                let page = match et {
-                    Some(et) => page.with_entry_type(et).with_status(status),
-                    None => page.with_status(status),
-                };
+                let explicit = parse_entry_type_opt(&entry_type)?;
+                let et = effective_ingest_entry_type(explicit);
+                let status = initial_status_for(Some(&et), &schema);
+                let page = page.with_entry_type(et).with_status(status);
                 eng.store.pages.insert(page.id, page);
                 eng.save_to_repo(&repo)?;
                 eng.flush_outbox_to_repo_with_policy(&repo, 128, 3)?;
@@ -654,6 +652,34 @@ pub(crate) fn parse_entry_type_opt(
             Ok(Some(et))
         }
         None => Ok(None),
+    }
+}
+
+/// ingest-llm 场景下的 entry_type 缺省策略：未指定时回退为 Concept。
+/// 其它入口（crystallize / draft-from-query）保留 None 语义以避免意外写死。
+pub(crate) fn effective_ingest_entry_type(explicit: Option<EntryType>) -> EntryType {
+    explicit.unwrap_or(EntryType::Concept)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn effective_entry_type_defaults_to_concept() {
+        assert_eq!(effective_ingest_entry_type(None), EntryType::Concept);
+    }
+
+    #[test]
+    fn effective_entry_type_preserves_explicit() {
+        assert_eq!(
+            effective_ingest_entry_type(Some(EntryType::Entity)),
+            EntryType::Entity
+        );
+        assert_eq!(
+            effective_ingest_entry_type(Some(EntryType::Synthesis)),
+            EntryType::Synthesis
+        );
     }
 }
 

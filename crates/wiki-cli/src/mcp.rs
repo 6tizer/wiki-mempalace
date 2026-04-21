@@ -208,7 +208,8 @@ fn tools_list() -> Value {
                     "uri":{"type":"string","description":"Source URI"},
                     "body":{"type":"string","description":"Source text body"},
                     "scope":{"type":"string","description":"Scope"},
-                    "dry_run":{"type":"boolean","description":"If true, return plan without committing"}
+                    "dry_run":{"type":"boolean","description":"If true, return plan without committing"},
+                    "entry_type":{"type":"string","description":"Entry type for the generated summary page (concept|entity|synthesis|reference|lint_report). Defaults to concept when omitted."}
                 },"required":["uri","body"]}
             },
             // --- Mempalace passthrough tools ---
@@ -623,6 +624,12 @@ fn call_tool(
                 .get("dry_run")
                 .and_then(Value::as_bool)
                 .unwrap_or(false);
+            let entry_type_opt = args
+                .get("entry_type")
+                .and_then(Value::as_str)
+                .map(|s| s.to_string());
+            let explicit_et = crate::parse_entry_type_opt(&entry_type_opt)
+                .map_err(|e| format!("invalid entry_type: {e}"))?;
 
             let cfg = crate::llm::load_llm_config(llm_config_path).map_err(|e| e.to_string())?;
             let user_msg = format!("Source URI:\n{uri}\n\nBody:\n{body}");
@@ -645,12 +652,38 @@ fn call_tool(
                 let tier = parse_memory_tier(&c.tier).map_err(|e| e.to_string())?;
                 let cid = eng.file_claim(c.text.clone(), sc.clone(), tier, "mcp");
                 eng.attach_sources(cid, &[sid]).map_err(|e| e.to_string())?;
+                if vectors {
+                    // 对齐 CLI 的向量写入行为（best-effort）
+                    if let Ok(app) = crate::llm::load_app_config(llm_config_path) {
+                        if let Ok(v) = crate::llm::embed_first(&app, &c.text) {
+                            let _ = repo.upsert_embedding(&format!("claim:{}", cid.0), &v);
+                        }
+                    }
+                }
+            }
+            // 生成 summary 页面（若 LLM 给了 summary_markdown）：对齐 CLI ingest-llm 行为
+            let mut summary_page_id: Option<String> = None;
+            if !plan.summary_markdown.trim().is_empty() {
+                let title = if plan.summary_title.trim().is_empty() {
+                    "ingest-summary".to_string()
+                } else {
+                    plan.summary_title.trim().to_string()
+                };
+                let et = crate::effective_ingest_entry_type(explicit_et);
+                let status = initial_status_for(Some(&et), &eng.schema.clone());
+                let page =
+                    wiki_core::WikiPage::new(title, plan.summary_markdown.clone(), sc.clone())
+                        .with_entry_type(et)
+                        .with_status(status);
+                summary_page_id = Some(page.id.0.to_string());
+                eng.store.pages.insert(page.id, page);
             }
             save_and_flush(eng, repo).map_err(|e| e.to_string())?;
             Ok(json!({
                 "source_id": sid.0.to_string(),
                 "claims_filed": plan.claims.len(),
-                "summary": plan.summary_title
+                "summary": plan.summary_title,
+                "summary_page_id": summary_page_id
             }))
         }
 
@@ -780,4 +813,35 @@ fn embed_source(
     let vec = crate::llm::embed_first(&app, &short)?;
     repo.upsert_embedding(&format!("source:{source_id}"), &vec)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tools_list_wiki_ingest_llm_has_entry_type_param() {
+        // D3.D：验证 MCP tools/list 暴露的 wiki_ingest_llm 工具包含 entry_type 参数。
+        let v = tools_list();
+        let tools = v.get("tools").and_then(Value::as_array).expect("tools[]");
+        let ingest = tools
+            .iter()
+            .find(|t| t.get("name").and_then(Value::as_str) == Some("wiki_ingest_llm"))
+            .expect("wiki_ingest_llm 工具应存在");
+        let props = ingest
+            .pointer("/inputSchema/properties")
+            .expect("inputSchema.properties");
+        let et = props.get("entry_type").expect("entry_type 属性应存在");
+        assert_eq!(
+            et.get("type").and_then(Value::as_str),
+            Some("string"),
+            "entry_type 应为 string 类型"
+        );
+        // description 应提示缺省为 concept，便于外部 LLM agent 识别
+        let desc = et.get("description").and_then(Value::as_str).unwrap_or("");
+        assert!(
+            desc.contains("concept"),
+            "entry_type.description 应提及默认值 concept，实际: {desc}"
+        );
+    }
 }
