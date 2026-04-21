@@ -445,3 +445,61 @@ mempalace consume=4 → llm-smoke skip → viewer-scope 隔离验证）。
 ### 验证
 
 - `bash scripts/e2e.sh` → `E2E PASS`，`[10] backup smoke OK` 日志正常。
+
+---
+
+## 2026-04-22 · Notion → 本地 Wiki 全量迁移
+
+### 背景
+
+三个 Notion 数据库（📚 知识 Wiki 3372 条、🐦 X书签 674 条、微信 420 条）长期作为知识管理载体，
+但 Notion 的链接机制和检索能力不够灵活，需要迁移到本地 Obsidian vault 以配合 `wiki-mempalace` 系统使用。
+
+### 实现了哪些功能
+
+1. **`wiki-migration-notion` crate**（新增，位于 `llm-wiki/crates/wiki-migration-notion/`）：
+   - `scanner`：递归扫描 Notion Export 解压目录，过滤 `.md` 文件
+   - `parser`：解析 Notion Markdown 格式（UUID 文件名提取 + `Key: value` 属性块 + 正文链接抽取）
+   - `resolver`：构建 UUID 索引和 URL 索引，解析内部边和外部边（Wiki→Source）
+   - `report`：生成 `migration-report.md` 干跑报告
+   - `writer`：落盘到本地 vault 目录，按 `entry_type` 分子目录，YAML frontmatter + 链接改写
+   - CLI 子命令 `dry-run` / `migrate`
+
+2. **三库全量迁移执行**：
+   - 4477 条 Markdown（Wiki 3377 + X书签 674 + 微信 426）
+   - 12804 条内部边（99.6% 解析）
+   - 4313 条外部边（Wiki→Source，URL 命中 3699 + 源文章URL 字段 614）
+   - 1072 条伪 URL 清洗（`claude.md` 等 Notion 自动链接化 bug）
+   - 266 条孤儿 source 标记
+   - 0 数据丢失，0 文件名碰撞
+
+3. **Obsidian vault 落盘**：产物从 `/tmp/wiki-migrated/` 搬家到 `~/Documents/wiki/`，用户 Obsidian 验证通过
+
+4. **`dogfood-readiness.md` 大更新**：U1–U5 + D1–D4 全标 ✅，附录 B 改为实际目录结构，附录 C 改为已完成迁移记录
+
+### 遇到了哪些错误
+
+1. **Notion Export ZIP 为空（22 字节）**：用户首次下载时尚未等待 Notion 完成导出。重新等待邮件通知后获取正确 ZIP。
+2. **macOS `unzip` UTF-8 文件名失败**（Illegal byte sequence）：中文文件名导致系统自带 unzip 崩溃。改用 `ditto -x -k` 原生解压。
+3. **slugify 单测失败**：全角冒号 `：` 在 macOS 上是合法文件名字符，但测试期望被替换。修正测试断言。
+4. **YAML frontmatter 布尔值被引号包裹**：`compiled_to_wiki: "true"` 应为 `compiled_to_wiki: true`。新增 `fm_raw()` 辅助函数直接输出。
+5. **文件名碰撞解决不够健壮**：初始只用 uuid8 后缀，改为三级回退（base → base-uuid8 → base-fulluuid）。
+6. **macOS Unicode NFD/NFC 归一化幻觉**：Python 脚本报告"缺少文件"，实际是文件系统 NFD 与字符串 NFC 比较差异。逐文件 `os.path.exists()` 确认 0 缺失。
+
+### 是如何解决这些错误的
+
+1. 指导用户正确操作 Notion Export 流程。
+2. 使用 macOS 原生 `ditto` 命令替代 `unzip`。
+3. 修正测试断言，匹配 macOS 实际行为。
+4. 区分 `fm()`（带 YAML 转义）和 `fm_raw()`（原始输出）。
+5. 三级文件名回退策略。
+6. 诊断 Unicode 归一化差异，确认全部文件物理存在。
+
+### 验证
+
+- `cargo test -p wiki-migration-notion`：7 个单测全绿
+- `cargo fmt --all --check`：干净
+- dry-run 报告：4477 条解析成功，统计数字与 Notion 原始数据吻合
+- migrate 落盘后文件数验证：4477 个 `.md` 文件全部存在
+- Obsidian 打开 vault：frontmatter 正确、内部链接可点击、搜索正常
+- Git commit：`2d0e9d8`（llm-wiki 仓库）

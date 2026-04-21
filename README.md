@@ -23,8 +23,9 @@ wiki-mempalace/
 ├── scripts/e2e.sh             # 端到端回归脚本
 ├── docs/
 │   ├── architecture.md        # 架构图 + 业务流转
+│   ├── dogfood-readiness.md   # Dogfood 就绪清单（U1–U5 + D1–D4 全完成）
 │   ├── mempalace-linkage.md   # workspace 内 crate 协同契约
-│   ├── plan.md                # 里程碑
+│   ├── plan.md                # 里程碑（M1–M5 全完成）
 │   └── blog/
 │       └── article2.md        # 两仓合并前的工程长文
 └── crates/
@@ -33,6 +34,7 @@ wiki-mempalace/
     ├── wiki-storage/          # SQLite 持久化
     ├── wiki-cli/              # 统一 CLI + MCP Server（22 工具）
     ├── wiki-mempalace-bridge/ # 事件桥 + 搜索 ports（live feature 连 palace）
+    ├── wiki-migration-notion/ # Notion Export → 本地 Obsidian vault 迁移工具
     └── rust-mempalace/        # 记忆宫殿（lib + bin）；保留独立 README 与 e2e 测试
 ```
 
@@ -75,7 +77,7 @@ mempalace consumer → viewer-scope 隔离 → llm-smoke（可选）。
 ### 测试
 
 ```bash
-# 全量（workspace 约 49 个测试）
+# 全量（workspace 约 62 个测试）
 cargo test --workspace
 
 # rust-mempalace crate 级 e2e（8 个 e2e_core 用例，子进程级）

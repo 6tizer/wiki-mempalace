@@ -216,7 +216,7 @@ fn run_with_engine(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         } => {
             let cfg = llm::load_llm_config(&cli.llm_config)?;
             let user = format!("Source URI:\n{uri}\n\nBody:\n{body}");
-            let reply = llm::complete_chat(&cfg, llm::ingest_llm_system_prompt(), &user, 1800)?;
+            let reply = llm::complete_chat(&cfg, llm::ingest_llm_system_prompt(), &user, 8192)?;
             let slice = llm::parse_json_object_slice(&reply);
             let plan: LlmIngestPlanV1 = serde_json::from_str(slice)
                 .map_err(|e| format!("ingest-llm JSON parse error: {e}; raw={reply}"))?;
@@ -230,7 +230,7 @@ fn run_with_engine(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             eng.flush_outbox_to_repo_with_policy(&repo, 128, 3)?;
             if cli.vectors {
                 let app = llm::load_app_config(&cli.llm_config)?;
-                let body_short = truncate_chars(&body, 8000);
+                let body_short = truncate_chars(&body, 16000);
                 let vec = llm::embed_first(&app, &body_short)?;
                 repo.upsert_embedding(&format!("source:{}", sid.0), &vec)?;
             }
@@ -308,7 +308,7 @@ fn run_with_engine(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             eng.flush_outbox_to_repo_with_policy(&repo, 128, 3)?;
             if cli.vectors {
                 let app = llm::load_app_config(&cli.llm_config)?;
-                let body_short = truncate_chars(&body, 8000);
+                let body_short = truncate_chars(&body, 16000);
                 let vec = llm::embed_first(&app, &body_short)?;
                 repo.upsert_embedding(&format!("source:{}", sid.0), &vec)?;
             }

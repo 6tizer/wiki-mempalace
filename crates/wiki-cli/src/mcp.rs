@@ -637,7 +637,7 @@ fn call_tool(
                 &cfg,
                 crate::llm::ingest_llm_system_prompt(),
                 &user_msg,
-                1800,
+                8192,
             )
             .map_err(|e| e.to_string())?;
             let slice = crate::llm::parse_json_object_slice(&reply);
@@ -809,7 +809,7 @@ fn embed_source(
     body: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let app = crate::llm::load_app_config(llm_config_path)?;
-    let short: String = body.chars().take(8000).collect();
+    let short: String = body.chars().take(16000).collect();
     let vec = crate::llm::embed_first(&app, &short)?;
     repo.upsert_embedding(&format!("source:{source_id}"), &vec)?;
     Ok(())
