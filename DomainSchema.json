@@ -53,6 +53,16 @@
 						"min_references": 2,
 						"cooldown_days": null
 					}
+				},
+				{
+					"from_status": "needs_update",
+					"to_status": "approved",
+					"conditions": {
+						"min_age_days": 0,
+						"required_sections": [],
+						"min_references": 0,
+						"cooldown_days": null
+					}
 				}
 			],
 			"stale_days": 30,
@@ -92,6 +102,16 @@
 						"required_sections": [],
 						"min_references": 0,
 						"cooldown_days": 3
+					}
+				},
+				{
+					"from_status": "needs_update",
+					"to_status": "approved",
+					"conditions": {
+						"min_age_days": 0,
+						"required_sections": [],
+						"min_references": 0,
+						"cooldown_days": null
 					}
 				}
 			],

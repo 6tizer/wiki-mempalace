@@ -1,0 +1,59 @@
+{
+	"title": "test-with-reverse-promotion",
+	"allowed_entity_kinds": ["person", "project"],
+	"allowed_relations": ["uses"],
+	"min_quality_to_crystallize": 0.5,
+	"min_confidence_to_promote": 0.6,
+	"default_retention": { "half_life_days": 30.0 },
+	"tier_half_life_days": {
+		"working": 3.0,
+		"episodic": 14.0,
+		"semantic": 60.0,
+		"procedural": 120.0
+	},
+	"lifecycle_rules": [
+		{
+			"entry_types": ["concept"],
+			"initial_status": "draft",
+			"promotions": [
+				{
+					"from_status": "draft",
+					"to_status": "needs_update",
+					"conditions": {
+						"min_age_days": 0,
+						"required_sections": [],
+						"min_references": 0
+					}
+				},
+				{
+					"from_status": "needs_update",
+					"to_status": "approved",
+					"conditions": {
+						"min_age_days": 0,
+						"required_sections": [],
+						"min_references": 0
+					}
+				}
+			],
+			"stale_days": 7,
+			"auto_cleanup": false
+		}
+	],
+	"tag_config": {
+		"seed_tags": [],
+		"deprecated_tags": [],
+		"allow_auto_extend": false,
+		"max_tag_name_length": 32,
+		"max_new_tags_per_ingest": 5,
+		"activity_window_days": 90,
+		"orphan_threshold": 1,
+		"dormant_threshold": 3
+	},
+	"completeness_config": {
+		"concept_required_sections": [],
+		"entity_required_sections": [],
+		"synthesis_required_sections": [],
+		"min_structured_references": 0
+	},
+	"maintenance_batch_size": 64
+}

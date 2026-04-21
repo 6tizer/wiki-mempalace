@@ -1538,4 +1538,118 @@ mod tests {
         assert_eq!(count, 0);
         assert!(eng.store.pages.contains_key(&pid));
     }
+
+    // --- D2 反向 promotion 测试 ---
+
+    /// schema 含反向规则时，NeedsUpdate → Approved 应成功
+    #[test]
+    fn promote_needs_update_to_approved_works() {
+        use wiki_core::{LifecycleRule, PromotionConditions, PromotionRule};
+        let mut schema = DomainSchema::permissive_default();
+        schema.lifecycle_rules = vec![LifecycleRule {
+            entry_types: vec![EntryType::Concept],
+            initial_status: EntryStatus::Draft,
+            promotions: vec![
+                PromotionRule {
+                    from_status: EntryStatus::Draft,
+                    to_status: EntryStatus::Approved,
+                    conditions: PromotionConditions {
+                        min_age_days: 0,
+                        required_sections: vec![],
+                        min_references: 0,
+                        cooldown_days: None,
+                    },
+                },
+                // 反向规则
+                PromotionRule {
+                    from_status: EntryStatus::NeedsUpdate,
+                    to_status: EntryStatus::Approved,
+                    conditions: PromotionConditions {
+                        min_age_days: 0,
+                        required_sections: vec![],
+                        min_references: 0,
+                        cooldown_days: None,
+                    },
+                },
+            ],
+            stale_days: Some(7),
+            auto_cleanup: false,
+        }];
+        let mut eng = LlmWikiEngine::new(schema);
+        let p = WikiPage::new(
+            "Stale Page",
+            "body",
+            Scope::Private {
+                agent_id: "a".into(),
+            },
+        )
+        .with_entry_type(EntryType::Concept)
+        .with_status(EntryStatus::NeedsUpdate);
+        let pid = p.id;
+        eng.store.pages.insert(pid, p);
+
+        let now = OffsetDateTime::now_utc();
+        eng.promote_page(pid, EntryStatus::Approved, "t", now, false)
+            .unwrap();
+
+        assert_eq!(eng.store.pages[&pid].status, EntryStatus::Approved);
+        // PageStatusChanged 事件应被发出（在 outbox 中）
+        let event_fired = eng.outbox.iter().any(|ev| {
+            matches!(
+                ev,
+                wiki_core::WikiEvent::PageStatusChanged {
+                    from: EntryStatus::NeedsUpdate,
+                    to: EntryStatus::Approved,
+                    ..
+                }
+            )
+        });
+        assert!(
+            event_fired,
+            "应发出 PageStatusChanged(NeedsUpdate→Approved)"
+        );
+    }
+
+    /// schema 无反向规则时，NeedsUpdate → Approved 应返回 NoPromotion 错误
+    #[test]
+    fn promote_needs_update_without_rule_still_errors() {
+        use wiki_core::{LifecycleRule, PromotionConditions, PromotionRule};
+        let mut schema = DomainSchema::permissive_default();
+        // 只有 Draft→InReview，没有 NeedsUpdate→Approved
+        schema.lifecycle_rules = vec![LifecycleRule {
+            entry_types: vec![EntryType::Concept],
+            initial_status: EntryStatus::Draft,
+            promotions: vec![PromotionRule {
+                from_status: EntryStatus::Draft,
+                to_status: EntryStatus::InReview,
+                conditions: PromotionConditions {
+                    min_age_days: 0,
+                    required_sections: vec![],
+                    min_references: 0,
+                    cooldown_days: None,
+                },
+            }],
+            stale_days: Some(7),
+            auto_cleanup: false,
+        }];
+        let mut eng = LlmWikiEngine::new(schema);
+        let p = WikiPage::new(
+            "Stale Page",
+            "body",
+            Scope::Private {
+                agent_id: "a".into(),
+            },
+        )
+        .with_entry_type(EntryType::Concept)
+        .with_status(EntryStatus::NeedsUpdate);
+        let pid = p.id;
+        eng.store.pages.insert(pid, p);
+
+        let now = OffsetDateTime::now_utc();
+        let result = eng.promote_page(pid, EntryStatus::Approved, "t", now, false);
+        assert!(
+            matches!(result, Err(PromotePageError::NoPromotion { .. })),
+            "无规则时应返回 NoPromotion，got: {result:?}"
+        );
+    }
 }

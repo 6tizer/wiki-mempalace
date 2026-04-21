@@ -50,12 +50,13 @@ fn repo_domain_schema_lifecycle_rules_indexable() {
     let schema = DomainSchema::from_json_path(&repo_schema_path()).expect("schema 加载失败");
     assert_eq!(schema.lifecycle_rules.len(), 6);
 
-    // Concept 与 Entity 共享同一条规则，初始为 Draft 且有两步晋升
+    // Concept/Entity 共享同一条规则，初始 Draft；D2 后共 3 条 promotion：
+    // draft→in_review, in_review→approved, needs_update→approved（反向恢复规则）
     let rule = schema
         .find_lifecycle_rule(&EntryType::Concept)
         .expect("应找到 Concept 的生命周期规则");
     assert_eq!(rule.initial_status, EntryStatus::Draft);
-    assert_eq!(rule.promotions.len(), 2);
+    assert_eq!(rule.promotions.len(), 3);
     assert_eq!(rule.stale_days, Some(30));
     assert!(!rule.auto_cleanup);
 
