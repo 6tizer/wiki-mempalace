@@ -244,16 +244,12 @@ fn e2e_mcp_suite() {
         .and_then(|v| v.get("tools"))
         .and_then(|v| v.as_array())
         .expect("tools array");
-    assert!(
-        tools
-            .iter()
-            .any(|t| t.get("name").and_then(|n| n.as_str()) == Some("mempalace_search"))
-    );
-    assert!(
-        tools
-            .iter()
-            .any(|t| t.get("name").and_then(|n| n.as_str()) == Some("mempalace_kg_stats"))
-    );
+    assert!(tools
+        .iter()
+        .any(|t| t.get("name").and_then(|n| n.as_str()) == Some("mempalace_search")));
+    assert!(tools
+        .iter()
+        .any(|t| t.get("name").and_then(|n| n.as_str()) == Some("mempalace_kg_stats")));
 
     let call_req = r#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"mempalace_status","arguments":{}}}"#;
     let out = run_mcp_once(call_req, &palace);

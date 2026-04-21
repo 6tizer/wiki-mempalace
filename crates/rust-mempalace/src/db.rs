@@ -1,5 +1,5 @@
 use anyhow::Result;
-use rusqlite::{Connection, params};
+use rusqlite::{params, Connection};
 use std::path::Path;
 
 pub fn open(db_path: &Path) -> Result<Connection> {

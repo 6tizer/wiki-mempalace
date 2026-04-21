@@ -1,9 +1,9 @@
-use crate::classifier::{KNOWN_HALLS, classify, default_rules, load_rules};
+use crate::classifier::{classify, default_rules, load_rules, KNOWN_HALLS};
 use crate::db;
 use anyhow::Result;
 use chrono::Utc;
 use rand::seq::SliceRandom;
-use rusqlite::{Connection, OptionalExtension, params};
+use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, HashMap};
@@ -1164,7 +1164,11 @@ fn trigram_similarity(a: &str, b: &str) -> f64 {
     }
     let inter = sa.intersection(&sb).count() as f64;
     let union = sa.union(&sb).count() as f64;
-    if union == 0.0 { 0.0 } else { inter / union }
+    if union == 0.0 {
+        0.0
+    } else {
+        inter / union
+    }
 }
 
 fn trigrams(s: &str) -> std::collections::HashSet<String> {

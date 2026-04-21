@@ -1,9 +1,9 @@
 use crate::service::{
-    AppConfig, Palace, drawer_content, extract_to_kg, kg_query, kg_stats, kg_timeline,
-    reflect_answer, search_with_options, status, taxonomy, traverse, wake_up,
+    drawer_content, extract_to_kg, kg_query, kg_stats, kg_timeline, reflect_answer,
+    search_with_options, status, taxonomy, traverse, wake_up, AppConfig, Palace,
 };
 use anyhow::Result;
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use std::io::{self, BufRead, Write};
 
 pub fn run_stdio(palace: &Palace, once: bool, quiet: bool, config: &AppConfig) -> Result<()> {
