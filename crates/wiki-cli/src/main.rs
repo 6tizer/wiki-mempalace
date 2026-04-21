@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use time::OffsetDateTime;
 use wiki_core::{
     document_visible_to_viewer, parse_memory_tier, ClaimId, DomainSchema, Entity, EntityId,
-    EntityKind, LlmIngestPlanV1, MemoryTier, PageId, QueryContext, RelationKind, Scope,
+    EntityKind, EntryType, LlmIngestPlanV1, MemoryTier, PageId, QueryContext, RelationKind, Scope,
     SessionCrystallizationInput, SourceId, TypedEdge, WikiPage,
 };
 use wiki_kernel::{
@@ -62,6 +62,9 @@ enum Cmd {
         scope: String,
         #[arg(long, default_value_t = false)]
         dry_run: bool,
+        /// 为自动生成的 summary page 绑定 EntryType（如 concept、entity、qa）。
+        #[arg(long)]
+        entry_type: Option<String>,
     },
     FileClaim {
         text: String,
@@ -88,6 +91,9 @@ enum Cmd {
         write_page: bool,
         #[arg(long)]
         page_title: Option<String>,
+        /// 为 query 生成的 page 绑定 EntryType（如 concept、entity、qa）。
+        #[arg(long)]
+        entry_type: Option<String>,
     },
     Lint,
     Promote {
@@ -163,6 +169,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             body,
             scope,
             dry_run,
+            entry_type,
         } => {
             let cfg = llm::load_llm_config(&cli.llm_config)?;
             let user = format!("Source URI:\n{uri}\n\nBody:\n{body}");
@@ -241,6 +248,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     plan.summary_title.trim().to_string()
                 };
                 let page = WikiPage::new(title, plan.summary_markdown.clone(), sc.clone());
+                let page = match parse_entry_type_opt(&entry_type)? {
+                    Some(et) => page.with_entry_type(et),
+                    None => page,
+                };
                 eng.store.pages.insert(page.id, page);
                 eng.save_to_repo(&repo)?;
                 eng.flush_outbox_to_repo_with_policy(&repo, 128, 3)?;
@@ -301,6 +312,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             per_stream_limit,
             write_page,
             page_title,
+            entry_type,
         } => {
             let ctx = QueryContext::new(&query)
                 .with_rrf_k(rrf_k)
@@ -341,7 +353,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             );
             if write_page {
                 let title = page_title.unwrap_or_else(|| format!("query-{}", timestamp_slug()));
-                let page = query_to_page(&title, &query, &ranked, viewer.clone());
+                let page = query_to_page(
+                    &title,
+                    &query,
+                    &ranked,
+                    viewer.clone(),
+                    parse_entry_type_opt(&entry_type)?,
+                );
                 eng.store.pages.insert(page.id, page);
             }
             eng.save_to_repo(&repo)?;
@@ -536,6 +554,20 @@ pub(crate) fn parse_tier(s: &str) -> Result<MemoryTier, Box<dyn std::error::Erro
     }
 }
 
+/// 解析可选的 --entry-type 参数，使用 schema 的 strict parse。
+pub(crate) fn parse_entry_type_opt(
+    s: &Option<String>,
+) -> Result<Option<EntryType>, Box<dyn std::error::Error>> {
+    match s {
+        Some(raw) => {
+            let et = EntryType::parse(raw)
+                .map_err(|e| Box::<dyn std::error::Error>::from(e.to_string()))?;
+            Ok(Some(et))
+        }
+        None => Ok(None),
+    }
+}
+
 fn maybe_sync_projection(
     sync_wiki: bool,
     wiki_root: Option<&std::path::Path>,
@@ -554,12 +586,22 @@ fn maybe_sync_projection(
     Ok(())
 }
 
-fn query_to_page(title: &str, query: &str, ranked: &[(String, f64)], scope: Scope) -> WikiPage {
+fn query_to_page(
+    title: &str,
+    query: &str,
+    ranked: &[(String, f64)],
+    scope: Scope,
+    entry_type: Option<EntryType>,
+) -> WikiPage {
     let mut md = format!("# {title}\n\n## Query\n\n{query}\n\n## Top Results\n\n");
     for (doc, score) in ranked.iter().take(20) {
         md.push_str(&format!("- `{doc}` score={score:.6}\n"));
     }
-    WikiPage::new(title, md, scope)
+    let page = WikiPage::new(title, md, scope);
+    match entry_type {
+        Some(et) => page.with_entry_type(et),
+        None => page,
+    }
 }
 
 fn read_graph_extras_lines(path: &PathBuf) -> Result<Vec<String>, Box<dyn std::error::Error>> {

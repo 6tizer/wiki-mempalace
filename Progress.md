@@ -204,3 +204,85 @@
 - ingest / auto_hooks 消费 `TagConfig`（`deprecated_tags` 拦截、
   `max_new_tags_per_ingest` 限流）。
 - `stale_days` / `auto_cleanup` 接入 maintenance 命令。
+
+---
+
+## 2026-04-21 · Phase 6a + 6b + entry-type flag
+
+### 背景
+
+合并 monorepo 后的架构清理。三个独立批次按「先框架后功能」的顺序推进：
+
+- **批次 A (6a)**：wiki-cli 的 10 个 `mempalace_*` MCP 工具直连 `rust-mempalace`，
+  绕过了 `wiki-mempalace-bridge` 的抽象层。需要统一到 bridge。
+- **批次 B (6b)**：`rust-mempalace` 使用 `edition = "2024"`，workspace 其余 crate 用
+  `edition = "2021"`。统一到 workspace edition 消除不一致。
+- **批次 C**：CLI 产出的 `WikiPage` 缺少 `entry_type` 绑定，导致
+  `check_page_completeness` lint 无法触发。
+
+### 实现了哪些功能
+
+**批次 A — bridge 抽象化 mempalace 工具**
+
+1. 新增 `crates/wiki-mempalace-bridge/src/tools.rs`：`MempalaceTools` trait
+   （10 个方法，统一返回 `Result<Value, MempalaceError>`）+ `NoopMempalaceTools`
+   空实现 + `make_tools()` 工厂函数。
+2. 新增 `crates/wiki-mempalace-bridge/src/live_tools.rs`（`feature = "live"`）：
+   `LiveMempalaceTools` 持有 palace 连接和配置，把原 wiki-cli mcp.rs 中
+   `call_mempalace_tool` 的全部逻辑原样搬入，JSON 输出结构不变。
+3. 重写 wiki-cli `call_mempalace_tool`：改为调 `wiki_mempalace_bridge::make_tools()`
+   dispatch 到 trait 方法。
+4. 删除 `crates/wiki-cli/Cargo.toml` 对 `rust-mempalace` 的直接 path 依赖。
+   现在 wiki-cli 只认识 bridge，依赖链：`wiki-cli -> bridge -> rust-mempalace`。
+
+**批次 B — edition 统一**
+
+1. `crates/rust-mempalace/Cargo.toml` 的 `edition = "2024"` 改为 `edition.workspace = true`，
+   同步加 `license.workspace = true`。
+2. 编译零错误（无 2024-only 语法），仅 `cargo fmt` 产生 import 排序和 if-else 风格差异。
+
+**批次 C — --entry-type flag**
+
+1. `Cmd::IngestLlm` 和 `Cmd::Query` 新增 `--entry-type <VALUE>` 可选参数。
+2. 新增 `parse_entry_type_opt()` helper：调用 `EntryType::parse()` strict 解析，
+   不存在的值直接报错退出。
+3. `IngestLlm` 的 summary page 和 `query_to_page` 都通过 `with_entry_type()` 绑定。
+4. 新增 `crates/wiki-cli/tests/entry_type_flag.rs` 集成测试 3 个：
+   - `query --write-page --entry-type concept` → lint 报 `page.incomplete`
+   - `--entry-type nonexistent_type` → 报错退出
+   - 不带 `--entry-type` → lint 不报 `page.incomplete`
+
+### 遇到了哪些错误
+
+1. **`Connection::path()` 返回 `Option<&str>` 而非 `Option<&Path>`**：
+   `live_tools.rs` 的 `wake_up` 方法中，误用 `p.parent()` 导致编译失败。
+   修复：先 `Path::new(p)` 再 `.parent()`。
+2. **edition 2024→2021 的 rustfmt 差异**：import 分组排序、if-else 单行展开等。
+   修复：`cargo fmt --all` 一次搞定。
+3. **集成测试 binary 路径计算错误**：手动拼 `target/debug/wiki-cli` 路径不对。
+   修复：使用 `CARGO_BIN_EXE_wiki-cli` 环境变量。
+4. **EntryType 错误消息含中文"未知"**：测试断言写的是英文 `unknown`。
+   修复：断言加上中文 `未知` 关键词。
+
+### 是如何解决这些错误的
+
+每批次独立 commit + push，8 轮分阶段测试确保问题早暴露。
+
+### 验证
+
+- `cargo fmt --all -- --check`：干净
+- `cargo test --workspace`：**62 个测试全绿**
+  - wiki-cli: 4（1 单测 + 3 新增集成测试）
+  - wiki-core: 23 + schema_json: 3
+  - wiki-kernel: 9
+  - wiki-mempalace-bridge: 12（10 新增 Noop 工具单测 + 2 原有）
+  - rust-mempalace + e2e_core: 9
+  - wiki-storage: 2
+- `scripts/e2e.sh`：**E2E PASS**
+- MCP smoke：`tools/list` 返回 22 个工具不变，`mempalace_status` / `mempalace_kg_stats` 正常。
+
+### 提交记录
+
+1. `refactor(bridge): route wiki-cli mempalace_* tools through MempalaceTools trait`
+2. `chore(rust-mempalace): unify edition to workspace (2021) + fmt`
+3. `feat(cli): --entry-type flag on ingest-llm and query --write-page`（本批次）
