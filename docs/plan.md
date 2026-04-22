@@ -59,10 +59,21 @@
 - Schema T0 + T1 闭环（status / promote / stale / cleanup / validate）。
 - 62 个测试全绿，E2E 脚本通过。
 
+## M6: 未编译 source 批处理 LLM 编译 ✅
+
+- `wiki-cli batch-ingest`：扫描 vault 中 `compiled_to_wiki: false` 且正文非空的 source，逐条等价于 `ingest-llm` 落库，成功后将对应 Markdown 的 `compiled_to_wiki` 写为 `true`；支持 `--dry-run`、`--limit`、`--delay-secs`。
+- `wiki-core`：LLM 返回的 `claims` 可兼容纯字符串数组；ingest 路径对非常规 `tier` 回退为 `semantic`；对 schema 不接受的 entity/relationship 单条跳过，不阻断整篇。
+
+验收标准（已达成）：
+
+- 有正文的未编译条目共处理完毕，仅剩正文过短无法编译的 1 条仍保持 `false`。
+- 出现上游偶发 `content: null` 时可通过重试同命令消化剩余条目。
+
 ## 后续（未开始）
 
-- 266 条孤儿 source 审计
+- ~~266 条孤儿 source 审计~~（已完成：审计 + A 类补链 + B2/C 未编译标记）
 - 日期字段转 ISO 8601
 - `www.notion.so/*` 未解析内链处理
 - Memory Palace bridge 接入（mempalace 消费迁移产物）
 - T2 标签治理
+

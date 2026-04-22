@@ -55,6 +55,11 @@ cargo run -p wiki-cli -- \
   ingest "file:///notes/a.md" "项目使用 Redis 作缓存" \
   --scope private:cli
 
+# 1b) 扫描 vault 中 `compiled_to_wiki: false` 的 source，逐条走 LLM 抽取 + 落库，成功后写回 frontmatter
+#     （数据目录为 Obsidian 根，需与 --wiki-dir 一致时加 --sync-wiki 以投影新页面）
+cargo run -p wiki-cli -- --db wiki.db --wiki-dir ~/Documents/wiki --sync-wiki \
+  batch-ingest --vault ~/Documents/wiki --delay-secs 1
+
 # 2) query 混合三路（BM25 + 向量 + 图）
 cargo run -p wiki-cli -- --db wiki.db query "Redis 缓存"
 
@@ -124,3 +129,4 @@ Agent 或 CLI 使用者请优先阅读 [AGENTS.md](AGENTS.md)，其中定义了 
 ## 许可
 
 `MIT OR Apache-2.0`
+
