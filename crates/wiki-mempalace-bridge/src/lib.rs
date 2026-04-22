@@ -316,11 +316,7 @@ mod tests {
         fn on_claim_superseded(&self, _o: ClaimId, _n: ClaimId) -> Result<(), MempalaceError> {
             Ok(())
         }
-        fn on_source_linked(
-            &self,
-            _s: SourceId,
-            _c: ClaimId,
-        ) -> Result<(), MempalaceError> {
+        fn on_source_linked(&self, _s: SourceId, _c: ClaimId) -> Result<(), MempalaceError> {
             Ok(())
         }
         fn scope_filter(&self, scope: &Scope) -> bool {
