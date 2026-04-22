@@ -253,8 +253,7 @@ fn run_with_engine(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                 repo.upsert_embedding(&format!("source:{}", sid.0), &vec)?;
             }
             for c in &plan.claims {
-                let tier = parse_memory_tier(&c.tier)
-                    .unwrap_or(MemoryTier::Semantic);
+                let tier = parse_memory_tier(&c.tier).unwrap_or(MemoryTier::Semantic);
                 let cid = eng.file_claim(c.text.clone(), sc.clone(), tier, "cli");
                 eng.attach_sources(cid, &[sid])?;
                 eng.save_to_repo(&repo)?;
@@ -932,8 +931,8 @@ fn ingest_one_source(
     let user = format!("Source URI:\n{uri}\n\nBody:\n{body}");
     let reply = llm::complete_chat(cfg, llm::ingest_llm_system_prompt(), &user, 8192)?;
     let slice = llm::parse_json_object_slice(&reply);
-    let plan: LlmIngestPlanV1 = serde_json::from_str(slice)
-        .map_err(|e| format!("JSON parse error: {e}; raw={reply}"))?;
+    let plan: LlmIngestPlanV1 =
+        serde_json::from_str(slice).map_err(|e| format!("JSON parse error: {e}; raw={reply}"))?;
 
     let sid = eng.ingest_raw(uri, body, scope.clone(), "batch-ingest");
     eng.save_to_repo(repo)?;
@@ -947,8 +946,7 @@ fn ingest_one_source(
     }
 
     for c in &plan.claims {
-        let tier = parse_memory_tier(&c.tier)
-            .unwrap_or(MemoryTier::Semantic);
+        let tier = parse_memory_tier(&c.tier).unwrap_or(MemoryTier::Semantic);
         let cid = eng.file_claim(c.text.clone(), scope.clone(), tier, "batch-ingest");
         eng.attach_sources(cid, &[sid])?;
         eng.save_to_repo(repo)?;
@@ -1064,8 +1062,7 @@ fn batch_ingest_cmd(
 
     let cfg = llm::load_llm_config(&cli.llm_config)?;
     let scope = parse_scope("private:batch-ingest");
-    let _et = EntryType::parse(entry_type)
-        .map_err(|e| format!("无效 entry_type: {e}"))?;
+    let _et = EntryType::parse(entry_type).map_err(|e| format!("无效 entry_type: {e}"))?;
 
     let mut ok_count = 0usize;
     let mut err_count = 0usize;
