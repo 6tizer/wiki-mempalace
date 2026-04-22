@@ -42,11 +42,9 @@ wiki-mempalace/
     ├── wiki-storage/          # SQLite 持久化
     ├── wiki-cli/              # 统一 CLI + MCP Server（22 工具）
     ├── wiki-mempalace-bridge/ # 事件桥 + 搜索 ports（live feature 连 palace）
+    ├── wiki-migration-notion/ # Notion Export → 本地 Obsidian vault 一次性迁移工具（含 audit-orphans / fix-orphans）
     └── rust-mempalace/        # 记忆宫殿（lib + bin）；保留独立 README 与 e2e 测试
 ```
-
-> Notion → 本地 vault 的一次性迁移工具 `wiki-migration-notion` 不在本仓库中，位于姊妹仓
-> `../llm-wiki/crates/wiki-migration-notion/`（合并前的原始仓库，迁移工作完成后不再同步）。
 
 ## 快速开始
 

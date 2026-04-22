@@ -2087,6 +2087,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "wiki-migration-notion"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "percent-encoding",
+ "regex",
+ "serde",
+ "serde_json",
+ "walkdir",
+ "wiki-core",
+]
+
+[[package]]
 name = "wiki-storage"
 version = "0.1.0"
 dependencies = [

@@ -1,0 +1,22 @@
+[package]
+name = "wiki-migration-notion"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+# 命令行参数解析
+clap = { version = "4", features = ["derive"] }
+# 一次性迁移工具用 anyhow 足够，不需要精细 error 类型
+anyhow = "1"
+# 递归扫描导出目录
+walkdir = "2"
+# 属性块 / 链接 / 文件名 UUID 提取
+regex = "1"
+# serde 用于输出 JSONL 报告
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# 复用 EntryType / EntryStatus，包括中文解析
+wiki-core = { path = "../wiki-core" }
+# Percent-decode Notion 导出的 URL 编码路径
+percent-encoding = "2"

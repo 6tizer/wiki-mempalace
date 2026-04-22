@@ -42,7 +42,7 @@
 
 ## M4: Notion 数据迁移 ✅
 
-- 离线 Rust parser（`wiki-migration-notion` crate，位于姊妹仓 `../llm-wiki/crates/wiki-migration-notion/`）处理 Notion Export ZIP。
+- 离线 Rust parser（`wiki-migration-notion` crate）处理 Notion Export ZIP。
 - 三个 Notion DB 全量迁移：知识 Wiki（3377）+ X书签（674）+ 微信（426）= 4477 条。
 - 内部边 12804（99.6% 解析），外部边 4313（Wiki→Source），伪 URL 清洗 1072。
 - 落盘到 `~/Documents/wiki/`，Obsidian 验证通过。
