@@ -1034,7 +1034,7 @@ fn batch_ingest_cmd(
     dry_run: bool,
     entry_type: &str,
     delay_secs: u64,
-    sync_wiki: bool,
+    _sync_wiki: bool,
     wiki_root: Option<&std::path::Path>,
     schema: &DomainSchema,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -1114,8 +1114,10 @@ fn batch_ingest_cmd(
         }
     }
 
-    // 最终投影
-    maybe_sync_projection(sync_wiki, wiki_root, eng)?;
+    // 最终投影：只要指定了 wiki_dir 就投影（编译完不投影等于没完成）
+    if wiki_root.is_some() {
+        maybe_sync_projection(true, wiki_root, eng)?;
+    }
 
     eprintln!("\n完成：成功={ok_count} 失败={err_count}");
     Ok(())

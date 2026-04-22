@@ -293,7 +293,14 @@ fn slugify(title: &str, fallback: &str) -> String {
 fn preview_text(body: &str, max_len: usize) -> String {
     let mut s = body.to_string();
     if s.len() > max_len {
-        s.truncate(max_len);
+        // 字符安全截断：找到 <= max_len 的最大字符边界
+        let boundary = s
+            .char_indices()
+            .take_while(|(byte_idx, _)| *byte_idx < max_len)
+            .last()
+            .map(|(byte_idx, c)| byte_idx + c.len_utf8())
+            .unwrap_or(0);
+        s.truncate(boundary);
         s.push_str("\n\n...truncated...");
     }
     s
