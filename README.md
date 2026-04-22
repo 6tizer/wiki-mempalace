@@ -24,7 +24,9 @@ wiki-mempalace/
 ├── DomainSchema.json          # 知识 Schema 实例（v1.0）
 ├── AGENTS.md                  # Agent 工作流规范
 ├── Progress.md                # 开发日志
-├── scripts/e2e.sh             # 端到端回归脚本
+├── scripts/
+│   ├── e2e.sh                 # 端到端回归脚本
+│   └── backup.sh              # Dogfood 备份脚本（D4）
 ├── docs/
 │   ├── vault-standards.md     # Vault 目录/命名/frontmatter/正文骨架唯一标准
 │   ├── architecture.md        # 架构图 + 业务流转
@@ -56,6 +58,11 @@ cargo build --workspace --release
 
 ### 最小冒烟
 
+> **参数位置约定**：`--db` / `--wiki-dir` / `--sync-wiki` / `--viewer-scope` /
+> `--vectors` / `--llm-config` / `--schema` / `--graph-extras-file` 都是**顶层 global**
+> 参数，必须放在子命令**之前**。所有写入类子命令在完成后会自动持久化并 flush outbox，
+> 无需手动调用 `save_snapshot` / `flush_outbox`。
+
 ```bash
 # 1) ingest 一条原文（脱敏 + 落 SQLite + 投影 Markdown）
 cargo run -p wiki-cli -- \
@@ -63,8 +70,7 @@ cargo run -p wiki-cli -- \
   ingest "file:///notes/a.md" "项目使用 Redis 作缓存" \
   --scope private:cli
 
-# 1b) 扫描 vault 中 `compiled_to_wiki: false` 的 source，逐条走 LLM 抽取 + 落库，成功后写回 frontmatter
-#     （数据目录为 Obsidian 根，需与 --wiki-dir 一致时加 --sync-wiki 以投影新页面）
+# 1b) 扫描 vault 中 `compiled_to_wiki: false` 的 source，逐条走 LLM 抽取 + 落库
 cargo run -p wiki-cli -- --db wiki.db --wiki-dir ~/Documents/wiki --sync-wiki \
   batch-ingest --vault ~/Documents/wiki --delay-secs 1
 
@@ -74,9 +80,34 @@ cargo run -p wiki-cli -- --db wiki.db query "Redis 缓存"
 # 3) lint 基线检查（完整度 + 孤儿页 + claim 过期）
 cargo run -p wiki-cli -- --db wiki.db --wiki-dir wiki --sync-wiki lint
 
-# 4) 启动统一 MCP Server（stdio JSON-RPC）
+# 4) Claim 生命周期：录入 → supersede → 手动 promote
+cargo run -p wiki-cli -- --db wiki.db \
+  file-claim "项目使用 Redis" --scope private:cli --tier semantic
+cargo run -p wiki-cli -- --db wiki.db \
+  supersede-claim <old_claim_id> "项目改用 DragonflyDB" --scope private:cli --tier semantic
+cargo run -p wiki-cli -- --db wiki.db promote <claim_id>
+
+# 5) 页面生命周期推进（Draft → InReview → Approved）
+cargo run -p wiki-cli -- --db wiki.db promote-page <page_id>            # 自动下一跳
+cargo run -p wiki-cli -- --db wiki.db promote-page <page_id> --to Approved --force
+
+# 6) 维护类：置信度衰减 + lint + 批量 promote
+cargo run -p wiki-cli -- --db wiki.db --wiki-dir wiki --sync-wiki maintenance
+
+# 7) 会话结晶为一张页面
+cargo run -p wiki-cli -- --db wiki.db \
+  crystallize "如何选型向量库？" \
+  --finding "pgvector 足够" --file "docs/plan.md" --lesson "先量后换"
+
+# 8) Schema 快速校验（不需要 DB）
+cargo run -p wiki-cli -- schema-validate DomainSchema.json
+
+# 9) 启动统一 MCP Server（stdio JSON-RPC）
 cargo run -p wiki-cli -- --db wiki.db mcp --palace ~/.mempalace-rs
 ```
+
+完整子命令列表见 [AGENTS.md](AGENTS.md)（含 `ingest-llm`、`export-outbox-ndjson[-from]`、
+`ack-outbox`、`consume-to-mempalace`、`llm-smoke` 等）。
 
 ### 端到端回归
 
@@ -105,7 +136,7 @@ cargo test -p rust-mempalace --test e2e_core
 wiki-cli (binary)
   └─ MCP Server（22 tools）
        ├─ wiki_*  (12) → wiki-kernel → wiki-core / wiki-storage
-       └─ mempalace_* (10) → rust-mempalace::service  [Phase 6 归一走 bridge]
+       └─ mempalace_* (10) → wiki-mempalace-bridge → rust-mempalace::service
 
 wiki-kernel emit WikiEvent → outbox → wiki-mempalace-bridge (live) → rust-mempalace
                                                                           │

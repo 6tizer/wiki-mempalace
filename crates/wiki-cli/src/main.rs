@@ -62,8 +62,9 @@ enum Cmd {
         scope: String,
         #[arg(long, default_value_t = false)]
         dry_run: bool,
-        /// 为自动生成的 summary page 绑定 EntryType（如 concept、entity、qa）。
-        #[arg(long)]
+        /// 已废弃：自 M7 起 ingest-llm 产出的 summary page 固定为 `EntryType::Summary`，
+        /// 传入此参数会打印一条 stderr 警告后被忽略。保留仅为避免旧脚本报 unknown argument。
+        #[arg(long, hide = true)]
         entry_type: Option<String>,
     },
     FileClaim {
@@ -227,8 +228,14 @@ fn run_with_engine(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             body,
             scope,
             dry_run,
-            entry_type: _entry_type,
+            entry_type,
         } => {
+            if entry_type.is_some() {
+                eprintln!(
+                    "warning: --entry-type on `ingest-llm` is deprecated since M7 and is ignored; \
+                     all ingest-llm summary pages are fixed to EntryType::Summary."
+                );
+            }
             let cfg = llm::load_llm_config(&cli.llm_config)?;
             let user = format!("Source URI:\n{uri}\n\nBody:\n{body}");
             let reply = llm::complete_chat(&cfg, llm::ingest_llm_system_prompt(), &user, 8192)?;
