@@ -503,3 +503,47 @@ mempalace consume=4 → llm-smoke skip → viewer-scope 隔离验证）。
 - migrate 落盘后文件数验证：4477 个 `.md` 文件全部存在
 - Obsidian 打开 vault：frontmatter 正确、内部链接可点击、搜索正常
 - Git commit：`2d0e9d8`（llm-wiki 仓库）
+
+---
+
+## 2026-04-22 · 孤儿 Source 审计
+
+### 背景
+
+迁移完成后，266 条 source（256 微信 + 10 X书签）被标记为 `orphan: true`，即没有任何 Wiki 页面通过链接引用它们。其中 257 条在 Notion 里标了 `已编译到Wiki=Yes`。需要审计根因并分类处理。
+
+### 实现了哪些功能
+
+1. **`wiki-migration-notion` 新增 `audit-orphans` 子命令**：
+   - `audit.rs` 模块：扫描 vault 目录提取孤儿元数据、Wiki 页正文、标题模糊匹配、A/B/C 分类
+   - 标题匹配算法：生成多个搜索模式（完整标题 / 去标点核心子串 / 前 15 字符），在 3376 个 Wiki 页正文中搜索
+   - 分三类：A（标题匹配到→需补链接）、B（已编译未匹配→疑似标记错误）、C（未编译→正常孤儿）
+   - 输出 Markdown 报告 + 结构化 JSON
+
+### 审计结果
+
+| 分类 | 数量 | 含义 |
+| --- | --- | --- |
+| A. 标题匹配到 | **173** | Wiki 正文确实提到了，但用纯文本无链接 |
+| B. 已编译未匹配 | **84** | Notion 标记已编译但找不到引用 |
+| C. 未编译 | **9** | 从未编译，正常孤儿 |
+
+**A 类细分**：
+- 117 条在 concept/entity/synthesis 页面中被引用 → 真正需要补链接
+- 56 条仅在 summary/lint-report 中匹配 → summary 本身是 source 的编译结果，关系已隐式存在
+- 161 条 summary 匹配主要是 H1 标题包含（`摘要：{source标题}`），属于"自引用"
+
+**微信是重灾区**：256/266（96%），X 仅 10 条。微信文章多被纯文本 `《标题》` 引用，无 URL 可匹配。
+
+### 遇到了哪些错误
+
+1. **UTF-8 字符边界 panic**：截取上下文时用字节偏移 `body[start..end]`，中文字符占 3 字节，切片落在字符中间。修复为 `.chars().skip().take()` 确保字符边界安全。
+
+### 是如何解决这些错误的
+
+1. 将字节偏移改为字符偏移：`body.chars().skip(char_start).take(char_end - char_start).collect()`。
+
+### 验证
+
+- `cargo test -p wiki-migration-notion`：19 个单测全绿（含 4 个新增 audit 测试）
+- 审计报告 + JSON 已落盘到 `~/Documents/wiki/.wiki/orphan-audit-report.md`
