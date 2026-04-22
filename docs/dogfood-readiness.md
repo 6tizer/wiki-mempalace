@@ -220,11 +220,10 @@ X书签 (674) + 微信 (426) = 1100 条 source
 
 ### 未完成项（后续可接续）
 
-- **266 条孤儿 source 审计** — ✅ 已完成（2026-04-22），见 `~/Documents/wiki/.wiki/orphan-audit-report.md`
-  - A 类（标题匹配到）：173 条，其中 117 条在 concept/entity/synthesis 页面中被纯文本引用
-  - B 类（已编译未匹配）：84 条，Notion 标记可能不准
-  - C 类（未编译）：9 条，正常
-  - **待决策**：是否对 A 类 117 条自动补链接
+- **266 条孤儿 source 审计** — ✅ 已完成（2026-04-22）
+  - A 类 117 条在 concept/entity/synthesis 页面中被纯文本引用 — ✅ 已自动补链接（72 页面 + 88 条链接）
+  - B 类 84 条 Notion 标记可能不准 — 待人工确认
+  - C 类 9 条未编译 — 正常
 - **日期字段转 ISO 8601**（目前 `2026年4月11日 08:58` 逐字透传）
 - *2002 条 `www.notion.so/` 未解析内链**（指向三库之外的 Notion 页面）
 - **Memory Palace bridge 接入**：让本地 wiki 变成 mempalace 数据源
