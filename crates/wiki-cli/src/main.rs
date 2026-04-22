@@ -831,6 +831,10 @@ struct IngestOneStats {
     entities: usize,
     relationships: usize,
     source_id: String,
+    /// LLM 生成的 summary 标题
+    summary_title: String,
+    /// LLM 生成的 summary 正文
+    summary_markdown: String,
 }
 
 /// 扫描 vault/sources/ 中 compiled_to_wiki: false 的 source 文件
@@ -1021,7 +1025,44 @@ fn ingest_one_source(
         entities: plan.entities.len(),
         relationships: plan.relationships.len(),
         source_id: sid.0.to_string(),
+        summary_title: plan.summary_title.clone(),
+        summary_markdown: plan.summary_markdown.clone(),
     })
+}
+
+/// 以 Notion 迁移兼容格式写 summary 页到 pages/summary/
+fn write_batch_summary(
+    wiki_root: &std::path::Path,
+    source_title: &str,
+    summary_markdown: &str,
+    source_url: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let summary_dir = wiki_root.join("pages").join("summary");
+    std::fs::create_dir_all(&summary_dir)?;
+
+    // 文件名：与 Notion 迁移一致，使用「摘要：{标题}.md」
+    let filename = format!("摘要：{}.md", source_title.replace('/', "-"));
+    let path = summary_dir.join(&filename);
+
+    let now = time::OffsetDateTime::now_utc();
+    let date_str = now.format(&time::format_description::well_known::Rfc3339)?;
+
+    // frontmatter：与 Notion 迁移产出一致
+    let content = format!(
+        "---\n\
+         title: \"摘要：{source_title}\"\n\
+         entry_type: summary\n\
+         status: approved\n\
+         compiled_by: batch-ingest\n\
+         source_url: \"{source_url}\"\n\
+         updated_at: \"{date_str}\"\n\
+         ---\n\n\
+         # 摘要：{source_title}\n\n\
+         {summary_markdown}\n"
+    );
+
+    std::fs::write(&path, content)?;
+    Ok(())
 }
 
 /// batch-ingest 子命令入口
@@ -1100,6 +1141,17 @@ fn batch_ingest_cmd(
                 if new_content != content {
                     std::fs::write(&src.path, new_content)?;
                 }
+
+                // 以 Notion 兼容格式写 summary 页到 pages/summary/
+                if wiki_root.is_some() && !stats.summary_markdown.trim().is_empty() {
+                    write_batch_summary(
+                        wiki_root.unwrap(),
+                        &src.title,
+                        &stats.summary_markdown,
+                        &src.url,
+                    )?;
+                }
+
                 ok_count += 1;
             }
             Err(e) => {
@@ -1112,11 +1164,6 @@ fn batch_ingest_cmd(
         if i + 1 < sources.len() && delay_secs > 0 {
             std::thread::sleep(std::time::Duration::from_secs(delay_secs));
         }
-    }
-
-    // 最终投影：只要指定了 wiki_dir 就投影（编译完不投影等于没完成）
-    if wiki_root.is_some() {
-        maybe_sync_projection(true, wiki_root, eng)?;
     }
 
     eprintln!("\n完成：成功={ok_count} 失败={err_count}");
