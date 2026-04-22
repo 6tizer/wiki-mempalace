@@ -156,6 +156,24 @@ enum Cmd {
     },
     /// Run batch maintenance: confidence decay, lint, promote qualified claims.
     Maintenance,
+    /// 批量编译 vault 中 compiled_to_wiki: false 的 source 文件（调用 LLM 抽取后写入引擎）
+    BatchIngest {
+        /// vault 根目录（含 sources/）
+        #[arg(long, default_value = "/Users/mac-mini/Documents/wiki")]
+        vault: PathBuf,
+        /// 限制处理条数（用于测试）
+        #[arg(long)]
+        limit: Option<usize>,
+        /// 只扫描不编译，输出待处理列表
+        #[arg(long, default_value_t = false)]
+        dry_run: bool,
+        /// 编译后 entry_type（默认 concept）
+        #[arg(long, default_value = "concept")]
+        entry_type: String,
+        /// 每条之间休眠秒数（避免 LLM 限流）
+        #[arg(long, default_value_t = 1)]
+        delay_secs: u64,
+    },
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -236,7 +254,7 @@ fn run_with_engine(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             }
             for c in &plan.claims {
                 let tier = parse_memory_tier(&c.tier)
-                    .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
+                    .unwrap_or(MemoryTier::Semantic);
                 let cid = eng.file_claim(c.text.clone(), sc.clone(), tier, "cli");
                 eng.attach_sources(cid, &[sid])?;
                 eng.save_to_repo(&repo)?;
@@ -255,7 +273,7 @@ fn run_with_engine(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                     label: ed.label.clone(),
                     scope: sc.clone(),
                 };
-                eng.add_entity(entity)?;
+                let _ = eng.add_entity(entity);
             }
             for rd in &plan.relationships {
                 let from_id = eng
@@ -279,7 +297,7 @@ fn run_with_engine(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                         confidence: 0.7,
                         source_ids: vec![sid],
                     };
-                    eng.add_edge(edge)?;
+                    let _ = eng.add_edge(edge);
                 }
             }
             eng.save_to_repo(&repo)?;
@@ -557,6 +575,27 @@ fn run_with_engine(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                 findings.len()
             );
         }
+        Cmd::BatchIngest {
+            ref vault,
+            limit,
+            dry_run,
+            ref entry_type,
+            delay_secs,
+        } => {
+            batch_ingest_cmd(
+                &mut eng,
+                &repo,
+                &cli,
+                &vault,
+                limit,
+                dry_run,
+                entry_type,
+                delay_secs,
+                sync_wiki,
+                wiki_root.as_deref(),
+                &schema,
+            )?;
+        }
         // SchemaValidate 已在 main() 中短路，此处不可达
         Cmd::SchemaValidate { .. } => unreachable!(),
     }
@@ -775,4 +814,312 @@ impl MempalaceWikiSink for CliMempalaceSink {
         println!("mempalace source_ingested {}", source_id.0);
         Ok(())
     }
+}
+
+// ── batch-ingest 相关 ──
+
+/// 一条 source 的扫描结果
+struct SourceEntry {
+    path: PathBuf,
+    title: String,
+    url: String,
+    body: String,
+}
+
+/// 单条 source 编译结果
+struct IngestOneStats {
+    claims: usize,
+    entities: usize,
+    relationships: usize,
+    source_id: String,
+}
+
+/// 扫描 vault/sources/ 中 compiled_to_wiki: false 的 source 文件
+fn scan_uncompiled_sources(
+    vault: &std::path::Path,
+) -> Result<Vec<SourceEntry>, Box<dyn std::error::Error>> {
+    let sources_dir = vault.join("sources");
+    if !sources_dir.exists() {
+        return Err(format!("sources 目录不存在：{}", sources_dir.display()).into());
+    }
+    let re_fm = regex::Regex::new(r"(?s)^---\s*\n(.*?)\n---\s*\n")?;
+    let mut entries = Vec::new();
+
+    for dent in walkdir::WalkDir::new(&sources_dir)
+        .into_iter()
+        .filter_map(|e| e.ok())
+    {
+        let path = dent.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("md") {
+            continue;
+        }
+        let content = std::fs::read_to_string(path)?;
+        let fm_caps = re_fm.captures(&content);
+        let fm_text = fm_caps
+            .as_ref()
+            .and_then(|c| c.get(1))
+            .map(|m| m.as_str())
+            .unwrap_or("");
+        let fm = parse_frontmatter_kv(fm_text);
+
+        if fm.get("compiled_to_wiki").map(|v| v.as_str()) != Some("false") {
+            continue;
+        }
+
+        let title = fm.get("title").cloned().unwrap_or_default();
+        let url = fm.get("url").cloned().unwrap_or_default();
+
+        let body = if let Some(caps) = fm_caps {
+            let fm_end = caps.get(0).unwrap().end();
+            content[fm_end..].trim().to_string()
+        } else {
+            content.trim().to_string()
+        };
+
+        if body.len() < 50 {
+            eprintln!("  跳过（正文过短）：{}", title);
+            continue;
+        }
+
+        entries.push(SourceEntry {
+            path: path.to_path_buf(),
+            title,
+            url,
+            body,
+        });
+    }
+
+    entries.sort_by(|a, b| a.title.cmp(&b.title));
+    Ok(entries)
+}
+
+/// 简易 YAML frontmatter key: value 解析
+fn parse_frontmatter_kv(text: &str) -> std::collections::HashMap<String, String> {
+    let mut map = std::collections::HashMap::new();
+    for line in text.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        if let Some((key, val)) = line.split_once(':') {
+            let key = key.trim().to_string();
+            let val = val.trim().to_string();
+            let val = val
+                .strip_prefix('"')
+                .and_then(|v| v.strip_suffix('"'))
+                .unwrap_or(&val)
+                .to_string();
+            if !key.is_empty() {
+                map.insert(key, val);
+            }
+        }
+    }
+    map
+}
+
+/// 编译单条 source：LLM 抽取 + 写入引擎
+fn ingest_one_source(
+    eng: &mut LlmWikiEngine<NoopWikiHook>,
+    repo: &SqliteRepository,
+    cfg: &llm::LlmConfig,
+    uri: &str,
+    body: &str,
+    scope: &Scope,
+    vectors: bool,
+    llm_config_path: &std::path::Path,
+    schema: &DomainSchema,
+) -> Result<IngestOneStats, Box<dyn std::error::Error>> {
+    let user = format!("Source URI:\n{uri}\n\nBody:\n{body}");
+    let reply = llm::complete_chat(cfg, llm::ingest_llm_system_prompt(), &user, 8192)?;
+    let slice = llm::parse_json_object_slice(&reply);
+    let plan: LlmIngestPlanV1 = serde_json::from_str(slice)
+        .map_err(|e| format!("JSON parse error: {e}; raw={reply}"))?;
+
+    let sid = eng.ingest_raw(uri, body, scope.clone(), "batch-ingest");
+    eng.save_to_repo(repo)?;
+    eng.flush_outbox_to_repo_with_policy(repo, 128, 3)?;
+
+    if vectors {
+        let app = llm::load_app_config(llm_config_path)?;
+        let body_short = truncate_chars(body, 16000);
+        let vec = llm::embed_first(&app, &body_short)?;
+        repo.upsert_embedding(&format!("source:{}", sid.0), &vec)?;
+    }
+
+    for c in &plan.claims {
+        let tier = parse_memory_tier(&c.tier)
+            .unwrap_or(MemoryTier::Semantic);
+        let cid = eng.file_claim(c.text.clone(), scope.clone(), tier, "batch-ingest");
+        eng.attach_sources(cid, &[sid])?;
+        eng.save_to_repo(repo)?;
+        eng.flush_outbox_to_repo_with_policy(repo, 128, 3)?;
+        if vectors {
+            let app = llm::load_app_config(llm_config_path)?;
+            let vec = llm::embed_first(&app, &c.text)?;
+            repo.upsert_embedding(&format_claim_doc_id(cid), &vec)?;
+        }
+    }
+
+    for ed in &plan.entities {
+        let kind = EntityKind::parse(&ed.kind);
+        let entity = Entity {
+            id: EntityId(uuid::Uuid::new_v4()),
+            kind,
+            label: ed.label.clone(),
+            scope: scope.clone(),
+        };
+        // schema 可能拒绝不在白名单的 kind，跳过即可
+        let _ = eng.add_entity(entity);
+    }
+
+    for rd in &plan.relationships {
+        let from_id = eng
+            .store
+            .entities
+            .values()
+            .find(|e| e.label.eq_ignore_ascii_case(&rd.from_label))
+            .map(|e| e.id);
+        let to_id = eng
+            .store
+            .entities
+            .values()
+            .find(|e| e.label.eq_ignore_ascii_case(&rd.to_label))
+            .map(|e| e.id);
+        if let (Some(from), Some(to)) = (from_id, to_id) {
+            let rel = RelationKind::parse(&rd.relation);
+            let edge = TypedEdge {
+                from,
+                to,
+                relation: rel,
+                confidence: 0.7,
+                source_ids: vec![sid],
+            };
+            // schema 可能拒绝不在白名单的 relation，跳过即可
+            let _ = eng.add_edge(edge);
+        }
+    }
+    eng.save_to_repo(repo)?;
+    eng.flush_outbox_to_repo_with_policy(repo, 128, 3)?;
+
+    // summary page：绑定 entry_type + status
+    if !plan.summary_markdown.trim().is_empty() {
+        let title = if plan.summary_title.trim().is_empty() {
+            "ingest-summary".to_string()
+        } else {
+            plan.summary_title.trim().to_string()
+        };
+        let et = EntryType::Concept;
+        let status = initial_status_for(Some(&et), schema);
+        let page = WikiPage::new(title, plan.summary_markdown.clone(), scope.clone())
+            .with_entry_type(et)
+            .with_status(status);
+        eng.store.pages.insert(page.id, page);
+        eng.save_to_repo(repo)?;
+        eng.flush_outbox_to_repo_with_policy(repo, 128, 3)?;
+    }
+
+    Ok(IngestOneStats {
+        claims: plan.claims.len(),
+        entities: plan.entities.len(),
+        relationships: plan.relationships.len(),
+        source_id: sid.0.to_string(),
+    })
+}
+
+/// batch-ingest 子命令入口
+fn batch_ingest_cmd(
+    eng: &mut LlmWikiEngine<NoopWikiHook>,
+    repo: &SqliteRepository,
+    cli: &Cli,
+    vault: &std::path::Path,
+    limit: Option<usize>,
+    dry_run: bool,
+    entry_type: &str,
+    delay_secs: u64,
+    sync_wiki: bool,
+    wiki_root: Option<&std::path::Path>,
+    schema: &DomainSchema,
+) -> Result<(), Box<dyn std::error::Error>> {
+    eprintln!("扫描未编译 source...");
+    let mut sources = scan_uncompiled_sources(vault)?;
+    eprintln!("  → 找到 {} 条未编译 source", sources.len());
+
+    if let Some(n) = limit {
+        sources.truncate(n);
+        eprintln!("  → --limit {}，处理前 {} 条", n, sources.len());
+    }
+
+    if dry_run {
+        for (i, s) in sources.iter().enumerate() {
+            println!(
+                "{}/{}) {} ({} 字符)",
+                i + 1,
+                sources.len(),
+                s.title,
+                s.body.len()
+            );
+        }
+        return Ok(());
+    }
+
+    let cfg = llm::load_llm_config(&cli.llm_config)?;
+    let scope = parse_scope("private:batch-ingest");
+    let _et = EntryType::parse(entry_type)
+        .map_err(|e| format!("无效 entry_type: {e}"))?;
+
+    let mut ok_count = 0usize;
+    let mut err_count = 0usize;
+
+    for (i, src) in sources.iter().enumerate() {
+        let uri = if src.url.is_empty() {
+            format!("file://{}", src.path.display())
+        } else {
+            src.url.clone()
+        };
+
+        eprintln!("[{}/{}] {}...", i + 1, sources.len(), src.title);
+
+        match ingest_one_source(
+            eng,
+            repo,
+            &cfg,
+            &uri,
+            &src.body,
+            &scope,
+            cli.vectors,
+            &cli.llm_config,
+            schema,
+        ) {
+            Ok(stats) => {
+                eprintln!(
+                    "  ✓ claims={} entities={} rels={} source={}",
+                    stats.claims, stats.entities, stats.relationships, stats.source_id,
+                );
+
+                // 更新 source .md 的 compiled_to_wiki 标记
+                let content = std::fs::read_to_string(&src.path)?;
+                let new_content =
+                    content.replace("compiled_to_wiki: false", "compiled_to_wiki: true");
+                if new_content != content {
+                    std::fs::write(&src.path, new_content)?;
+                }
+                ok_count += 1;
+            }
+            Err(e) => {
+                eprintln!("  ✗ 失败：{e}");
+                err_count += 1;
+            }
+        }
+
+        // 限流
+        if i + 1 < sources.len() && delay_secs > 0 {
+            std::thread::sleep(std::time::Duration::from_secs(delay_secs));
+        }
+    }
+
+    // 最终投影
+    maybe_sync_projection(sync_wiki, wiki_root, eng)?;
+
+    eprintln!("\n完成：成功={ok_count} 失败={err_count}");
+    Ok(())
 }

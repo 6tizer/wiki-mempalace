@@ -16,6 +16,8 @@ wiki-kernel = { path = "../wiki-kernel" }
 wiki-mempalace-bridge = { path = "../wiki-mempalace-bridge", features = ["live"] }
 wiki-storage = { path = "../wiki-storage" }
 uuid = { version = "1", features = ["v4"] }
+walkdir = "2"
+regex = "1"
 
 [dev-dependencies]
 assert_cmd = "2"
