@@ -68,8 +68,15 @@ pub fn ingest_llm_system_prompt() -> &'static str {
 Reply with ONLY a single JSON object (no markdown fences), schema:
 {
   "version": 1,
-  "summary_title": "short title for a wiki page",
-  "summary_markdown": "markdown body for an overview page",
+  "summary_title": "short title for a wiki page (same language as source)",
+  "summary_markdown": "optional extra markdown; if one_sentence_summary is set, put supporting detail here",
+  "one_sentence_summary": "one sentence TL;DR in the source language",
+  "key_insights": [ "bullet-sized insight strings in the source language" ],
+  "confidence": "high|medium|low",
+  "tags": [ "short wiki tags in the source language" ],
+  "source_author": "author if identifiable in text, else null",
+  "source_publisher": "platform or publisher if identifiable, else null",
+  "source_published_at": "publication time if identifiable, else null",
   "claims": [ { "text": "atomic factual claim in the same language as the source", "tier": "semantic" } ],
   "entities": [ { "label": "EntityName", "kind": "library" } ],
   "relationships": [ { "from_label": "EntityA", "relation": "uses", "to_label": "EntityB" } ]
@@ -78,10 +85,13 @@ Rules:
 - "tier" must be one of: working, episodic, semantic, procedural
 - "kind" must be one of: person, project, library, concept, file_path, decision, other
 - "relation" must be one of: uses, depends_on, contradicts, caused, fixed, supersedes, related
-- claims: 0–12 items, each one short standalone sentence
+- claims: 0–12 items, each one short standalone sentence (these become "extracted concepts" in the vault)
 - entities: 0–10 items, extract named entities (people, projects, libraries, concepts, decisions)
 - relationships: 0–10 items, typed directed edges between entities
-- summary_markdown may be empty if not useful
+- key_insights: 0–8 items
+- tags: 0–12 items
+- confidence must be exactly one of: high, medium, low
+- Prefer filling one_sentence_summary + key_insights; use summary_markdown only when needed for nuance
 - Do not include keys other than those listed."#
 }
 

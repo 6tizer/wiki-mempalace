@@ -681,3 +681,122 @@ source 文件 frontmatter 中写回 `compiled_to_wiki: true`，并支持 dry-run
 - 本次将 `README.md`（`batch-ingest` 使用示例）与 `docs/plan.md`（M6 与后续列表）
   与本条 `Progress` 同步提交。
 
+
+---
+
+## 2026-04-22 — Vault 标准对齐与 batch-ingest 修复
+
+### 我们实现了哪些功能？
+
+- **Phase 0**：新建 [docs/vault-standards.md](docs/vault-standards.md)，把 Notion 迁移产出的目录/命名/frontmatter/正文骨架固化为 vault 唯一标准。
+- **Phase 1.1**：扩展 `LlmIngestPlanV1`，新增 `one_sentence_summary`、`key_insights`、`confidence`、`tags`、`source_author`、`source_publisher`、`source_published_at`；并提供 `to_five_section_summary_body()` 统一生成 5 段正文骨架。`ingest_llm_system_prompt` 同步更新。
+- **Phase 1.2**：重写 `write_batch_summary`，严格按 vault-standards 写 frontmatter（title/entry_type/status/confidence/source_url/source_tags/tags/created_at/updated_at/last_compiled_at/compiled_by）+ 5 段正文；`source_url`/`source_tags`/`created_at` 从 source frontmatter 回填。
+- **Phase 1.3**：`ingest_one_source` 中硬编码 `EntryType::Concept` 已改为 `EntryType::Summary`；`batch_ingest_cmd` 的 `--entry-type` 参数与未用的 `_et` 已删除；CLI `ingest-llm` 与 MCP `wiki_ingest_llm` 也统一生成 Summary 页 + 五段正文。
+- **Phase 2**：`write_projection`：
+  - `pages/` 按 `entry_type` 分子目录（`summary/`、`concept/`、`entity/`、`synthesis/`、`qa/`、`index/`、`lint-report/`，无类型落 `_unspecified/`）。
+  - 文件名使用中文标题直用，仅把 `/` 替换为 `-`，不再 ASCII slugify 或 UUID 回退。
+  - 不再向 `sources/` 根目录写投影；`sources_written` 字段保留为 0 仅作兼容。
+  - 新增 `projection_pages_split_by_entry_type` 测试。
+- **Phase 3.1**：`sources/` 根目录 100 个哈希命名的 `.md` 已备份并删除（内容留在 `wiki.db` 中）。
+- **Phase 3.2**：将 1083 条 `compiled_to_wiki: true` 的 source 置回 `false`，删除 `pages/summary/` 中 1186 个旧格式文件。用 `--limit 1` 小样本跑通新 batch-ingest，产物 frontmatter/5 段正文完全对齐 vault-standards。**剩余 1080+ 条需分批 `--limit N` 继续跑（LLM 调用量大，留给运维按节奏执行）**。备份路径：`/tmp/wiki-recompile-backup-<timestamp>`。
+- **Phase 4**：vault-standards 末尾补「未来新增 source 的流程」章节（wechat / x / manual）。
+
+### 我们遇到了哪些错误？
+
+1. `mcp.rs` 中使用 `uri.as_str()` 触发 `str_as_str` 不稳定特性：因 `uri` 已是 `&str`，直接传即可。
+2. `main.rs` `IngestLlm` 里 `uri` 已被 `ingest_raw(uri, ...)` move，后面 `to_five_section_summary_body` 再借用报 `borrow of moved value`。
+3. `cargo build` 后 `BatchIngestContext` 中多余字段被判 `dead_code`。
+
+### 我们是如何解决这些错误的？
+
+1. `mcp.rs` 改为 `Some(uri)`（`uri` 本身就是 `&str`）。
+2. `main.rs` 改为 `eng.ingest_raw(uri.clone(), ...)`，保留后续借用。
+3. 精简 `BatchIngestContext` 只保留 `source_title` 与 `source_url`（其它字段在调用端直接用 `src` 访问）。
+
+### 验证
+
+- `cargo test --workspace` 全绿（36 项 kernel 测试 + 其他 crates 全通过）。
+- `--limit 1` 实跑一条，生成的 `pages/summary/摘要：…Claude Code…AI辅助开发.md` frontmatter 与正文结构符合 vault-standards。
+
+### 追加修复（用户反馈后）
+
+1. **确认 summary 未丢失**：`/tmp/wiki-recompile-backup-1776857955/summary_pre/summary/` 保留了全部 1186 个旧 summary 备份；`pages/summary/` 当前只有 1 条，是因为 Phase 3.2 只做了 `--limit 1` 的实测，剩 1080+ 条等待分批续跑。
+2. **清理根目录 `concepts/`**：
+   - `write_projection` 不再向 vault 根 `concepts/` 写哈希命名的 claim 投影（claim 语义由 `pages/concept/` 承载；引擎内部仍保留在 `wiki.db`）。
+   - `render_claim_with_frontmatter` 保留但标 `#[allow(dead_code)]` 供测试 / 未来显式导出。
+   - 更新 vault-standards.md：目录表删除 `concepts/` 一行，明确 `write_projection` 只维护 `pages/**` + `index.md` + `log.md`。
+   - 现有 1082 个哈希 concept 文件已备份到 `/tmp/wiki-cleanup-concepts-<timestamp>/` 并从 vault 移除。
+3. 新增/更新测试：`projection_writes_index_log_and_dirs` 断言根 `concepts/` 不存在或为空目录。
+
+### 方案 A 回滚（恢复 Notion 原状）
+
+**背景**：Phase 3.2 一刀切把 1186 个 summary 全删、1083 个 source 置 `compiled_to_wiki: false`，但事后识别出其中只有 **78 条** summary 是旧 batch-ingest 产物（frontmatter 含 `compiled_by: batch-ingest`），其余 1108 条是 Notion 原生内容；source 本身更是全部来自 Notion，`compiled_to_wiki: true` 是其正常状态，并不需要重编。用户批准按「方案 A」只恢复 Notion 原状、不再给孤儿 source 补 summary。
+
+**执行步骤（一次性脚本）**：
+
+1. `rsync -a --delete /tmp/wiki-recompile-backup-1776857955/sources_pre/sources/ → /Users/mac-mini/Documents/wiki/sources/`：整体回滚 1099 个 source，`compiled_to_wiki: true` 恢复为 1082 条（与备份一致；备份里原本就有 1 条 `false` 属 Notion 原状）。
+2. `pages/summary/` 清空后，从备份复制所有**不含** `compiled_by: batch-ingest` 的 1108 个 Notion 原生 summary 回来；78 条 batch 产物不再恢复。
+3. 删除 Phase 3.2 `--limit 1` 试跑出的那条新 summary（因为对应 source 在 Notion 本就没有 summary，属孤儿 source，保持原状）。
+
+**验证**：
+
+- `sources/`：1099 条，`compiled_to_wiki: true` 1082 / `false` 1 / 其余无此字段；根目录无 `.md`。
+- `pages/summary/`：1108 条，`grep -l 'compiled_by: batch-ingest'` 返回 0。
+- `pages/concept/` 1448、`pages/entity/` 701；vault 根 `concepts/` 已删。
+- vault = Notion 导出快照 + 本次标准对齐后的新代码。后续若要给孤儿 source 补 summary，走新 `batch-ingest` 流程即可，产物自动符合 vault-standards。
+
+**备份保留位置**：
+
+- `/tmp/wiki-recompile-backup-1776857955/`：sources + 1186 个 summary 完整快照。
+- `/tmp/wiki-cleanup-concepts-<ts>/`：1082 个根 `concepts/` 哈希文件。
+- `/tmp/wiki-cleanup-backup-<ts>/`：`sources/` 根 100 个哈希文件。
+
+**已知遗留**：`wiki.db` 中那轮 batch 运行残留的 `WikiPage` / `Claim` / `Entity` / `Edge` / `Source` 记录未清理；它们现在投影时落到 `pages/summary/`，但由于上一步 Notion 原生覆盖 + 文件名不同，并不会污染磁盘。是否从 DB 删除留待下一步决定。
+
+### 方案 B：整库重置（与 Notion 磁盘原状对齐）
+
+**决策背景**：清 DB 本有两种方式：
+
+- **A：定向删 79 条 pages** — 只清可识别的 batch 产物 page，保留 sources/claims/entities/edges 做溯源。磁盘效果等同方案 B，但 DB 留 101+1089+857+531 条孤儿记录，后续 batch-ingest 重跑同一条 source 会遇 id 冲突。
+- **B：整库重置** — `wiki.db` 清零，与磁盘（=Notion 原状）完全对齐。代价是丢本轮 batch 的审计事件流。
+
+两者磁盘最终效果**完全一样**，差异仅在 DB。评估后选 **B**（更可预测、后续行为更干净）。
+
+**查 DB 时确认的事实**：
+
+- DB 只有 3 张表：`wiki_state`（单行 payload_json 快照）、`wiki_outbox`（1193 事件）、`wiki_embedding`（0 条）。
+- `wiki_state.payload_json` 含 6 个集合：`sources` 101 / `claims` 1089 / `pages` 79（78 concept + 1 summary）/ `entities` 857 / `edges` 531 / `audits` 1193。
+- **全部**为 batch-ingest 管道产物：Notion 迁移的 1099 条 source、1108 条 summary、1448 条 concept、701 条 entity 根本**没入 DB**，它们是磁盘 first-class 内容。
+- `WikiPage` struct 不含 `compiled_by` 字段（该字段只在磁盘 frontmatter），因此 A 方案只能按 `entry_type` 定位，无法精细到 run-id。
+
+**执行**：
+
+```bash
+cp wiki.db /tmp/wiki-db-backup-1776868273.db   # 4.1 MB 备份
+rm wiki.db
+cargo run -q -p wiki-cli -- query ping          # 触发引擎重建空库
+```
+
+**验证**：
+
+- `wiki.db` 24 KB，`{sources:0, claims:0, pages:0, entities:0, edges:0, audits:1}`（那 1 条 audit 是本次 query 启动事件）。
+- 磁盘与 DB 零冲突，下次 `batch-ingest` 从 0 开始累积，产物直接符合 `docs/vault-standards.md`。
+
+### 最终状态汇总
+
+| 维度 | 状态 |
+|---|---|
+| `sources/` | 1099 条 Notion 原生（`compiled_to_wiki: true` 1082 / `false` 1），根目录无 `.md` |
+| `pages/summary/` | 1108 条 Notion 原生，`compiled_by: batch-ingest` 0 条 |
+| `pages/concept/` | 1448 条保留 |
+| `pages/entity/` | 701 条保留 |
+| 根 `concepts/` | 已删除 |
+| `wiki.db` | 24 KB 空库（1 条启动 audit） |
+| 代码 | `write_projection` 只写 `pages/**` + `index.md` + `log.md`；`batch-ingest`/`ingest-llm`/MCP 全部生成标准 5 段 summary |
+
+**备份汇总**（均保留在 `/tmp/`，后续可按需清理）：
+
+- `/tmp/wiki-recompile-backup-1776857955/` — sources + 1186 旧 summary 完整快照
+- `/tmp/wiki-cleanup-concepts-*/` — 1082 个根 `concepts/` 哈希文件
+- `/tmp/wiki-cleanup-backup-*/` — 100 个根 `sources/` 哈希文件
+- `/tmp/wiki-db-backup-1776868273.db` — 4.1 MB 旧 wiki.db

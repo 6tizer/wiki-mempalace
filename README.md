@@ -2,13 +2,17 @@
 
 本地优先（local-first）的**统一知识底座**——把 `llm-wiki`（知识生命周期内核）与
 `rust-mempalace`（记忆宫殿 / FTS5 全文检索 / 时序知识图谱）合并为单一 Cargo workspace，
-对 AI Agent 暴露一个 **22 工具的统一 MCP Server**：12 个 `wiki_*` + 10 个 `mempalace_*`。
+对 AI Agent 暴露一个 **22 工具的统一 MCP Server**：12 个 `wiki_`* + 10 个 `mempalace_`*。
 
 两个引擎的合体意味着：知识**可累积、可衰减、可 supersede、可审计**，同时**可
 全文检索、可按时间回放、可按实体遍历**。
 
 > 原始的分仓设计见 `docs/blog/article2.md`（历史长文）。本仓用 `git subtree`
 > 把 `rust-mempalace` 嫁接为 `crates/rust-mempalace/`，保留双方全部历史。
+
+> Vault 文件树与 frontmatter 的**唯一标准**见 [docs/vault-standards.md](docs/vault-standards.md)。
+> 所有 source / summary / concept / entity 文件的目录、命名、frontmatter、正文骨架必须遵守该文档；
+> 未对齐的内容必须在写入前修复，不得通过新增"兼容写法"绕过。
 
 ---
 
@@ -119,14 +123,14 @@ Agent 或 CLI 使用者请优先阅读 [AGENTS.md](AGENTS.md)，其中定义了 
 
 - [AGENTS.md](AGENTS.md)：面向 Agent 的稳定工作流
 - [DomainSchema.json](DomainSchema.json)：领域 Schema v1.0 实例
+- [docs/vault-standards.md](docs/vault-standards.md)：**Vault 目录/命名/frontmatter/正文骨架唯一标准**
 - [docs/architecture.md](docs/architecture.md)：架构图与业务流
 - [docs/mempalace-linkage.md](docs/mempalace-linkage.md)：bridge 契约与数据映射
 - [docs/plan.md](docs/plan.md)：里程碑
 - [Progress.md](Progress.md)：每轮工作日志
 - [crates/rust-mempalace/README.md](crates/rust-mempalace/README.md)：
-  `rust-mempalace` 作为独立 crate 的原始说明（保留）
+`rust-mempalace` 作为独立 crate 的原始说明（保留）
 
 ## 许可
 
 `MIT OR Apache-2.0`
-

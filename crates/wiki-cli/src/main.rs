@@ -3,8 +3,8 @@ use std::path::PathBuf;
 use time::OffsetDateTime;
 use wiki_core::{
     document_visible_to_viewer, parse_memory_tier, ClaimId, DomainSchema, Entity, EntityId,
-    EntityKind, EntryType, LlmIngestPlanV1, MemoryTier, PageId, QueryContext, RelationKind, Scope,
-    SessionCrystallizationInput, SourceId, TypedEdge, WikiPage,
+    EntityKind, EntryStatus, EntryType, LlmIngestPlanV1, MemoryTier, PageId, QueryContext,
+    RelationKind, Scope, SessionCrystallizationInput, SourceId, TypedEdge, WikiPage,
 };
 use wiki_kernel::{
     format_claim_doc_id, initial_status_for, merge_graph_rankings, write_lint_report,
@@ -167,9 +167,6 @@ enum Cmd {
         /// 只扫描不编译，输出待处理列表
         #[arg(long, default_value_t = false)]
         dry_run: bool,
-        /// 编译后 entry_type（默认 concept）
-        #[arg(long, default_value = "concept")]
-        entry_type: String,
         /// 每条之间休眠秒数（避免 LLM 限流）
         #[arg(long, default_value_t = 1)]
         delay_secs: u64,
@@ -230,7 +227,7 @@ fn run_with_engine(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             body,
             scope,
             dry_run,
-            entry_type,
+            entry_type: _entry_type,
         } => {
             let cfg = llm::load_llm_config(&cli.llm_config)?;
             let user = format!("Source URI:\n{uri}\n\nBody:\n{body}");
@@ -243,7 +240,7 @@ fn run_with_engine(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                 return Ok(());
             }
             let sc = parse_scope(&scope);
-            let sid = eng.ingest_raw(uri, &body, sc.clone(), "cli");
+            let sid = eng.ingest_raw(uri.clone(), &body, sc.clone(), "cli");
             eng.save_to_repo(&repo)?;
             eng.flush_outbox_to_repo_with_policy(&repo, 128, 3)?;
             if cli.vectors {
@@ -301,17 +298,18 @@ fn run_with_engine(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             }
             eng.save_to_repo(&repo)?;
             eng.flush_outbox_to_repo_with_policy(&repo, 128, 3)?;
-            if !plan.summary_markdown.trim().is_empty() {
+            // summary 页固定为 vault 约定的 Summary 类型 + 五段正文（与 batch-ingest 对齐）
+            if plan.should_materialize_summary_page() {
                 let title = if plan.summary_title.trim().is_empty() {
                     "ingest-summary".to_string()
                 } else {
                     plan.summary_title.trim().to_string()
                 };
-                let page = WikiPage::new(title, plan.summary_markdown.clone(), sc.clone());
-                let explicit = parse_entry_type_opt(&entry_type)?;
-                let et = effective_ingest_entry_type(explicit);
-                let status = initial_status_for(Some(&et), &schema);
-                let page = page.with_entry_type(et).with_status(status);
+                let md = plan.to_five_section_summary_body(Some(&uri));
+                let status = initial_status_for(Some(&EntryType::Summary), &schema);
+                let page = WikiPage::new(title, md, sc.clone())
+                    .with_entry_type(EntryType::Summary)
+                    .with_status(status);
                 eng.store.pages.insert(page.id, page);
                 eng.save_to_repo(&repo)?;
                 eng.flush_outbox_to_repo_with_policy(&repo, 128, 3)?;
@@ -578,7 +576,6 @@ fn run_with_engine(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             ref vault,
             limit,
             dry_run,
-            ref entry_type,
             delay_secs,
         } => {
             batch_ingest_cmd(
@@ -588,7 +585,6 @@ fn run_with_engine(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                 &vault,
                 limit,
                 dry_run,
-                entry_type,
                 delay_secs,
                 sync_wiki,
                 wiki_root.as_deref(),
@@ -695,6 +691,7 @@ pub(crate) fn parse_entry_type_opt(
 
 /// ingest-llm 场景下的 entry_type 缺省策略：未指定时回退为 Concept。
 /// 其它入口（crystallize / draft-from-query）保留 None 语义以避免意外写死。
+#[allow(dead_code)]
 pub(crate) fn effective_ingest_entry_type(explicit: Option<EntryType>) -> EntryType {
     explicit.unwrap_or(EntryType::Concept)
 }
@@ -823,6 +820,15 @@ struct SourceEntry {
     title: String,
     url: String,
     body: String,
+    /// 来自 frontmatter `tags`（逗号分隔）
+    source_tags: Vec<String>,
+    created_at: String,
+}
+
+/// batch 单条写入 summary / 引擎时携带的 vault 元数据
+struct BatchIngestContext {
+    source_title: String,
+    source_url: String,
 }
 
 /// 单条 source 编译结果
@@ -831,10 +837,46 @@ struct IngestOneStats {
     entities: usize,
     relationships: usize,
     source_id: String,
-    /// LLM 生成的 summary 标题
-    summary_title: String,
-    /// LLM 生成的 summary 正文
-    summary_markdown: String,
+    /// 完整 LLM 计划（用于写 pages/summary 与调试）
+    plan: LlmIngestPlanV1,
+}
+
+/// 解析 frontmatter 中的 tags 字符串（支持中英文逗号）
+fn parse_tags_csv(raw: Option<&String>) -> Vec<String> {
+    raw.map(|s| {
+        s.split(|c: char| c == ',' || c == '，')
+            .map(|t| t.trim().to_string())
+            .filter(|t| !t.is_empty())
+            .collect()
+    })
+    .unwrap_or_default()
+}
+
+/// YAML 双引号内转义（与 wiki-kernel 投影一致）
+fn yaml_escape_vault(s: &str) -> String {
+    s.replace('\\', "\\\\").replace('"', "\\\"")
+}
+
+/// 输出 `name:\n  - "..."` 或 `name: []`
+fn yaml_string_list_block(name: &str, items: &[String]) -> String {
+    if items.is_empty() {
+        format!("{name}: []\n")
+    } else {
+        let mut out = format!("{name}:\n");
+        for it in items {
+            out.push_str(&format!("  - \"{}\"\n", yaml_escape_vault(it)));
+        }
+        out
+    }
+}
+
+fn entry_status_yaml(status: EntryStatus) -> &'static str {
+    match status {
+        EntryStatus::Draft => "draft",
+        EntryStatus::InReview => "in_review",
+        EntryStatus::Approved => "approved",
+        EntryStatus::NeedsUpdate => "needs_update",
+    }
 }
 
 /// 扫描 vault/sources/ 中 compiled_to_wiki: false 的 source 文件
@@ -871,6 +913,8 @@ fn scan_uncompiled_sources(
 
         let title = fm.get("title").cloned().unwrap_or_default();
         let url = fm.get("url").cloned().unwrap_or_default();
+        let source_tags = parse_tags_csv(fm.get("tags"));
+        let created_at = fm.get("created_at").cloned().unwrap_or_default();
 
         let body = if let Some(caps) = fm_caps {
             let fm_end = caps.get(0).unwrap().end();
@@ -889,6 +933,8 @@ fn scan_uncompiled_sources(
             title,
             url,
             body,
+            source_tags,
+            created_at,
         });
     }
 
@@ -931,6 +977,7 @@ fn ingest_one_source(
     vectors: bool,
     llm_config_path: &std::path::Path,
     schema: &DomainSchema,
+    batch: &BatchIngestContext,
 ) -> Result<IngestOneStats, Box<dyn std::error::Error>> {
     let user = format!("Source URI:\n{uri}\n\nBody:\n{body}");
     let reply = llm::complete_chat(cfg, llm::ingest_llm_system_prompt(), &user, 8192)?;
@@ -1003,16 +1050,18 @@ fn ingest_one_source(
     eng.save_to_repo(repo)?;
     eng.flush_outbox_to_repo_with_policy(repo, 128, 3)?;
 
-    // summary page：绑定 entry_type + status
-    if !plan.summary_markdown.trim().is_empty() {
-        let title = if plan.summary_title.trim().is_empty() {
-            "ingest-summary".to_string()
+    // summary 页：磁盘与引擎均约定为 EntryType::Summary + 五段正文
+    if plan.should_materialize_summary_page() {
+        let page_title = format!("摘要：{}", batch.source_title);
+        let foot_url = if batch.source_url.trim().is_empty() {
+            uri
         } else {
-            plan.summary_title.trim().to_string()
+            batch.source_url.as_str()
         };
-        let et = EntryType::Concept;
+        let md = plan.to_five_section_summary_body(Some(foot_url));
+        let et = EntryType::Summary;
         let status = initial_status_for(Some(&et), schema);
-        let page = WikiPage::new(title, plan.summary_markdown.clone(), scope.clone())
+        let page = WikiPage::new(page_title, md, scope.clone())
             .with_entry_type(et)
             .with_status(status);
         eng.store.pages.insert(page.id, page);
@@ -1025,40 +1074,77 @@ fn ingest_one_source(
         entities: plan.entities.len(),
         relationships: plan.relationships.len(),
         source_id: sid.0.to_string(),
-        summary_title: plan.summary_title.clone(),
-        summary_markdown: plan.summary_markdown.clone(),
+        plan: plan.clone(),
     })
 }
 
-/// 以 Notion 迁移兼容格式写 summary 页到 pages/summary/
+/// 以 Notion / vault-standards 完整契约写 summary 页到 `pages/summary/`
 fn write_batch_summary(
     wiki_root: &std::path::Path,
     source_title: &str,
-    summary_markdown: &str,
+    plan: &LlmIngestPlanV1,
     source_url: &str,
+    source_tags: &[String],
+    source_created_at: &str,
+    schema: &DomainSchema,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let summary_dir = wiki_root.join("pages").join("summary");
     std::fs::create_dir_all(&summary_dir)?;
 
-    // 文件名：与 Notion 迁移一致，使用「摘要：{标题}.md」
+    // 文件名：中文标题，仅将 `/` 替换为 `-`（与 docs/vault-standards.md 一致）
     let filename = format!("摘要：{}.md", source_title.replace('/', "-"));
     let path = summary_dir.join(&filename);
 
     let now = time::OffsetDateTime::now_utc();
-    let date_str = now.format(&time::format_description::well_known::Rfc3339)?;
+    let now_str = now.format(&time::format_description::well_known::Rfc3339)?;
+    let created_str = if source_created_at.trim().is_empty() {
+        now_str.clone()
+    } else {
+        source_created_at.trim().to_string()
+    };
 
-    // frontmatter：与 Notion 迁移产出一致
+    let status = initial_status_for(Some(&EntryType::Summary), schema);
+    let status_s = entry_status_yaml(status);
+    let conf = plan.normalized_summary_confidence();
+    let foot = if source_url.trim().is_empty() {
+        None
+    } else {
+        Some(source_url.trim())
+    };
+    let body_sections = plan.to_five_section_summary_body(foot);
+
+    let title_esc = yaml_escape_vault(&format!("摘要：{source_title}"));
+    let url_esc = yaml_escape_vault(source_url);
+
+    let mut fm = String::from("---\n");
+    fm.push_str(&format!("title: \"{title_esc}\"\n"));
+    fm.push_str("entry_type: summary\n");
+    fm.push_str(&format!("status: {status_s}\n"));
+    fm.push_str(&format!("confidence: {conf}\n"));
+    fm.push_str(&format!("source_url: \"{url_esc}\"\n"));
+    fm.push_str(&yaml_string_list_block("source_tags", source_tags));
+    fm.push_str(&yaml_string_list_block("tags", &plan.tags));
+    fm.push_str(&format!(
+        "created_at: \"{}\"\n",
+        yaml_escape_vault(&created_str)
+    ));
+    fm.push_str(&format!(
+        "updated_at: \"{}\"\n",
+        yaml_escape_vault(&now_str)
+    ));
+    fm.push_str(&format!(
+        "last_compiled_at: \"{}\"\n",
+        yaml_escape_vault(&now_str)
+    ));
+    fm.push_str("compiled_by: batch-ingest\n");
+    fm.push_str("---\n\n");
+
+    let h1_esc = source_title.replace('/', "-");
     let content = format!(
-        "---\n\
-         title: \"摘要：{source_title}\"\n\
-         entry_type: summary\n\
-         status: approved\n\
-         compiled_by: batch-ingest\n\
-         source_url: \"{source_url}\"\n\
-         updated_at: \"{date_str}\"\n\
-         ---\n\n\
-         # 摘要：{source_title}\n\n\
-         {summary_markdown}\n"
+        "{fm}# 摘要：{h1_esc}\n\n{body_sections}",
+        fm = fm,
+        h1_esc = h1_esc,
+        body_sections = body_sections
     );
 
     std::fs::write(&path, content)?;
@@ -1073,7 +1159,6 @@ fn batch_ingest_cmd(
     vault: &std::path::Path,
     limit: Option<usize>,
     dry_run: bool,
-    entry_type: &str,
     delay_secs: u64,
     _sync_wiki: bool,
     wiki_root: Option<&std::path::Path>,
@@ -1103,7 +1188,6 @@ fn batch_ingest_cmd(
 
     let cfg = llm::load_llm_config(&cli.llm_config)?;
     let scope = parse_scope("private:batch-ingest");
-    let _et = EntryType::parse(entry_type).map_err(|e| format!("无效 entry_type: {e}"))?;
 
     let mut ok_count = 0usize;
     let mut err_count = 0usize;
@@ -1117,6 +1201,11 @@ fn batch_ingest_cmd(
 
         eprintln!("[{}/{}] {}...", i + 1, sources.len(), src.title);
 
+        let batch_ctx = BatchIngestContext {
+            source_title: src.title.clone(),
+            source_url: src.url.clone(),
+        };
+
         match ingest_one_source(
             eng,
             repo,
@@ -1127,6 +1216,7 @@ fn batch_ingest_cmd(
             cli.vectors,
             &cli.llm_config,
             schema,
+            &batch_ctx,
         ) {
             Ok(stats) => {
                 eprintln!(
@@ -1142,13 +1232,16 @@ fn batch_ingest_cmd(
                     std::fs::write(&src.path, new_content)?;
                 }
 
-                // 以 Notion 兼容格式写 summary 页到 pages/summary/
-                if wiki_root.is_some() && !stats.summary_markdown.trim().is_empty() {
+                // 按 vault-standards 写 summary 页到 pages/summary/
+                if wiki_root.is_some() && stats.plan.should_materialize_summary_page() {
                     write_batch_summary(
                         wiki_root.unwrap(),
                         &src.title,
-                        &stats.summary_markdown,
+                        &stats.plan,
                         &src.url,
+                        &src.source_tags,
+                        &src.created_at,
+                        schema,
                     )?;
                 }
 

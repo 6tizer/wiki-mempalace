@@ -661,20 +661,20 @@ fn call_tool(
                     }
                 }
             }
-            // 生成 summary 页面（若 LLM 给了 summary_markdown）：对齐 CLI ingest-llm 行为
+            // 生成 summary 页面：与 vault-standards / ingest-llm 一致（Summary + 五段正文）
             let mut summary_page_id: Option<String> = None;
-            if !plan.summary_markdown.trim().is_empty() {
+            if plan.should_materialize_summary_page() {
                 let title = if plan.summary_title.trim().is_empty() {
                     "ingest-summary".to_string()
                 } else {
                     plan.summary_title.trim().to_string()
                 };
-                let et = crate::effective_ingest_entry_type(explicit_et);
-                let status = initial_status_for(Some(&et), &eng.schema.clone());
-                let page =
-                    wiki_core::WikiPage::new(title, plan.summary_markdown.clone(), sc.clone())
-                        .with_entry_type(et)
-                        .with_status(status);
+                let _ = explicit_et; // MCP 仍解析 entry_type 参数以校验，summary 页类型固定为 Summary
+                let md = plan.to_five_section_summary_body(Some(uri));
+                let status = initial_status_for(Some(&EntryType::Summary), &eng.schema.clone());
+                let page = wiki_core::WikiPage::new(title, md, sc.clone())
+                    .with_entry_type(EntryType::Summary)
+                    .with_status(status);
                 summary_page_id = Some(page.id.0.to_string());
                 eng.store.pages.insert(page.id, page);
             }

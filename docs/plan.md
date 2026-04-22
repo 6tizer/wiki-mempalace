@@ -5,7 +5,7 @@
 ## M1: Wiki 投影层 ✅
 
 - CLI 支持 `--wiki-dir` 与 `--sync-wiki`，将结构化状态投影到 markdown。
-- 自动生成 `index.md`、`log.md`，并维护 `pages/`、`concepts/`、`sources/`。
+- 自动生成 `index.md`、`log.md`，并维护 `pages/`、`concepts/`、`sources/`（**M7 之后**：`write_projection` 只维护 `pages/{entry_type}/` + `index.md` + `log.md`，不再写根 `sources/`、根 `concepts/`——详见 M7 与 `docs/vault-standards.md`）。
 - Query 支持 `--write-page`，将回答结果沉淀为 wiki 页面。
 - **D1 完成**：YAML frontmatter 投影（id / status / entry_type / updated_at）。
 
@@ -68,6 +68,24 @@
 
 - 有正文的未编译条目共处理完毕，仅剩正文过短无法编译的 1 条仍保持 `false`。
 - 出现上游偶发 `content: null` 时可通过重试同命令消化剩余条目。
+
+## M7: Vault 标准对齐与 batch-ingest 修复 ✅
+
+**背景**：M4 的 Notion 迁移产出了规范的 `sources/{origin}/` + `pages/{entry_type}/` 文件树，但 M6 的 `batch-ingest` 把 78 条产物写成了 `entry_type: concept` + 哈希命名，且 `write_projection` 还在向根 `sources/`、根 `concepts/` 重复写哈希文件，两套规范并存。本里程碑将 **Notion 迁移版式固化为唯一标准**，同时一次性完成代码、文件系统、DB 的全局对齐。
+
+- 新增 [docs/vault-standards.md](vault-standards.md)：目录 / 命名 / frontmatter / 正文 5 段骨架的单一事实来源。
+- `LlmIngestPlanV1` 扩展：`one_sentence_summary` / `key_insights` / `confidence` / `tags` / `source_author` / `source_publisher` / `source_published_at`，并提供 `to_five_section_summary_body()` 生成标准 5 段正文。
+- `batch-ingest` / `ingest-llm` / MCP `wiki_ingest_llm` 统一硬编码 `EntryType::Summary`，frontmatter 含 `source_url` / `source_tags` / `created_at` / `updated_at` / `last_compiled_at` / `compiled_by`。
+- `write_projection`：`pages/` 按 `entry_type` 拆子目录；中文标题直用（仅 `/` → `-`）；**停止**向根 `sources/`、根 `concepts/` 写投影。
+- 磁盘一次性回滚到 Notion 原状：恢复 1099 条 source 与 1108 条 Notion 原生 summary，78 条 batch 产物 summary、1082 个根 `concepts/` 哈希文件、100 个根 `sources/` 哈希文件全部移除（均有 `/tmp/` 备份）。
+- `wiki.db` 整库重置（备份至 `/tmp/wiki-db-backup-*.db`），与磁盘零冲突。
+
+验收标准（已达成）：
+
+- `grep -l 'compiled_by: batch-ingest' pages/summary/*.md` 返回 0。
+- `sources/` 根无 `.md`，`concepts/` 根不存在。
+- `cargo test --workspace` 全绿，`projection_writes_index_log_and_dirs` 断言 `sources/` / `concepts/` 根不被引擎写入。
+- 下次 `batch-ingest` 从空库 + 空 summary 集合开始累积，产物直接符合 vault-standards。
 
 ## 后续（未开始）
 

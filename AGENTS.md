@@ -2,6 +2,11 @@
 
 本文件定义 `llm-wiki` 的最小稳定操作流程，目标是让不同会话中的 agent 可重复执行。
 
+> **Vault 版式约束**：所有写入 vault 的 source / summary / concept / entity 文件必须遵守
+> [docs/vault-standards.md](docs/vault-standards.md)（目录、命名、frontmatter、正文骨架）。
+> 引擎 `write_projection` 只维护 `pages/{entry_type}/`、`index.md`、`log.md`；
+> **不要**往 `sources/` 根或 `concepts/` 根写入文件。
+
 ## 1. Ingest
 
 ```bash

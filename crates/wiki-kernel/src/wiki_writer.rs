@@ -18,63 +18,38 @@ pub fn write_projection(
     audits: &[AuditRecord],
 ) -> io::Result<ProjectionStats> {
     let pages_dir = wiki_root.join("pages");
-    let concepts_dir = wiki_root.join("concepts");
-    let sources_dir = wiki_root.join("sources");
-    let analyses_dir = wiki_root.join("analyses");
     fs::create_dir_all(&pages_dir)?;
-    fs::create_dir_all(&concepts_dir)?;
-    fs::create_dir_all(&sources_dir)?;
-    fs::create_dir_all(&analyses_dir)?;
 
     let mut stats = ProjectionStats::default();
     let mut page_rows = Vec::new();
-    let mut claim_rows = Vec::new();
-    let mut source_rows = Vec::new();
+    // 不再向根 `concepts/` 写哈希 claim 投影；root 仅保留 Notion 对齐的目录
+    // （见 docs/vault-standards.md）
+    let claim_rows: Vec<String> = Vec::new();
+    // 不在 `sources/` 根目录写引擎投影；source 文件由迁移/抓取工具维护（见 vault-standards）
+    let source_rows: Vec<String> = Vec::new();
 
     let mut pages: Vec<_> = store.pages.values().collect();
     pages.sort_by(|a, b| a.title.cmp(&b.title).then_with(|| a.id.0.cmp(&b.id.0)));
     for page in pages {
-        let slug = slugify(&page.title, &page.id.0.to_string());
-        let path = pages_dir.join(format!("{slug}.md"));
+        let subdir = page_subdir_for_entry_type(page.entry_type.as_ref());
+        let dir = pages_dir.join(subdir);
+        fs::create_dir_all(&dir)?;
+        let fname = vault_page_filename(&page.title);
+        let path = dir.join(format!("{fname}.md"));
         fs::write(&path, render_page_with_frontmatter(page))?;
         stats.pages_written += 1;
+        let rel = format!("pages/{subdir}/{fname}.md");
         page_rows.push(format!(
-            "- [{}](pages/{}.md) | updated: {}",
+            "- [{}]({}) | updated: {}",
             page.title,
-            slug,
+            rel,
             page.updated_at.date()
         ));
     }
 
-    let mut claims: Vec<_> = store.claims.values().collect();
-    claims.sort_by(|a, b| a.created_at.cmp(&b.created_at));
-    for claim in claims {
-        let short = claim.id.0.to_string();
-        let id_short = &short[..8];
-        let file = format!("{id_short}.md");
-        let path = concepts_dir.join(&file);
-        fs::write(path, render_claim_with_frontmatter(claim))?;
-        stats.claims_written += 1;
-        claim_rows.push(format!(
-            "- [claim:{}](concepts/{}) | tier={:?} stale={}",
-            id_short, file, claim.tier, claim.stale
-        ));
-    }
-
-    let mut sources: Vec<_> = store.sources.values().collect();
-    sources.sort_by(|a, b| a.ingested_at.cmp(&b.ingested_at));
-    for source in sources {
-        let short = source.id.0.to_string();
-        let id_short = &short[..8];
-        let file = format!("{id_short}.md");
-        let path = sources_dir.join(&file);
-        fs::write(path, render_source_with_frontmatter(source))?;
-        stats.sources_written += 1;
-        source_rows.push(format!(
-            "- [source:{}](sources/{}) | {}",
-            id_short, file, source.uri
-        ));
-    }
+    // Claim 不再作为独立 markdown 文件落盘；其语义由 page（`pages/concept/` 等）承载。
+    // `render_claim_with_frontmatter` 仍保留供测试 / 未来导出使用。
+    let _ = &store.claims;
 
     fs::write(
         wiki_root.join("index.md"),
@@ -150,6 +125,25 @@ fn entry_type_str(t: &wiki_core::EntryType) -> &'static str {
     }
 }
 
+/// 按 `entry_type` 映射到 `pages/` 下子目录（与 docs/vault-standards.md 一致）。
+fn page_subdir_for_entry_type(et: Option<&wiki_core::EntryType>) -> &'static str {
+    match et {
+        Some(wiki_core::EntryType::Summary) => "summary",
+        Some(wiki_core::EntryType::Concept) => "concept",
+        Some(wiki_core::EntryType::Entity) => "entity",
+        Some(wiki_core::EntryType::Synthesis) => "synthesis",
+        Some(wiki_core::EntryType::Qa) => "qa",
+        Some(wiki_core::EntryType::LintReport) => "lint-report",
+        Some(wiki_core::EntryType::Index) => "index",
+        None => "_unspecified",
+    }
+}
+
+/// vault 命名：中文标题直用，仅将 `/` 替换为 `-`（不做 ASCII slugify）。
+fn vault_page_filename(title: &str) -> String {
+    title.replace('/', "-")
+}
+
 /// YAML 双引号内转义：只处理双引号和反斜杠。
 fn yaml_escape(s: &str) -> String {
     s.replace('\\', "\\\\").replace('"', "\\\"")
@@ -186,6 +180,10 @@ fn render_page_with_frontmatter(page: &WikiPage) -> String {
 }
 
 /// 渲染 Claim 为带 YAML frontmatter 的完整 Markdown。
+///
+/// vault-standards 对齐后，`write_projection` 不再向 `concepts/` 写哈希命名的 claim 文件；
+/// 本函数保留供测试与未来的显式导出使用。
+#[allow(dead_code)]
 fn render_claim_with_frontmatter(claim: &Claim) -> String {
     let short = claim.id.0.to_string();
     let id_short = &short[..8];
@@ -212,6 +210,10 @@ fn render_claim_with_frontmatter(claim: &Claim) -> String {
 }
 
 /// 渲染 RawArtifact (Source) 为带 YAML frontmatter 的完整 Markdown。
+///
+/// 自 vault-standards 对齐起，`write_projection` 不再写入 `sources/` 根目录，
+/// 此函数仅保留供测试与潜在外部调用使用（见 [docs/vault-standards.md]）。
+#[allow(dead_code)]
 fn render_source_with_frontmatter(source: &RawArtifact) -> String {
     let short = source.id.0.to_string();
     let id_short = &short[..8];
@@ -273,23 +275,7 @@ fn render_log(audits: &[AuditRecord]) -> String {
     lines
 }
 
-fn slugify(title: &str, fallback: &str) -> String {
-    let mut out = String::new();
-    for c in title.chars() {
-        if c.is_ascii_alphanumeric() {
-            out.push(c.to_ascii_lowercase());
-        } else if c.is_ascii_whitespace() || c == '-' || c == '_' {
-            out.push('-');
-        }
-    }
-    let out = out.trim_matches('-').to_string();
-    if out.is_empty() {
-        fallback.chars().take(8).collect()
-    } else {
-        out
-    }
-}
-
+#[allow(dead_code)]
 fn preview_text(body: &str, max_len: usize) -> String {
     let mut s = body.to_string();
     if s.len() > max_len {
@@ -344,28 +330,71 @@ mod tests {
         assert!(wiki_root.join("index.md").exists());
         assert!(wiki_root.join("log.md").exists());
         assert!(wiki_root.join("pages").is_dir());
-        assert!(wiki_root.join("concepts").is_dir());
-        assert!(wiki_root.join("sources").is_dir());
+        // vault-standards：不再向根 `concepts/` 写哈希 claim 投影
+        assert!(
+            !wiki_root.join("concepts").exists()
+                || std::fs::read_dir(wiki_root.join("concepts"))
+                    .unwrap()
+                    .next()
+                    .is_none(),
+            "projection 不应在根 concepts/ 写入文件"
+        );
+        // vault-standards：不再向 `sources/` 根目录写引擎投影
+        assert!(
+            !wiki_root.join("sources").join("any.md").exists(),
+            "projection 不应写入 sources/"
+        );
 
-        // D1 frontmatter 集成断言：投影出的 page 文件第一行必须是 ---
-        let page_files: Vec<_> = std::fs::read_dir(wiki_root.join("pages"))
-            .unwrap()
-            .filter_map(|e| e.ok())
-            .filter(|e| e.path().extension().is_some_and(|x| x == "md"))
-            .collect();
-        assert!(!page_files.is_empty(), "pages/ 目录应有文件");
-        for entry in &page_files {
-            let content = std::fs::read_to_string(entry.path()).unwrap();
+        // pages 已按 entry_type 分子目录；无 entry_type 落到 `_unspecified/`
+        let pages_root = wiki_root.join("pages");
+        let mut page_files: Vec<std::path::PathBuf> = Vec::new();
+        for sub in std::fs::read_dir(&pages_root).unwrap().flatten() {
+            if sub.path().is_dir() {
+                for f in std::fs::read_dir(sub.path()).unwrap().flatten() {
+                    if f.path().extension().is_some_and(|x| x == "md") {
+                        page_files.push(f.path());
+                    }
+                }
+            }
+        }
+        assert!(!page_files.is_empty(), "pages/ 子目录应有 md 文件");
+        for p in &page_files {
+            let content = std::fs::read_to_string(p).unwrap();
             assert!(
                 content.starts_with("---\n"),
                 "page 文件应以 frontmatter 开头: {:?}",
-                entry.path()
+                p
             );
             assert!(
                 content.contains("status:"),
                 "page 文件 frontmatter 应含 status 字段"
             );
         }
+    }
+
+    #[test]
+    fn projection_pages_split_by_entry_type() {
+        let dir = tempdir().unwrap();
+        let wiki_root = dir.path();
+        let mut store = InMemoryStore::default();
+        let sum = WikiPage::new("标题/含斜杠", "body", private_scope())
+            .with_entry_type(EntryType::Summary);
+        let con =
+            WikiPage::new("概念页", "body", private_scope()).with_entry_type(EntryType::Concept);
+        store.pages.insert(sum.id, sum);
+        store.pages.insert(con.id, con);
+        write_projection(wiki_root, &store, &[]).unwrap();
+        // 中文标题直用，`/` → `-`
+        assert!(wiki_root
+            .join("pages")
+            .join("summary")
+            .join("标题-含斜杠.md")
+            .exists());
+        assert!(wiki_root
+            .join("pages")
+            .join("concept")
+            .join("概念页.md")
+            .exists());
     }
 
     // --- D1 frontmatter 测试 ---
