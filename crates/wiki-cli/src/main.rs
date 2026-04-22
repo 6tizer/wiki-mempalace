@@ -10,7 +10,9 @@ use wiki_kernel::{
     format_claim_doc_id, initial_status_for, merge_graph_rankings, write_lint_report,
     write_projection, InMemorySearchPorts, InMemoryStore, LlmWikiEngine, NoopWikiHook, SearchPorts,
 };
-use wiki_mempalace_bridge::{consume_outbox_ndjson, MempalaceError, MempalaceWikiSink};
+use wiki_mempalace_bridge::{
+    consume_outbox_ndjson_with_resolver, MempalaceError, MempalaceWikiSink, OutboxResolver,
+};
 use wiki_storage::{SqliteRepository, WikiRepository};
 
 mod banner;
@@ -512,7 +514,10 @@ fn run_with_engine(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                 if let Some(et) = et {
                     page.entry_type = Some(et);
                 }
-                page.status = status;
+                if page.status != status {
+                    page.status = status;
+                    page.status_entered_at = Some(OffsetDateTime::now_utc());
+                }
             }
             eng.save_to_repo(&repo)?;
             eng.flush_outbox_to_repo_with_policy(&repo, 128, 3)?;
@@ -538,7 +543,8 @@ fn run_with_engine(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         }
         Cmd::ConsumeToMempalace { last_id } => {
             let ndjson = repo.export_outbox_ndjson_from_id(last_id)?;
-            let n = consume_outbox_ndjson(&CliMempalaceSink, &ndjson)?;
+            let resolver = EngineResolver { store: &eng.store };
+            let n = consume_outbox_ndjson_with_resolver(&CliMempalaceSink, &resolver, &ndjson)?;
             println!("consumed={n}");
         }
         Cmd::LlmSmoke { config, prompt } => {
@@ -779,15 +785,35 @@ fn timestamp_slug() -> String {
         .replace(':', "-")
 }
 
+/// 用当前 in-memory store 反解 `ClaimUpserted` / `SourceIngested` 的 payload + scope。
+struct EngineResolver<'a> {
+    store: &'a InMemoryStore,
+}
+
+impl<'a> OutboxResolver for EngineResolver<'a> {
+    fn claim(&self, id: wiki_core::ClaimId) -> Option<wiki_core::Claim> {
+        self.store.claims.get(&id).cloned()
+    }
+
+    fn source_scope(&self, id: wiki_core::SourceId) -> Option<Scope> {
+        self.store.sources.get(&id).map(|s| s.scope.clone())
+    }
+}
+
 struct CliMempalaceSink;
 
 impl MempalaceWikiSink for CliMempalaceSink {
-    fn on_claim_upserted(&self, _claim: &wiki_core::Claim) -> Result<(), MempalaceError> {
+    fn on_claim_upserted(&self, claim: &wiki_core::Claim) -> Result<(), MempalaceError> {
+        // resolver 路径：打印 id + 文本前缀，证明 payload 已被还原；真正写入 palace 由
+        // live sink 在 wiki-mempalace-bridge 的 `live` feature 下完成。
+        let preview: String = claim.text.chars().take(80).collect();
+        println!("mempalace claim_upserted {} {}", claim.id.0, preview);
         Ok(())
     }
 
     fn on_claim_event(&self, claim_id: wiki_core::ClaimId) -> Result<(), MempalaceError> {
-        println!("mempalace claim_upserted {}", claim_id.0);
+        // 仅在 resolver 无法解析 claim 时走到这里（悬挂事件）。
+        println!("mempalace claim_upserted(unresolved) {}", claim_id.0);
         Ok(())
     }
 

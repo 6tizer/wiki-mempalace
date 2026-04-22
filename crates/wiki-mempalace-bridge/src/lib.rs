@@ -97,31 +97,119 @@ impl MempalaceGraphRanker for NoopMempalaceGraphRanker {
     }
 }
 
+/// 从 id 反解回 `Claim` / 源 scope 的 resolver；由外部（通常是 wiki-storage 快照）注入。
+///
+/// `consume_outbox_ndjson_with_resolver` 会用它把"仅带 id"的 outbox 事件还原成完整载荷，
+/// 并在此基础上执行 sink 的 scope 过滤，避免 shared outbox 跨 scope 泄漏。
+pub trait OutboxResolver {
+    fn claim(&self, id: ClaimId) -> Option<Claim>;
+    fn source_scope(&self, id: SourceId) -> Option<Scope>;
+    /// 默认按 `claim(id)` 取 claim 的 scope；实现可覆写以处理已删除 claim 的遗留事件。
+    fn claim_scope(&self, id: ClaimId) -> Option<Scope> {
+        self.claim(id).map(|c| c.scope)
+    }
+}
+
+/// 历史版本：仅能还原 ID。不解析 claim 内容、不执行 scope 过滤；`ClaimUpserted` 走
+/// [`MempalaceWikiSink::on_claim_event`]（在 live sink 中是 no-op），保留是为了向后兼容。
+///
+/// **新代码请改用 [`consume_outbox_ndjson_with_resolver`]**：它会把 `ClaimUpserted`
+/// 还原为 `on_claim_upserted(&Claim)` 并尊重 [`MempalaceWikiSink::scope_filter`]。
 pub fn consume_outbox_ndjson<S: MempalaceWikiSink>(
     sink: &S,
     ndjson: &str,
 ) -> Result<usize, MempalaceError> {
+    consume_outbox_ndjson_impl::<S, NoResolver>(sink, ndjson, None)
+}
+
+/// 带 resolver 的 outbox 消费：
+///
+/// - `ClaimUpserted(id)` → 查 claim → `sink.scope_filter` 过滤 → `on_claim_upserted(&claim)`；
+///   resolver 返回 `None` 时回退到 `on_claim_event(id)`，并**不**计入 count（视为悬挂事件）。
+/// - `SourceIngested(id)` → 查 source scope → scope filter 过滤 → `on_source_ingested(id)`。
+/// - `ClaimSuperseded { old, new }` → 如能解析 new 的 scope，经 filter 后再 `on_claim_superseded`。
+///
+/// 返回值为**被实际派发**（即 sink 接受）的事件数。过滤掉的事件不计入。
+pub fn consume_outbox_ndjson_with_resolver<S, R>(
+    sink: &S,
+    resolver: &R,
+    ndjson: &str,
+) -> Result<usize, MempalaceError>
+where
+    S: MempalaceWikiSink,
+    R: OutboxResolver,
+{
+    consume_outbox_ndjson_impl(sink, ndjson, Some(resolver))
+}
+
+fn consume_outbox_ndjson_impl<S, R>(
+    sink: &S,
+    ndjson: &str,
+    resolver: Option<&R>,
+) -> Result<usize, MempalaceError>
+where
+    S: MempalaceWikiSink,
+    R: OutboxResolver,
+{
     let mut count = 0usize;
     for line in ndjson.lines().map(str::trim).filter(|l| !l.is_empty()) {
         let event: WikiEvent = serde_json::from_str(line)
             .map_err(|e| MempalaceError::Backend(format!("invalid event json: {e}")))?;
         match event {
-            WikiEvent::ClaimUpserted { claim_id, .. } => {
-                sink.on_claim_event(claim_id)?;
-                count += 1;
-            }
+            WikiEvent::ClaimUpserted { claim_id, .. } => match resolver {
+                Some(r) => match r.claim(claim_id) {
+                    Some(claim) => {
+                        if sink.scope_filter(&claim.scope) {
+                            sink.on_claim_upserted(&claim)?;
+                            count += 1;
+                        }
+                    }
+                    None => {
+                        // 悬挂事件：claim 已被 GC 或 snapshot 落后；保持旧行为调用 on_claim_event
+                        // 但不 count，避免 "consumed=N" 统计失真。
+                        sink.on_claim_event(claim_id)?;
+                    }
+                },
+                None => {
+                    sink.on_claim_event(claim_id)?;
+                    count += 1;
+                }
+            },
             WikiEvent::ClaimSuperseded { old, new, .. } => {
-                sink.on_claim_superseded(old, new)?;
-                count += 1;
+                let allow = match resolver.and_then(|r| r.claim_scope(new)) {
+                    Some(scope) => sink.scope_filter(&scope),
+                    None => true, // 无 resolver 或已不可解析：保持旧行为放行
+                };
+                if allow {
+                    sink.on_claim_superseded(old, new)?;
+                    count += 1;
+                }
             }
             WikiEvent::SourceIngested { source_id, .. } => {
-                sink.on_source_ingested(source_id)?;
-                count += 1;
+                let allow = match resolver.and_then(|r| r.source_scope(source_id)) {
+                    Some(scope) => sink.scope_filter(&scope),
+                    None => true,
+                };
+                if allow {
+                    sink.on_source_ingested(source_id)?;
+                    count += 1;
+                }
             }
             _ => {}
         }
     }
     Ok(count)
+}
+
+/// 用于 `consume_outbox_ndjson` 的占位 resolver（永远返回 None）。
+struct NoResolver;
+impl OutboxResolver for NoResolver {
+    fn claim(&self, _id: ClaimId) -> Option<Claim> {
+        None
+    }
+    fn source_scope(&self, _id: SourceId) -> Option<Scope> {
+        None
+    }
 }
 
 #[cfg(test)]
@@ -196,6 +284,108 @@ mod tests {
         assert_eq!(n, 2);
         assert_eq!(sink.upserted.load(Ordering::SeqCst), 1);
         assert_eq!(sink.superseded.load(Ordering::SeqCst), 1);
+    }
+
+    #[derive(Default)]
+    struct InMemResolver {
+        claims: std::collections::HashMap<ClaimId, Claim>,
+        source_scopes: std::collections::HashMap<SourceId, Scope>,
+    }
+    impl OutboxResolver for InMemResolver {
+        fn claim(&self, id: ClaimId) -> Option<Claim> {
+            self.claims.get(&id).cloned()
+        }
+        fn source_scope(&self, id: SourceId) -> Option<Scope> {
+            self.source_scopes.get(&id).cloned()
+        }
+    }
+
+    #[derive(Default)]
+    struct FullSink {
+        upserted_ids: std::sync::Mutex<Vec<ClaimId>>,
+        filter_bank: String,
+    }
+    impl MempalaceWikiSink for FullSink {
+        fn on_claim_upserted(&self, claim: &Claim) -> Result<(), MempalaceError> {
+            self.upserted_ids.lock().unwrap().push(claim.id);
+            Ok(())
+        }
+        fn on_claim_event(&self, _id: ClaimId) -> Result<(), MempalaceError> {
+            Ok(())
+        }
+        fn on_claim_superseded(&self, _o: ClaimId, _n: ClaimId) -> Result<(), MempalaceError> {
+            Ok(())
+        }
+        fn on_source_linked(
+            &self,
+            _s: SourceId,
+            _c: ClaimId,
+        ) -> Result<(), MempalaceError> {
+            Ok(())
+        }
+        fn scope_filter(&self, scope: &Scope) -> bool {
+            match scope {
+                Scope::Private { agent_id } => agent_id == &self.filter_bank,
+                Scope::Shared { team_id } => team_id == &self.filter_bank,
+            }
+        }
+    }
+
+    fn mk_claim(id: ClaimId, text: &str, scope: Scope) -> Claim {
+        let mut c = Claim::new(text, scope, wiki_core::MemoryTier::Semantic);
+        c.id = id;
+        c
+    }
+
+    #[test]
+    fn resolver_path_materializes_claim_and_enforces_scope() {
+        use wiki_core::Scope;
+        let a = ClaimId(uuid::Uuid::new_v4()); // private:alice —— 被过滤
+        let b = ClaimId(uuid::Uuid::new_v4()); // private:bob   —— 被保留
+        let mut resolver = InMemResolver::default();
+        resolver.claims.insert(
+            a,
+            mk_claim(
+                a,
+                "private to alice",
+                Scope::Private {
+                    agent_id: "alice".into(),
+                },
+            ),
+        );
+        resolver.claims.insert(
+            b,
+            mk_claim(
+                b,
+                "private to bob",
+                Scope::Private {
+                    agent_id: "bob".into(),
+                },
+            ),
+        );
+
+        let sink = FullSink {
+            filter_bank: "bob".into(),
+            ..Default::default()
+        };
+        let lines = [
+            serde_json::to_string(&WikiEvent::ClaimUpserted {
+                claim_id: a,
+                at: time::OffsetDateTime::now_utc(),
+            })
+            .unwrap(),
+            serde_json::to_string(&WikiEvent::ClaimUpserted {
+                claim_id: b,
+                at: time::OffsetDateTime::now_utc(),
+            })
+            .unwrap(),
+        ]
+        .join("\n");
+
+        let n = consume_outbox_ndjson_with_resolver(&sink, &resolver, &lines).unwrap();
+        assert_eq!(n, 1, "仅 bob 的 claim 应被派发");
+        let got = sink.upserted_ids.lock().unwrap().clone();
+        assert_eq!(got, vec![b]);
     }
 
     #[test]

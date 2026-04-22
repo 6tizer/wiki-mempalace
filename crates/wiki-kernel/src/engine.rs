@@ -291,8 +291,8 @@ impl<H: WikiHook> LlmWikiEngine<H> {
         if !force {
             let conditions = &promo.conditions;
 
-            // min_age_days：基于 page.updated_at
-            let age_secs = (now - page.updated_at).whole_seconds();
+            // min_age_days：从 page.created_at 起算（历史 JSON 回落到 updated_at）
+            let age_secs = (now - page.age_from()).whole_seconds();
             let age_days = age_secs as u64 / 86400;
             if age_days < conditions.min_age_days {
                 return Err(PromotePageError::AgeTooYoung {
@@ -329,9 +329,9 @@ impl<H: WikiHook> LlmWikiEngine<H> {
                 });
             }
 
-            // cooldown_days
+            // cooldown_days：从进入当前 status 起算，内容编辑不重置
             if let Some(cd) = conditions.cooldown_days {
-                let cooldown_secs = (now - page.updated_at).whole_seconds();
+                let cooldown_secs = (now - page.status_since()).whole_seconds();
                 let cooldown_days = cooldown_secs as u64 / 86400;
                 if cooldown_days < cd {
                     return Err(PromotePageError::Cooldown {
@@ -346,6 +346,7 @@ impl<H: WikiHook> LlmWikiEngine<H> {
         let page = self.store.pages.get_mut(&page_id).unwrap();
         page.status = to_status;
         page.updated_at = now;
+        page.status_entered_at = Some(now);
 
         self.emit(WikiEvent::PageStatusChanged {
             page_id,
@@ -396,6 +397,7 @@ impl<H: WikiHook> LlmWikiEngine<H> {
                 let page = self.store.pages.get_mut(&pid).unwrap();
                 let from = page.status;
                 page.status = EntryStatus::NeedsUpdate;
+                page.status_entered_at = Some(now);
                 self.emit(WikiEvent::PageStatusChanged {
                     page_id: pid,
                     from,
@@ -1233,7 +1235,10 @@ mod tests {
         )
         .with_entry_type(EntryType::Concept);
         // 模拟 10 天前创建
-        p.updated_at = OffsetDateTime::now_utc() - time::Duration::days(10);
+        let past = OffsetDateTime::now_utc() - time::Duration::days(10);
+        p.updated_at = past;
+        p.created_at = Some(past);
+        p.status_entered_at = Some(past);
         let pid = p.id;
         eng.store.pages.insert(pid, p);
         let now = OffsetDateTime::now_utc();
@@ -1252,7 +1257,10 @@ mod tests {
             },
         )
         .with_entry_type(EntryType::Concept);
-        p.updated_at = OffsetDateTime::now_utc() - time::Duration::days(10);
+        let past = OffsetDateTime::now_utc() - time::Duration::days(10);
+        p.updated_at = past;
+        p.created_at = Some(past);
+        p.status_entered_at = Some(past);
         let pid = p.id;
         eng.store.pages.insert(pid, p);
         let now = OffsetDateTime::now_utc();
@@ -1320,7 +1328,11 @@ mod tests {
             },
         )
         .with_entry_type(EntryType::Concept);
-        p2.updated_at = OffsetDateTime::now_utc() - time::Duration::days(2);
+        // cooldown_days=5，status_entered_at 2 天前 → 应失败
+        let past = OffsetDateTime::now_utc() - time::Duration::days(2);
+        p2.updated_at = past;
+        p2.created_at = Some(past);
+        p2.status_entered_at = Some(past);
         let pid2 = p2.id;
         eng2.store.pages.insert(pid2, p2);
         let now = OffsetDateTime::now_utc();
@@ -1339,7 +1351,10 @@ mod tests {
             },
         )
         .with_entry_type(EntryType::Concept);
-        p.updated_at = OffsetDateTime::now_utc() - time::Duration::days(10);
+        let past = OffsetDateTime::now_utc() - time::Duration::days(10);
+        p.updated_at = past;
+        p.created_at = Some(past);
+        p.status_entered_at = Some(past);
         let pid = p.id;
         let title = p.title.clone();
         eng.store.pages.insert(pid, p);
@@ -1359,6 +1374,45 @@ mod tests {
         eng.promote_page(pid, EntryStatus::InReview, "t", now, false)
             .unwrap();
         assert_eq!(eng.store.pages[&pid].status, EntryStatus::InReview);
+    }
+
+    #[test]
+    fn promote_page_age_is_from_created_at_not_updated_at() {
+        // min_age=7 days：即使 updated_at 刚刚刷新（模拟一次编辑），只要 created_at
+        // 足够久远、其它条件也都满足，晋升仍应通过。这条测试锁住"编辑不重置 age"。
+        let mut eng = LlmWikiEngine::new(schema_with_full_promotion());
+        let mut p = WikiPage::new(
+            "EditAfterOld",
+            "## 定义\ncontent",
+            Scope::Private {
+                agent_id: "a".into(),
+            },
+        )
+        .with_entry_type(EntryType::Concept);
+        let now = OffsetDateTime::now_utc();
+        p.created_at = Some(now - time::Duration::days(30));
+        p.status_entered_at = Some(now - time::Duration::days(30));
+        p.updated_at = now; // 刚刚编辑过
+        let pid = p.id;
+        let title = p.title.clone();
+        eng.store.pages.insert(pid, p);
+        for i in 0..2u32 {
+            let mut ref_page = WikiPage::new(
+                format!("Ref{i}"),
+                format!("[[{title}]]"),
+                Scope::Private {
+                    agent_id: "a".into(),
+                },
+            );
+            ref_page.refresh_outbound_links();
+            eng.store.pages.insert(ref_page.id, ref_page);
+        }
+        eng.promote_page(pid, EntryStatus::InReview, "t", now, false)
+            .unwrap();
+        let page = &eng.store.pages[&pid];
+        assert_eq!(page.status, EntryStatus::InReview);
+        // 晋升后 status_entered_at 必须同步刷新到 now
+        assert_eq!(page.status_entered_at, Some(now));
     }
 
     #[test]

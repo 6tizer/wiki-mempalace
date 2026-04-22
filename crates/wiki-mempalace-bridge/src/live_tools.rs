@@ -110,7 +110,7 @@ impl MempalaceTools for LiveMempalaceTools {
     }
 
     fn wake_up(&self, wing: Option<&str>, bank_id: Option<&str>) -> Result<Value, MempalaceError> {
-        // identity.json 与 palace.db 同目录
+        // identity.txt 与 palace.db 同目录（与 rust_mempalace::service::Palace::init 一致）
         let identity_path = {
             let conn = self
                 .conn
@@ -119,9 +119,9 @@ impl MempalaceTools for LiveMempalaceTools {
             conn.path()
                 .map(|p| {
                     let db_path = std::path::Path::new(p);
-                    db_path.parent().unwrap_or(db_path).join("identity.json")
+                    db_path.parent().unwrap_or(db_path).join("identity.txt")
                 })
-                .unwrap_or_else(|| std::path::PathBuf::from("identity.json"))
+                .unwrap_or_else(|| std::path::PathBuf::from("identity.txt"))
         };
         self.with_conn(|conn| {
             let text = service::wake_up(conn, &identity_path, wing, bank_id)

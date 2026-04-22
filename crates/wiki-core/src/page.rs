@@ -26,6 +26,15 @@ pub struct WikiPage {
     /// 页面生命周期状态，新建默认 Draft；历史 JSON 无该字段时也回落 Draft。
     #[serde(default = "default_status")]
     pub status: EntryStatus,
+    /// 页面**首次创建**时间戳。用于 `min_age_days` 晋升条件，不随正文编辑改变。
+    /// 历史 JSON 无该字段时为 `None`，引擎会回落到 `updated_at`（保守旧行为）。
+    #[serde(default)]
+    pub created_at: Option<OffsetDateTime>,
+    /// 进入**当前 `status`** 的时间戳。用于 `cooldown_days` 冷静期判定，仅在
+    /// `status` 真正发生变化时更新；普通内容编辑不重置。历史 JSON 无该字段时为
+    /// `None`，引擎会回落到 `updated_at`。
+    #[serde(default)]
+    pub status_entered_at: Option<OffsetDateTime>,
 }
 
 impl WikiPage {
@@ -40,6 +49,8 @@ impl WikiPage {
             outbound_page_titles: Vec::new(),
             entry_type: None,
             status: EntryStatus::Draft,
+            created_at: Some(now),
+            status_entered_at: Some(now),
         }
     }
 
@@ -50,9 +61,23 @@ impl WikiPage {
     }
 
     /// Builder：显式设置生命周期状态。
+    ///
+    /// 注意：会同步把 `status_entered_at` 重置为 **now**，保证新建页面的 cooldown 从
+    /// 正确的时间起算。
     pub fn with_status(mut self, status: EntryStatus) -> Self {
         self.status = status;
+        self.status_entered_at = Some(OffsetDateTime::now_utc());
         self
+    }
+
+    /// 读取 `min_age_days` 比较的起算时间；历史 JSON 回落到 `updated_at`。
+    pub fn age_from(&self) -> OffsetDateTime {
+        self.created_at.unwrap_or(self.updated_at)
+    }
+
+    /// 读取 `cooldown_days` 比较的起算时间；历史 JSON 回落到 `updated_at`。
+    pub fn status_since(&self) -> OffsetDateTime {
+        self.status_entered_at.unwrap_or(self.updated_at)
     }
 
     /// 从 markdown 中提取 `[[Page Title]]` 形式的 wikilink，并写入 `outbound_page_titles`。

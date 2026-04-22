@@ -33,17 +33,24 @@ cargo run -q -p wiki-cli --manifest-path "$REPO_ROOT/Cargo.toml" -- \
   --db wiki.db --wiki-dir wiki --sync-wiki lint
 
 echo "[5.1] frontmatter check"
-# pages/ 下每个 .md 的第一行必须是 ---（YAML frontmatter 存在）
-for f in wiki/pages/*.md; do
-  [[ -f "$f" ]] || continue
+# pages/<entry_type>/*.md 下每个 .md 的第一行必须是 ---（YAML frontmatter 存在）
+# 现投影层按 entry_type 分子目录（见 docs/vault-standards.md），需递归扫描。
+# 用 `find -print0 | while read -d ''` 保证可移植（macOS bash 3.x 无 mapfile）。
+checked=0
+while IFS= read -r -d '' f; do
   first_line="$(head -n 1 "$f")"
   if [[ "$first_line" != "---" ]]; then
     echo "frontmatter missing in $f (first line: $first_line)" >&2
     exit 1
   fi
   grep -q "^status:" "$f" || { echo "status field missing in $f" >&2; exit 1; }
-done
-echo "  pages frontmatter OK"
+  checked=$((checked + 1))
+done < <(find wiki/pages -type f -name '*.md' -print0 2>/dev/null)
+if [[ "$checked" -eq 0 ]]; then
+  echo "frontmatter check: no page files found under wiki/pages/**, aborting" >&2
+  exit 1
+fi
+echo "  pages frontmatter OK ($checked files checked)"
 
 echo "[6/8] outbox export + ack"
 cargo run -q -p wiki-cli --manifest-path "$REPO_ROOT/Cargo.toml" -- \

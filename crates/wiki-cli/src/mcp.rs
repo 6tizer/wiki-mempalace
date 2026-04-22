@@ -203,13 +203,12 @@ fn tools_list() -> Value {
             },
             {
                 "name": "wiki_ingest_llm",
-                "description": "LLM-driven structured ingestion: extract claims from text via LLM",
+                "description": "LLM-driven structured ingestion: extract claims + a five-section Summary page. Since M7 the generated summary page is always EntryType::Summary.",
                 "inputSchema": {"type":"object","properties":{
                     "uri":{"type":"string","description":"Source URI"},
                     "body":{"type":"string","description":"Source text body"},
                     "scope":{"type":"string","description":"Scope"},
-                    "dry_run":{"type":"boolean","description":"If true, return plan without committing"},
-                    "entry_type":{"type":"string","description":"Entry type for the generated summary page (concept|entity|synthesis|reference|lint_report). Defaults to concept when omitted."}
+                    "dry_run":{"type":"boolean","description":"If true, return plan without committing"}
                 },"required":["uri","body"]}
             },
             // --- Mempalace passthrough tools ---
@@ -495,7 +494,10 @@ fn call_tool(
                 if let Some(et) = entry_type {
                     page.entry_type = Some(et);
                 }
-                page.status = status;
+                if page.status != status {
+                    page.status = status;
+                    page.status_entered_at = Some(OffsetDateTime::now_utc());
+                }
             }
             save_and_flush(eng, repo).map_err(|e| e.to_string())?;
             Ok(json!({
@@ -624,12 +626,12 @@ fn call_tool(
                 .get("dry_run")
                 .and_then(Value::as_bool)
                 .unwrap_or(false);
-            let entry_type_opt = args
-                .get("entry_type")
-                .and_then(Value::as_str)
-                .map(|s| s.to_string());
-            let explicit_et = crate::parse_entry_type_opt(&entry_type_opt)
-                .map_err(|e| format!("invalid entry_type: {e}"))?;
+            if args.get("entry_type").is_some() {
+                eprintln!(
+                    "warning: wiki_ingest_llm.entry_type is deprecated since M7 and is ignored; \
+                     summary pages are fixed to EntryType::Summary."
+                );
+            }
 
             let cfg = crate::llm::load_llm_config(llm_config_path).map_err(|e| e.to_string())?;
             let user_msg = format!("Source URI:\n{uri}\n\nBody:\n{body}");
@@ -669,7 +671,6 @@ fn call_tool(
                 } else {
                     plan.summary_title.trim().to_string()
                 };
-                let _ = explicit_et; // MCP 仍解析 entry_type 参数以校验，summary 页类型固定为 Summary
                 let md = plan.to_five_section_summary_body(Some(uri));
                 let status = initial_status_for(Some(&EntryType::Summary), &eng.schema.clone());
                 let page = wiki_core::WikiPage::new(title, md, sc.clone())
@@ -820,8 +821,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn tools_list_wiki_ingest_llm_has_entry_type_param() {
-        // D3.D：验证 MCP tools/list 暴露的 wiki_ingest_llm 工具包含 entry_type 参数。
+    fn tools_list_wiki_ingest_llm_has_no_entry_type_param() {
+        // M7 起 wiki_ingest_llm 产物固定 EntryType::Summary，inputSchema 不应再暴露 entry_type。
         let v = tools_list();
         let tools = v.get("tools").and_then(Value::as_array).expect("tools[]");
         let ingest = tools
@@ -831,17 +832,13 @@ mod tests {
         let props = ingest
             .pointer("/inputSchema/properties")
             .expect("inputSchema.properties");
-        let et = props.get("entry_type").expect("entry_type 属性应存在");
-        assert_eq!(
-            et.get("type").and_then(Value::as_str),
-            Some("string"),
-            "entry_type 应为 string 类型"
-        );
-        // description 应提示缺省为 concept，便于外部 LLM agent 识别
-        let desc = et.get("description").and_then(Value::as_str).unwrap_or("");
         assert!(
-            desc.contains("concept"),
-            "entry_type.description 应提及默认值 concept，实际: {desc}"
+            props.get("entry_type").is_none(),
+            "entry_type 已在 M7 废弃，不应再出现在 tools/list 中"
         );
+        // 保留核心参数契约
+        for k in ["uri", "body", "scope", "dry_run"] {
+            assert!(props.get(k).is_some(), "{k} 仍应存在");
+        }
     }
 }

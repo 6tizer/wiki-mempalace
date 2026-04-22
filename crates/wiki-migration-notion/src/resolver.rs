@@ -189,21 +189,22 @@ pub fn extract_notion_uuid_from_url(url: &str) -> Option<String> {
     re.captures(url).map(|c| c[1].to_lowercase())
 }
 
-/// URL 归一化：统一 scheme/host 大小写、去锚点、去常见跟踪参数。
+/// URL 归一化：统一 scheme/host 大小写、去锚点、剥离常见跟踪参数。
 ///
 /// 说明：本工具只服务"是否是同一篇文章"的判断，不追求完全 RFC 3986 归一化。
+/// path+query 保留原样（微信 `__biz=` 等大小写敏感参数不能动），但 query 中的
+/// **跟踪参数**（utm_*, fbclid, gclid, mc_cid, mc_eid, ref, ref_src, spm, share_source,
+/// from, source 等 Notion/X/推文/微信内常见噪声键）会被过滤。
 pub fn normalize_url(url: &str) -> String {
     let trimmed = url.trim();
     if trimmed.is_empty() {
         return String::new();
     }
-    // 去掉 `#anchor`
     let (before_anchor, _) = match trimmed.find('#') {
         Some(i) => trimmed.split_at(i),
         None => (trimmed, ""),
     };
 
-    // scheme+host 统一小写，path+query 保留原样（微信 __biz= 参数大小写敏感）
     if let Some(scheme_end) = before_anchor.find("://") {
         let scheme = &before_anchor[..scheme_end];
         let rest = &before_anchor[scheme_end + 3..];
@@ -213,12 +214,25 @@ pub fn normalize_url(url: &str) -> String {
         };
         let host = host_and_path.to_ascii_lowercase();
         let tail = &rest[host_and_path.len()..];
+        // 拆 path 与 query，过滤 query 中的 tracking 键
+        let (path, query) = match tail.find('?') {
+            Some(i) => {
+                let (p, q) = tail.split_at(i);
+                (p, &q[1..])
+            }
+            None => (tail, ""),
+        };
+        let cleaned_query = strip_tracking_params(query);
+
         let mut out = String::new();
         out.push_str(&scheme.to_ascii_lowercase());
         out.push_str("://");
         out.push_str(&host);
-        out.push_str(tail);
-        // 去掉尾部斜杠（`https://x.com/foo/` → `https://x.com/foo`）
+        out.push_str(path);
+        if !cleaned_query.is_empty() {
+            out.push('?');
+            out.push_str(&cleaned_query);
+        }
         if out.ends_with('/') && out.matches('/').count() > 3 {
             out.pop();
         }
@@ -226,6 +240,58 @@ pub fn normalize_url(url: &str) -> String {
     } else {
         before_anchor.to_string()
     }
+}
+
+/// 跟踪参数黑名单：前缀匹配（`utm_*`）或完整键匹配。
+fn is_tracking_key(key: &str) -> bool {
+    let k = key.to_ascii_lowercase();
+    if k.starts_with("utm_") {
+        return true;
+    }
+    matches!(
+        k.as_str(),
+        "fbclid"
+            | "gclid"
+            | "mc_cid"
+            | "mc_eid"
+            | "msclkid"
+            | "yclid"
+            | "igshid"
+            | "_hsenc"
+            | "_hsmi"
+            | "ref"
+            | "ref_src"
+            | "ref_url"
+            | "referer"
+            | "referrer"
+            | "spm"
+            | "share_source"
+            | "share_token"
+            | "share_from"
+            | "source"
+            | "from"
+            | "scene"
+    )
+}
+
+fn strip_tracking_params(query: &str) -> String {
+    if query.is_empty() {
+        return String::new();
+    }
+    let mut kept: Vec<&str> = Vec::new();
+    for pair in query.split('&') {
+        if pair.is_empty() {
+            continue;
+        }
+        let key = match pair.find('=') {
+            Some(i) => &pair[..i],
+            None => pair,
+        };
+        if !is_tracking_key(key) {
+            kept.push(pair);
+        }
+    }
+    kept.join("&")
 }
 
 #[cfg(test)]
@@ -244,6 +310,35 @@ mod tests {
     fn 归一化_url_保留微信__biz_大小写() {
         let input = "https://mp.weixin.qq.com/s?__biz=MzU&mid=1";
         assert_eq!(normalize_url(input), input);
+    }
+
+    #[test]
+    fn 归一化_url_去掉_utm_等跟踪参数() {
+        assert_eq!(
+            normalize_url(
+                "https://Example.com/post?utm_source=tw&utm_medium=social&id=42&fbclid=abc"
+            ),
+            "https://example.com/post?id=42"
+        );
+        // 只有跟踪参数时，最终 URL 不带 `?`
+        assert_eq!(
+            normalize_url("https://example.com/post?utm_source=tw&gclid=x"),
+            "https://example.com/post"
+        );
+        // 同一篇文章的两种 UTM 变体应归一到同一个 key
+        let a = normalize_url("https://example.com/a?id=1&utm_source=tw");
+        let b = normalize_url("https://example.com/a?id=1&utm_source=mail&utm_campaign=x");
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn 归一化_url_保留微信关键参数_过滤_from() {
+        // 微信文章 __biz / mid / sn / chksm 必须保留；from / scene 是分享来源噪声
+        let input = "https://mp.weixin.qq.com/s?__biz=MzU&mid=1&sn=abc&from=singlemessage&scene=19";
+        assert_eq!(
+            normalize_url(input),
+            "https://mp.weixin.qq.com/s?__biz=MzU&mid=1&sn=abc"
+        );
     }
 
     #[test]
