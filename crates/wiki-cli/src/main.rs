@@ -2,6 +2,7 @@ use clap::{Parser, Subcommand, ValueEnum};
 use std::io::Write;
 use std::path::PathBuf;
 use time::{format_description::well_known::Rfc3339, Duration, OffsetDateTime};
+use walkdir::WalkDir;
 use wiki_core::{
     document_visible_to_viewer, parse_memory_tier, ClaimId, DomainSchema, Entity, EntityId,
     EntityKind, EntryStatus, EntryType, LlmIngestPlanV1, MemoryTier, PageId, QueryContext,
@@ -233,6 +234,8 @@ enum AutomationCmd {
         #[arg(long, default_value_t = false)]
         exit_on_yellow: bool,
     },
+    /// Verify that a restored wiki.db / vault / optional palace.db is structurally healthy.
+    VerifyRestore,
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, ValueEnum)]
@@ -760,6 +763,187 @@ fn emit_automation_health_alert(level: AutomationHealthLevel) {
 struct AutomationHeartbeat<'a> {
     repo: &'a SqliteRepository,
     run_id: Option<i64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RestoreVaultSummary {
+    pages: usize,
+    sources: usize,
+    frontmatter_checked: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RestorePalaceSummary {
+    drawers: i64,
+    kg_facts: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RestoreVerifyReport {
+    outbox_head_id: i64,
+    total_events: i64,
+    vault: RestoreVaultSummary,
+    palace: Option<RestorePalaceSummary>,
+    progress: Option<OutboxConsumerProgress>,
+}
+
+fn ensure_sqlite_integrity(db_path: &std::path::Path) -> Result<(), Box<dyn std::error::Error>> {
+    if !db_path.is_file() {
+        return Err(format!("wiki.db 不存在: {}", db_path.display()).into());
+    }
+    let conn = rusqlite::Connection::open(db_path)?;
+    let integrity: String = conn.query_row("PRAGMA integrity_check;", [], |row| row.get(0))?;
+    if integrity != "ok" {
+        return Err(format!(
+            "wiki.db integrity_check 失败: {} ({})",
+            integrity,
+            db_path.display()
+        )
+        .into());
+    }
+    Ok(())
+}
+
+fn verify_restore_vault(
+    wiki_root: &std::path::Path,
+) -> Result<RestoreVaultSummary, Box<dyn std::error::Error>> {
+    if !wiki_root.is_dir() {
+        return Err(format!("wiki-dir 不存在: {}", wiki_root.display()).into());
+    }
+    for required in ["index.md", "log.md"] {
+        let path = wiki_root.join(required);
+        if !path.is_file() {
+            return Err(format!("vault 缺少 {}", path.display()).into());
+        }
+    }
+
+    let pages_dir = wiki_root.join("pages");
+    if !pages_dir.is_dir() {
+        return Err(format!("vault 缺少 pages/ 目录: {}", pages_dir.display()).into());
+    }
+    let sources_dir = wiki_root.join("sources");
+    if !sources_dir.is_dir() {
+        return Err(format!("vault 缺少 sources/ 目录: {}", sources_dir.display()).into());
+    }
+
+    let mut pages = 0usize;
+    let mut frontmatter_checked = 0usize;
+    for entry in WalkDir::new(&pages_dir).into_iter().filter_map(Result::ok) {
+        if !entry.file_type().is_file() {
+            continue;
+        }
+        if entry.path().extension().and_then(|s| s.to_str()) != Some("md") {
+            continue;
+        }
+        pages += 1;
+        let content = std::fs::read_to_string(entry.path())?;
+        let mut lines = content.lines();
+        let first_line = lines.next().unwrap_or_default();
+        if first_line != "---" {
+            return Err(format!("frontmatter missing in {}", entry.path().display()).into());
+        }
+        if !content.lines().any(|line| line.starts_with("status:")) {
+            return Err(format!("status field missing in {}", entry.path().display()).into());
+        }
+        frontmatter_checked += 1;
+    }
+    if pages == 0 {
+        return Err(format!("vault pages/ 下没有 md 文件: {}", pages_dir.display()).into());
+    }
+
+    let sources = WalkDir::new(&sources_dir)
+        .into_iter()
+        .filter_map(Result::ok)
+        .filter(|entry| entry.file_type().is_file())
+        .count();
+
+    Ok(RestoreVaultSummary {
+        pages,
+        sources,
+        frontmatter_checked,
+    })
+}
+
+fn table_exists(conn: &rusqlite::Connection, table_name: &str) -> Result<bool, rusqlite::Error> {
+    conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name=?1)",
+        [table_name],
+        |row| row.get::<_, i64>(0),
+    )
+    .map(|value| value != 0)
+}
+
+fn verify_restore_palace(
+    palace_path: &std::path::Path,
+) -> Result<RestorePalaceSummary, Box<dyn std::error::Error>> {
+    if !palace_path.is_file() {
+        return Err(format!("palace.db 不存在: {}", palace_path.display()).into());
+    }
+    let conn = rusqlite::Connection::open(palace_path)?;
+    for table in ["drawers", "drawer_vectors", "kg_facts"] {
+        if !table_exists(&conn, table)? {
+            return Err(
+                format!("palace.db 缺少核心表 {}: {}", table, palace_path.display()).into(),
+            );
+        }
+    }
+    let drawers: i64 = conn.query_row("SELECT COUNT(*) FROM drawers", [], |row| row.get(0))?;
+    let kg_facts: i64 = conn.query_row("SELECT COUNT(*) FROM kg_facts", [], |row| row.get(0))?;
+    Ok(RestorePalaceSummary { drawers, kg_facts })
+}
+
+fn collect_restore_verify_report(
+    db_path: &std::path::Path,
+    repo: &SqliteRepository,
+    wiki_root: &std::path::Path,
+    palace_path: Option<&std::path::Path>,
+    consumer_tag: &str,
+) -> Result<RestoreVerifyReport, Box<dyn std::error::Error>> {
+    ensure_sqlite_integrity(db_path)?;
+    let _snapshot = repo.load_snapshot()?;
+    let outbox = repo.get_outbox_stats()?;
+    let vault = verify_restore_vault(wiki_root)?;
+    let palace = palace_path.map(verify_restore_palace).transpose()?;
+    let progress = if palace_path.is_some() {
+        Some(repo.get_outbox_consumer_progress(consumer_tag)?)
+    } else {
+        None
+    };
+    Ok(RestoreVerifyReport {
+        outbox_head_id: outbox.head_id,
+        total_events: outbox.total_events,
+        vault,
+        palace,
+        progress,
+    })
+}
+
+fn render_restore_verify_report(report: &RestoreVerifyReport, consumer_tag: &str) -> String {
+    let mut out = String::new();
+    out.push_str("restore verify: status=ok\n");
+    out.push_str(&format!(
+        "wiki_db: integrity=ok outbox_head_id={} total_events={}\n",
+        report.outbox_head_id, report.total_events
+    ));
+    out.push_str(&format!(
+        "vault: index=ok log=ok pages={} sources={} frontmatter_checked={}\n",
+        report.vault.pages, report.vault.sources, report.vault.frontmatter_checked
+    ));
+    if let Some(palace) = &report.palace {
+        let progress = report
+            .progress
+            .as_ref()
+            .expect("palace progress should exist");
+        let acked = progress
+            .acked_up_to_id
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| "never".to_string());
+        out.push_str(&format!(
+            "palace: status=ok drawers={} kg_facts={} consumer_tag={} acked_up_to_id={} backlog_events={}\n",
+            palace.drawers, palace.kg_facts, consumer_tag, acked, progress.backlog_events
+        ));
+    }
+    out
 }
 
 impl AutomationHeartbeat<'_> {
@@ -1347,6 +1531,24 @@ fn run_with_engine(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             if should_exit {
                 std::process::exit(1);
             }
+        }
+        Cmd::Automation {
+            cmd: AutomationCmd::VerifyRestore,
+        } => {
+            let wiki_root = wiki_root
+                .as_deref()
+                .ok_or_else(|| "--wiki-dir 是 automation verify-restore 的必填参数".to_string())?;
+            let report = collect_restore_verify_report(
+                &cli.db,
+                &repo,
+                wiki_root,
+                cli.palace.as_deref(),
+                DEFAULT_MEMPALACE_CONSUMER_TAG,
+            )?;
+            print!(
+                "{}",
+                render_restore_verify_report(&report, DEFAULT_MEMPALACE_CONSUMER_TAG)
+            );
         }
         Cmd::Automation {
             cmd: AutomationCmd::ListJobs,
