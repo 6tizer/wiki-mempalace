@@ -1,12 +1,44 @@
 use assert_cmd::Command;
 use predicates::prelude::*;
 use rusqlite::params;
+use std::path::{Path, PathBuf};
 use time::{format_description::well_known::Rfc3339, OffsetDateTime};
 use wiki_core::WikiEvent;
 use wiki_storage::{SqliteRepository, WikiRepository};
 
 fn wiki_cli() -> Command {
     Command::cargo_bin("wiki-cli").unwrap()
+}
+
+fn repo_root() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
+}
+
+fn make_minimal_vault(root: &Path) {
+    std::fs::create_dir_all(root.join("pages/concept")).unwrap();
+    std::fs::create_dir_all(root.join("sources/raw")).unwrap();
+    std::fs::write(root.join("index.md"), "# Index\n").unwrap();
+    std::fs::write(root.join("log.md"), "# Log\n").unwrap();
+    std::fs::write(
+        root.join("pages/concept/example.md"),
+        concat!(
+            "---\n",
+            "id: page-1\n",
+            "title: Example\n",
+            "status: Draft\n",
+            "---\n",
+            "\n",
+            "body\n"
+        ),
+    )
+    .unwrap();
+    std::fs::write(root.join("sources/raw/example.txt"), "source body\n").unwrap();
+}
+
+fn derive_backup_tar_path(db_backup: &Path) -> PathBuf {
+    let parent = db_backup.parent().unwrap();
+    let stem = db_backup.file_stem().unwrap().to_string_lossy();
+    parent.join(format!("{stem}.tar.gz"))
 }
 
 fn append_outbox_query_events(repo: &SqliteRepository, count: i64) {
@@ -45,6 +77,147 @@ fn seed_automation_run(
         ],
     )
     .unwrap();
+}
+
+#[test]
+fn automation_verify_restore_succeeds_for_valid_db_vault_and_palace() {
+    let db = tempfile::NamedTempFile::new().unwrap();
+    let db_path = db.path().to_owned();
+    let repo = SqliteRepository::open(&db_path).unwrap();
+    append_outbox_query_events(&repo, 2);
+
+    let vault_dir = tempfile::tempdir().unwrap();
+    make_minimal_vault(vault_dir.path());
+
+    let palace_dir = tempfile::tempdir().unwrap();
+    let palace_path = palace_dir.path().join("palace.db");
+    let conn = rusqlite::Connection::open(&palace_path).unwrap();
+    rust_mempalace::db::init_schema(&conn).unwrap();
+
+    wiki_cli()
+        .arg("--db")
+        .arg(&db_path)
+        .arg("--wiki-dir")
+        .arg(vault_dir.path())
+        .arg("--palace")
+        .arg(&palace_path)
+        .arg("automation")
+        .arg("verify-restore")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("restore verify: status=ok"))
+        .stdout(predicate::str::contains("wiki_db: integrity=ok"))
+        .stdout(predicate::str::contains(
+            "vault: index=ok log=ok pages=1 sources=1 frontmatter_checked=1",
+        ))
+        .stdout(predicate::str::contains("palace: status=ok"))
+        .stdout(predicate::str::contains("consumer_tag=mempalace"));
+}
+
+#[test]
+fn automation_verify_restore_fails_when_vault_missing_sources_dir() {
+    let db = tempfile::NamedTempFile::new().unwrap();
+    let db_path = db.path().to_owned();
+    let _repo = SqliteRepository::open(&db_path).unwrap();
+
+    let vault_dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(vault_dir.path().join("pages/concept")).unwrap();
+    std::fs::write(vault_dir.path().join("index.md"), "# Index\n").unwrap();
+    std::fs::write(vault_dir.path().join("log.md"), "# Log\n").unwrap();
+    std::fs::write(
+        vault_dir.path().join("pages/concept/example.md"),
+        "---\nstatus: Draft\n---\nbody\n",
+    )
+    .unwrap();
+
+    wiki_cli()
+        .arg("--db")
+        .arg(&db_path)
+        .arg("--wiki-dir")
+        .arg(vault_dir.path())
+        .arg("automation")
+        .arg("verify-restore")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("vault 缺少 sources/ 目录"));
+}
+
+#[test]
+fn automation_verify_restore_fails_when_page_missing_status() {
+    let db = tempfile::NamedTempFile::new().unwrap();
+    let db_path = db.path().to_owned();
+    let _repo = SqliteRepository::open(&db_path).unwrap();
+
+    let vault_dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(vault_dir.path().join("pages/concept")).unwrap();
+    std::fs::create_dir_all(vault_dir.path().join("sources/raw")).unwrap();
+    std::fs::write(vault_dir.path().join("index.md"), "# Index\n").unwrap();
+    std::fs::write(vault_dir.path().join("log.md"), "# Log\n").unwrap();
+    std::fs::write(
+        vault_dir.path().join("pages/concept/example.md"),
+        "---\nid: page-1\n---\nbody\n",
+    )
+    .unwrap();
+
+    wiki_cli()
+        .arg("--db")
+        .arg(&db_path)
+        .arg("--wiki-dir")
+        .arg(vault_dir.path())
+        .arg("automation")
+        .arg("verify-restore")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("status field missing"));
+}
+
+#[test]
+fn automation_verify_restore_fails_when_palace_missing_core_tables() {
+    let db = tempfile::NamedTempFile::new().unwrap();
+    let db_path = db.path().to_owned();
+    let _repo = SqliteRepository::open(&db_path).unwrap();
+
+    let vault_dir = tempfile::tempdir().unwrap();
+    make_minimal_vault(vault_dir.path());
+
+    let palace_file = tempfile::NamedTempFile::new().unwrap();
+    let palace_path = palace_file.path().to_owned();
+    let conn = rusqlite::Connection::open(&palace_path).unwrap();
+    conn.execute("CREATE TABLE hello(id INTEGER PRIMARY KEY)", [])
+        .unwrap();
+
+    wiki_cli()
+        .arg("--db")
+        .arg(&db_path)
+        .arg("--wiki-dir")
+        .arg(vault_dir.path())
+        .arg("--palace")
+        .arg(&palace_path)
+        .arg("automation")
+        .arg("verify-restore")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("palace.db 缺少核心表 drawers"));
+}
+
+#[test]
+fn automation_verify_restore_fails_on_invalid_db_file() {
+    let db = tempfile::NamedTempFile::new().unwrap();
+    std::fs::write(db.path(), "not a sqlite database").unwrap();
+
+    let vault_dir = tempfile::tempdir().unwrap();
+    make_minimal_vault(vault_dir.path());
+
+    wiki_cli()
+        .arg("--db")
+        .arg(db.path())
+        .arg("--wiki-dir")
+        .arg(vault_dir.path())
+        .arg("automation")
+        .arg("verify-restore")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("database"));
 }
 
 #[test]
@@ -604,6 +777,118 @@ fn consume_to_mempalace_ignores_query_crystallize_and_lint_events() {
         .stdout(predicate::str::contains("filtered=0"))
         .stdout(predicate::str::contains("unresolved=0"))
         .stdout(predicate::str::contains("acked=3"));
+}
+
+#[test]
+fn recovery_drill_script_restores_and_rebuilds_palace() {
+    let db = tempfile::NamedTempFile::new().unwrap();
+    let db_path = db.path().to_owned();
+    let vault_dir = tempfile::tempdir().unwrap();
+    make_minimal_vault(vault_dir.path());
+
+    wiki_cli()
+        .arg("--db")
+        .arg(&db_path)
+        .arg("ingest")
+        .arg("file:///tmp/source.md")
+        .arg("source body with redis")
+        .arg("--scope")
+        .arg("private:cli")
+        .assert()
+        .success();
+
+    let backup_out = tempfile::tempdir().unwrap();
+    let backup_script = repo_root().join("scripts/backup.sh");
+    let backup_output = std::process::Command::new("bash")
+        .arg(&backup_script)
+        .arg("--db")
+        .arg(&db_path)
+        .arg("--wiki")
+        .arg(vault_dir.path())
+        .arg("--out")
+        .arg(backup_out.path())
+        .output()
+        .unwrap();
+    assert!(backup_output.status.success(), "{backup_output:?}");
+    let backup_stdout = String::from_utf8(backup_output.stdout).unwrap();
+    let backup_db = backup_stdout
+        .lines()
+        .find_map(|line| line.strip_prefix("BACKUP_DB="))
+        .map(PathBuf::from)
+        .unwrap();
+    let backup_tar = derive_backup_tar_path(&backup_db);
+    assert!(backup_tar.exists());
+
+    let scratch = tempfile::tempdir().unwrap();
+    let drill_script = repo_root().join("scripts/recovery-drill.sh");
+    let output = std::process::Command::new("bash")
+        .current_dir(repo_root())
+        .arg(&drill_script)
+        .arg("--db")
+        .arg(&backup_db)
+        .arg("--wiki-tar")
+        .arg(&backup_tar)
+        .arg("--scratch")
+        .arg(scratch.path())
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("RESTORED_DB="));
+    assert!(stdout.contains("RESTORED_WIKI="));
+    assert!(stdout.contains("RESTORED_PALACE="));
+    assert!(stdout.contains("RECOVERY_DRILL_OK="));
+    let restored_palace = stdout
+        .lines()
+        .find_map(|line| line.strip_prefix("RESTORED_PALACE="))
+        .map(PathBuf::from)
+        .unwrap();
+    assert!(restored_palace.exists());
+}
+
+#[test]
+fn recovery_drill_script_fails_when_sources_dir_missing_from_tar() {
+    let db = tempfile::NamedTempFile::new().unwrap();
+    let db_path = db.path().to_owned();
+    let _repo = SqliteRepository::open(&db_path).unwrap();
+
+    let invalid_vault = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(invalid_vault.path().join("pages/concept")).unwrap();
+    std::fs::write(invalid_vault.path().join("index.md"), "# Index\n").unwrap();
+    std::fs::write(invalid_vault.path().join("log.md"), "# Log\n").unwrap();
+    std::fs::write(
+        invalid_vault.path().join("pages/concept/example.md"),
+        "---\nstatus: Draft\n---\nbody\n",
+    )
+    .unwrap();
+
+    let tar_path = tempfile::NamedTempFile::new().unwrap().into_temp_path();
+    let status = std::process::Command::new("tar")
+        .arg("-czf")
+        .arg(tar_path.as_os_str())
+        .arg("-C")
+        .arg(invalid_vault.path().parent().unwrap())
+        .arg(invalid_vault.path().file_name().unwrap())
+        .status()
+        .unwrap();
+    assert!(status.success());
+
+    let scratch = tempfile::tempdir().unwrap();
+    let drill_script = repo_root().join("scripts/recovery-drill.sh");
+    let output = std::process::Command::new("bash")
+        .current_dir(repo_root())
+        .arg(&drill_script)
+        .arg("--db")
+        .arg(&db_path)
+        .arg("--wiki-tar")
+        .arg(tar_path.as_os_str())
+        .arg("--scratch")
+        .arg(scratch.path())
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(!stdout.contains("RECOVERY_DRILL_OK="));
 }
 
 #[test]

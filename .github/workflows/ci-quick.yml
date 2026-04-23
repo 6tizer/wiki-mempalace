@@ -38,6 +38,27 @@ jobs:
         run: |
           tmpdir="$(mktemp -d)"
           db="$tmpdir/wiki.db"
+          wiki_dir="$tmpdir/wiki"
+          mkdir -p "$wiki_dir/pages/concept" "$wiki_dir/sources/raw"
+          cat > "$wiki_dir/index.md" <<'EOF'
+          # Index
+          EOF
+          cat > "$wiki_dir/log.md" <<'EOF'
+          # Log
+          EOF
+          cat > "$wiki_dir/pages/concept/example.md" <<'EOF'
+          ---
+          id: page-1
+          title: Example
+          status: Draft
+          ---
+
+          body
+          EOF
+          cat > "$wiki_dir/sources/raw/example.txt" <<'EOF'
+          source body
+          EOF
           cargo run -q -p wiki-cli -- --db "$db" automation run-daily --dry-run
           cargo run -q -p wiki-cli -- --db "$db" automation status
           cargo run -q -p wiki-cli -- --db "$db" automation doctor
+          cargo run -q -p wiki-cli -- --db "$db" --wiki-dir "$wiki_dir" automation verify-restore

@@ -34,8 +34,8 @@
 | M1 调度编排层       | 统一自动化任务入口、任务顺序、dry-run、失败短路                        | **✅ 已完成**         | `list-jobs`、`run <job>`、完整 job registry、5 jobs、灵活 vault 默认路径             | 无                                 |
 | M2 运行状态与心跳     | 持久化任务运行状态、最近成功/失败、心跳                               | **✅ 已完成**         | `AutomationHeartbeat` 长任务心跳刷新、`status`/`doctor` 命令                       | 阈值可考虑提为配置（低优先级）                   |
 | M3 告警与运维出口     | 失败告警、状态聚合、last failures、health                     | **✅ 已完成**         | `health`（green/yellow/red）、`last-failures`、阈值判定、stderr 告警出口              | 无                                 |
-| M4 Outbox 闭环增强 | 事件矩阵、消费闭环、消费健康、backlog                             | **大部分完成**         | `--palace` 启用 `LiveMempalaceSink` 写入 palace.db、consumer progress/ack 闭环  | 事件矩阵文档待产出、非 mempalace 事件策略待明确     |
-| M5 恢复与回滚       | 备份、恢复、重建、演练、恢复成功检查                                 | **部分完成**          | 已有 `recovery-runbook.md` 与 `recovery-drill.sh`                           | 补恢复成功检查命令、真实演练记录、`palace.db` 重建验证 |
+| M4 Outbox 闭环增强 | 事件矩阵、消费闭环、消费健康、backlog                             | **✅ 已完成**         | `docs/outbox-event-matrix.md`、bridge 结构化 dispatch stats、CLI `consume-to-mempalace` 闭环摘要、active/ignored 全链路测试  | 无                                  |
+| M5 恢复与回滚       | 备份、恢复、重建、演练、恢复成功检查                                 | **✅ 已完成**          | `automation verify-restore`、升级后的 `recovery-drill.sh`、`recovery-drill-template.md`、CLI + 脚本行为测试                           | 无 |
 | M6 Gap 工作流     | 发现知识缺口、产出报告或草稿                                     | **未开始**           | 无 `gap` 命令、无 gap 规则集合                                                    | 全量实现                              |
 | M7 Fixer 工作流   | 把 lint finding 转成 fix actions                      | **未开始**           | 无 `fix` 命令、无 fix action 模型                                               | 全量实现                              |
 | M8 消费链产品化      | 统一 qa / synthesis / crystallize / query-write-page | **未开始（仅有零散基础能力）** | 现有 `query --write-page`、`crystallize`、entry_type/status 零散逻辑             | 抽成统一消费入口和统一 page 契约               |
@@ -44,7 +44,7 @@
 
 ### 当前结论
 
-- **P0 已基本收口**（J1/J2/J3 核心功能已完成，J4 仅余演练模板）
+- **P0 已收口**（J1/J2/J3/J4 已完成）
 - **P1 还没有正式启动**
 - 下一步重心：收尾 J4，启动 P1（J5-J8）
 
@@ -111,21 +111,23 @@
 
 **遗留**：事件矩阵文档（关键）；8 类事件的消费决策文档化；全链路 E2E 测试。
 
-### J4. 恢复验证与恢复成功检查 — 完成度 40%
+### J4. 恢复验证与恢复成功检查 — 完成度 100%
 
 
 | 交付物                         | 状态  | 证据                                                         |
 | --------------------------- | --- | ---------------------------------------------------------- |
-| `recovery-runbook.md`       | ✅   | wiki.db / palace.db / vault 恢复顺序、integrity_check、outbox 重建 |
-| `scripts/recovery-drill.sh` | ✅   | scratch 恢复 + integrity_check + vault 结构校验                  |
+| `recovery-runbook.md`       | ✅   | 验证步骤已收敛到 `automation verify-restore`，并明确 drill 会实际重建 `palace.db` |
+| `scripts/recovery-drill.sh` | ✅   | scratch 恢复 + integrity_check + vault 校验 + 实际执行 `consume-to-mempalace` + `automation verify-restore` |
 | CI `bash -n`                | ✅   | `ci-quick.yml` 含 `bash -n scripts/recovery-drill.sh`       |
-| 恢复成功检查命令                    | ❌   | 无 `verify-restore` 命令或 `restore-check.sh`                  |
-| palace.db 重建验证              | ⚠️  | runbook 有指引但 drill 脚本仅打印命令，未实际执行 + 断言                      |
-| 演练记录模板                      | ❌   | 无独立模板                                                      |
-| 演练行为测试                      | ❌   | 仅 `bash -n` 语法检查，无 "识别不完整 db / 缺目录" 的自动化测试                 |
+| 恢复成功检查命令                    | ✅   | `wiki-cli automation verify-restore`，统一检查 `wiki.db` / vault / 可选 `palace.db` |
+| palace.db 重建验证              | ✅   | drill 脚本默认实际重建 scratch `palace.db` 并做 verify；行为测试覆盖成功与失败场景 |
+| 演练记录模板                      | ✅   | 新增 `docs/recovery-drill-template.md`                      |
+| CLI 集成测试                    | ✅   | `automation_verify_restore_*` 成功/失败场景覆盖有效 vault、缺 sources、缺 status、缺 palace 核心表 |
+| 演练行为测试                      | ✅   | `recovery_drill_script_restores_and_rebuilds_palace`、`recovery_drill_script_fails_when_sources_dir_missing_from_tar` |
+| CI smoke                    | ✅   | `ci-quick.yml` 新增最小 vault fixture + `automation verify-restore` smoke |
 
 
-**遗留**：恢复成功检查命令/脚本；palace.db 重建验证脚本化；演练记录模板；行为级测试。
+**遗留**：无。J4 范围内的统一验证入口、真实 drill、模板、测试和文档已完成。
 
 ### J5. Gap 工作流 — 完成度 0%
 
@@ -184,8 +186,8 @@
 | ------------ | ------- | --- | --------------------------- |
 | J1 调度完成版     | **100%** | P0  | ✅ 已完成                        |
 | J2 运维健康与告警   | **100%** | P0  | ✅ 已完成                        |
-| J3 Outbox 闭环 | **55%** | P0  | ⚠️ 消费通路通，文档和覆盖缺             |
-| J4 恢复验证      | **40%** | P0  | ⚠️ 有 runbook+drill，缺检查命令和模板 |
+| J3 Outbox 闭环 | **100%** | P0  | ✅ 已完成                       |
+| J4 恢复验证      | **100%** | P0  | ✅ 已完成 |
 | J5 Gap 工作流   | **0%**  | P1  | ❌ 未开始                       |
 | J6 Fixer 工作流 | **0%**  | P1  | ❌ 未开始                       |
 | J7 消费链产品化    | **20%** | P1  | ⚠️ 零散能力在，统一契约缺              |
@@ -951,4 +953,3 @@ flowchart TD
 - 同一轮不要让两个 Agent 同时大改 `crates/wiki-cli/src/main.rs`
 - 所有跨模块接口，先写接口文档或结构体定义，再放开调用方开发
 - 每完成一个模块，就立刻回填进度到批次计划文档
-

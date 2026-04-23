@@ -120,11 +120,37 @@ test -d wiki/sources
      --wiki-tar /tmp/wiki-backups/wiki-YYYYmmdd-HHMMSS.tar.gz
    ```
 3. 确认脚本输出 `PRAGMA integrity_check=ok`、frontmatter 扫描通过、`sources/` 和 `pages/` 都在。
-4. 再用恢复后的 `wiki.db` 做一次 outbox 重建命令，确认 `palace.db` 路径可跑通。
+4. 脚本会默认在 scratch 目录实际执行：
+   - `consume-to-mempalace --last-id 0`
+   - `automation verify-restore`
+5. 确认输出里出现：
+   - `RESTORED_DB=...`
+   - `RESTORED_WIKI=...`
+   - `RESTORED_PALACE=...`
+   - `RECOVERY_DRILL_OK=...`
 
 ## 5. 验证步骤
 
-恢复完成后，最少做这四个检查：
+恢复完成后，统一入口是：
+
+```bash
+cargo run -p wiki-cli -- \
+  --db wiki.db \
+  --wiki-dir wiki \
+  --palace /path/to/palace.db \
+  automation verify-restore
+```
+
+它会一次性验证：
+
+- `wiki.db integrity_check`
+- snapshot / outbox 可读
+- vault 的 `index.md` / `log.md` / `pages/` / `sources/`
+- `pages/` frontmatter 和 `status:`
+- 可选 `palace.db` 的核心表与计数
+- 可选 `mempalace` consumer progress / backlog
+
+若你只想做最小 SQL / 文件级 spot check，仍可手工跑下面这些：
 
 ```bash
 sqlite3 wiki.db 'PRAGMA integrity_check;'
@@ -132,25 +158,6 @@ sqlite3 wiki.db 'SELECT COUNT(*) FROM wiki_outbox;'
 test -f wiki/index.md
 test -f wiki/log.md
 ```
-
-如果需要更严格的 vault 校验，跑 frontmatter 扫描：
-
-```bash
-checked=0
-while IFS= read -r -d '' f; do
-  first_line="$(head -n 1 "$f")"
-  if [[ "$first_line" != "---" ]]; then
-    echo "frontmatter missing in $f" >&2
-    exit 1
-  fi
-  grep -q "^status:" "$f" || { echo "status field missing in $f" >&2; exit 1; }
-  checked=$((checked + 1))
-done < <(find wiki/pages -type f -name '*.md' -print0 2>/dev/null)
-
-test "$checked" -gt 0
-```
-
-如果你要验证 `palace.db`，再跑一条你熟悉的读查询，确认恢复后的内容能被检索到；不要只看文件存在。
 
 ## 6. 回滚判断
 
