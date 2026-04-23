@@ -44,7 +44,11 @@ pub use model::{
     Claim, ClaimId, Entity, EntityId, EntityKind, MemoryTier, PageId, RelationKind, Scope,
     SourceId, TypedEdge,
 };
-pub use page::{extract_headings, extract_wikilinks, WikiPage};
+pub mod page_contract;
+pub use page::{
+    extract_headings, extract_wikilinks, Confidence, WikiPage,
+};
+pub use page_contract::PageContract;
 pub use privacy::{redact_for_ingest, RedactionFinding, SensitiveKind};
 pub use quality::{check_page_completeness, ContradictionHint, LintFinding, LintSeverity};
 pub use query::QueryContext;
