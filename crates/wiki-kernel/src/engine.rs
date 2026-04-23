@@ -12,9 +12,9 @@ use wiki_core::{
     merge_sources_confidence, reciprocal_rank_fusion, redact_for_ingest, reinforce_claim,
     retention_strength, supersede_claim, walk_entities, AuditOperation, AuditRecord, Claim,
     ClaimId, ContradictionHint, CrystallizationDraft, DomainSchema, Entity, EntityId, EntryStatus,
-    EntryType, GraphWalkOptions, LintFinding, LintSeverity, MemoryTier, PageId, QueryContext,
-    RankedDoc, RawArtifact, RelationKind, SchemaLoadError, Scope, SessionCrystallizationInput,
-    SourceId, TypedEdge, WikiEvent,
+    EntryType, GapFinding, GraphWalkOptions, LintFinding, LintSeverity, MemoryTier, PageId,
+    QueryContext, RankedDoc, RawArtifact, RelationKind, SchemaLoadError, Scope,
+    SessionCrystallizationInput, SourceId, TypedEdge, WikiEvent,
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -685,7 +685,7 @@ impl<H: WikiHook> LlmWikiEngine<H> {
                     severity: LintSeverity::Warn,
                     subject: Some(c.id.0.to_string()),
                 });
-            } else if !claim_has_page_reference(&c.text, &page_text) {
+            } else if !crate::gap::claim_has_page_reference(&c.text, &page_text) {
                 findings.push(LintFinding {
                     code: "xref.missing".into(),
                     message: "claim keywords are not referenced in current pages".into(),
@@ -825,6 +825,17 @@ impl<H: WikiHook> LlmWikiEngine<H> {
         self.outbox.clear();
         Ok(n)
     }
+
+    /// 对知识库运行 gap 扫描，返回检测到的知识缺口。
+    ///
+    /// 委托给 [`crate::gap::run_gap_scan`]。调用方负责持久化（save_to_repo / flush_outbox）。
+    pub fn run_gap_scan(
+        &self,
+        viewer_scope: Option<&Scope>,
+        low_coverage_threshold: usize,
+    ) -> Vec<GapFinding> {
+        crate::gap::run_gap_scan(&self.store, viewer_scope, low_coverage_threshold)
+    }
 }
 
 /// 自由函数：三路召回 + RRF + 保留强度（不写审计），避免 `SearchPorts` 与 `&mut self` 交错借用。
@@ -895,18 +906,6 @@ fn contradicts_heuristic(a: &str, b: &str) -> bool {
         || (lb.contains("不是") && la.contains("是"))
         || (la.contains("cannot") && lb.contains("can "))
         || (lb.contains("cannot") && la.contains("can "))
-}
-
-fn claim_has_page_reference(claim_text: &str, page_text: &str) -> bool {
-    let keys: Vec<String> = claim_text
-        .split(|c: char| !c.is_alphanumeric() && c != '_')
-        .map(|x| x.trim().to_ascii_lowercase())
-        .filter(|x| x.len() >= 4)
-        .collect();
-    if keys.is_empty() {
-        return true;
-    }
-    keys.iter().any(|k| page_text.contains(k))
 }
 
 /// 根据 EntryType 和 DomainSchema 计算创建时的初始 EntryStatus：

@@ -5,8 +5,9 @@ use time::{format_description::well_known::Rfc3339, Duration, OffsetDateTime};
 use walkdir::WalkDir;
 use wiki_core::{
     document_visible_to_viewer, parse_memory_tier, ClaimId, DomainSchema, Entity, EntityId,
-    EntityKind, EntryStatus, EntryType, LlmIngestPlanV1, MemoryTier, PageId, QueryContext,
-    RelationKind, Scope, SessionCrystallizationInput, SourceId, TypedEdge, WikiPage,
+    EntityKind, EntryStatus, EntryType, GapFinding, GapSeverity, LlmIngestPlanV1, MemoryTier,
+    PageId, QueryContext, RelationKind, Scope, SessionCrystallizationInput, SourceId, TypedEdge,
+    WikiPage,
 };
 use wiki_kernel::{
     format_claim_doc_id, initial_status_for, merge_graph_rankings, write_lint_report,
@@ -110,6 +111,15 @@ enum Cmd {
         entry_type: Option<String>,
     },
     Lint,
+    /// 检测知识缺口并生成 gap 报告。
+    Gap {
+        /// 低覆盖阈值：关联 claim 数量少于此值的 entity 会被标记。
+        #[arg(long, default_value_t = 2)]
+        low_coverage_threshold: usize,
+        /// 将 gap 报告写入 wiki page（draft 状态）。
+        #[arg(long, default_value_t = false)]
+        write_page: bool,
+    },
     Promote {
         claim_id: String,
     },
@@ -1288,6 +1298,21 @@ fn run_with_engine(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         Cmd::Lint => {
             run_lint_job(&mut eng, &repo, &viewer, sync_wiki, wiki_root.as_deref())?;
         }
+        Cmd::Gap {
+            low_coverage_threshold,
+            write_page,
+        } => {
+            run_gap_job(
+                &mut eng,
+                &repo,
+                &viewer,
+                sync_wiki,
+                wiki_root.as_deref(),
+                low_coverage_threshold,
+                write_page,
+                &schema,
+            )?;
+        }
         Cmd::Promote { claim_id } => {
             let cid = wiki_core::ClaimId(uuid::Uuid::parse_str(&claim_id)?);
             eng.promote_if_qualified(cid, "cli", &viewer)?;
@@ -1931,6 +1956,62 @@ mod tests {
             std::env::remove_var(key);
         }
     }
+
+    #[test]
+    fn gap_empty_db_no_panic() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("test.db");
+        let repo = SqliteRepository::open(&db_path).unwrap();
+        let schema = DomainSchema::permissive_default();
+        let eng = LlmWikiEngine::load_from_repo(schema.clone(), &repo, NoopWikiHook).unwrap();
+        let viewer = Scope::Private {
+            agent_id: "cli".into(),
+        };
+        let findings = eng.run_gap_scan(Some(&viewer), 2);
+        assert!(findings.is_empty(), "空库不应该有 gap");
+    }
+
+    #[test]
+    fn gap_reports_findings() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("test.db");
+        let repo = SqliteRepository::open(&db_path).unwrap();
+        let schema = DomainSchema::permissive_default();
+        let mut eng = LlmWikiEngine::load_from_repo(schema.clone(), &repo, NoopWikiHook).unwrap();
+        let viewer = Scope::Private {
+            agent_id: "cli".into(),
+        };
+
+        // 添加一条 claim，但没有 page 引用它，会触发 gap.missing_xref
+        eng.file_claim(
+            "项目使用 Redis 进行缓存",
+            Scope::Private {
+                agent_id: "cli".into(),
+            },
+            MemoryTier::Semantic,
+            "test",
+        );
+
+        let findings = eng.run_gap_scan(Some(&viewer), 2);
+        assert!(!findings.is_empty(), "应该检测到 gap");
+        assert!(
+            findings.iter().any(|f| f.code == "gap.missing_xref"),
+            "应该检测到 missing_xref"
+        );
+
+        // 测试 markdown 报告输出
+        let md = gap_report_markdown(&findings);
+        assert!(md.contains("# Gap Report"));
+        assert!(md.contains("gap.missing_xref"));
+
+        // 测试写入报告文件
+        let wiki_dir = dir.path().join("wiki");
+        std::fs::create_dir_all(&wiki_dir).unwrap();
+        let path = write_gap_report(&wiki_dir, "gap-test", &findings).unwrap();
+        assert!(path.exists());
+        let content = std::fs::read_to_string(&path).unwrap();
+        assert!(content.contains("gap.missing_xref"));
+    }
 }
 
 fn maybe_sync_projection(
@@ -1970,6 +2051,113 @@ fn run_lint_job(
         println!("{:?}\t{}\t{}", f.severity, f.code, f.message);
     }
     Ok(())
+}
+
+/// 将 GapFinding 列表渲染为 markdown 字符串。
+///
+/// 共享函数：`write_gap_report`（写文件）和 `gap_report_markdown`（写 page）都调用它。
+fn render_gap_markdown(findings: &[GapFinding]) -> String {
+    let severity_order = [GapSeverity::High, GapSeverity::Medium, GapSeverity::Low];
+    let mut grouped: std::collections::BTreeMap<&str, Vec<&GapFinding>> =
+        std::collections::BTreeMap::new();
+    for f in findings {
+        let key = match f.severity {
+            GapSeverity::High => "high",
+            GapSeverity::Medium => "medium",
+            GapSeverity::Low => "low",
+        };
+        grouped.entry(key).or_default().push(f);
+    }
+    let mut md = String::from("# Gap Report\n\n");
+    md.push_str(&format!("- total gaps: `{}`\n\n", findings.len()));
+    for sev in &severity_order {
+        let key = match sev {
+            GapSeverity::High => "high",
+            GapSeverity::Medium => "medium",
+            GapSeverity::Low => "low",
+        };
+        if let Some(items) = grouped.get(key) {
+            md.push_str(&format!("## {key}\n\n"));
+            for item in items {
+                let subject_info = match (&item.subject, &item.subject_label) {
+                    (Some(s), Some(l)) => format!(" (subject={s}, label={l})"),
+                    (Some(s), None) => format!(" (subject={s})"),
+                    (None, Some(l)) => format!(" (label={l})"),
+                    (None, None) => String::new(),
+                };
+                md.push_str(&format!(
+                    "- `{}` {}{}\n",
+                    item.code, item.message, subject_info
+                ));
+            }
+            md.push('\n');
+        }
+    }
+    md
+}
+
+/// 生成 gap 报告的 markdown 文件，写入 wiki/reports/gap-{timestamp}.md
+fn write_gap_report(
+    wiki_root: &std::path::Path,
+    report_name: &str,
+    findings: &[GapFinding],
+) -> std::io::Result<std::path::PathBuf> {
+    use std::fs;
+
+    let reports_dir = wiki_root.join("reports");
+    fs::create_dir_all(&reports_dir)?;
+    let filename = if report_name.ends_with(".md") {
+        report_name.to_string()
+    } else {
+        format!("{report_name}.md")
+    };
+    let out = reports_dir.join(filename);
+    let md = render_gap_markdown(findings);
+    fs::write(&out, md)?;
+    Ok(out)
+}
+
+fn run_gap_job(
+    eng: &mut LlmWikiEngine<NoopWikiHook>,
+    repo: &SqliteRepository,
+    viewer: &Scope,
+    sync_wiki: bool,
+    wiki_root: Option<&std::path::Path>,
+    low_coverage_threshold: usize,
+    write_page: bool,
+    schema: &DomainSchema,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let findings = eng.run_gap_scan(Some(viewer), low_coverage_threshold);
+    eng.save_to_repo(repo)?;
+    eng.flush_outbox_to_repo_with_policy(repo, 128, 3)?;
+
+    let report_md = gap_report_markdown(&findings);
+
+    if let Some(root) = wiki_root {
+        let report_path = write_gap_report(root, &format!("gap-{}", timestamp_slug()), &findings)?;
+        println!("gap_report={}", report_path.display());
+    }
+
+    if write_page {
+        let title = format!("gap-report-{}", timestamp_slug());
+        let status = initial_status_for(Some(&EntryType::LintReport), schema);
+        let page = WikiPage::new(title, report_md, viewer.clone())
+            .with_entry_type(EntryType::LintReport)
+            .with_status(status);
+        eng.store.pages.insert(page.id, page);
+        eng.save_to_repo(repo)?;
+        eng.flush_outbox_to_repo_with_policy(repo, 128, 3)?;
+    }
+
+    maybe_sync_projection(sync_wiki, wiki_root, eng)?;
+    for f in &findings {
+        println!("{:?}\t{}\t{}", f.severity, f.code, f.message);
+    }
+    Ok(())
+}
+/// 将 GapFinding 列表渲染为 markdown 字符串（用于 --write-page）
+fn gap_report_markdown(findings: &[GapFinding]) -> String {
+    render_gap_markdown(findings)
 }
 
 fn run_maintenance_job(

@@ -9,6 +9,7 @@ pub mod audit;
 pub mod collab;
 pub mod crystallize;
 pub mod events;
+pub mod gap;
 pub mod graph;
 pub mod lifecycle;
 pub mod llm_ingest_plan;
@@ -28,6 +29,7 @@ pub use audit::{AuditOperation, AuditRecord};
 pub use collab::{WorkItem, WorkState};
 pub use crystallize::{draft_from_session, CrystallizationDraft, SessionCrystallizationInput};
 pub use events::WikiEvent;
+pub use gap::{GapFinding, GapSeverity};
 pub use graph::{walk_entities, GraphSnapshot, GraphWalkOptions};
 pub use lifecycle::{
     advance_tier, apply_time_decay_to_confidence, merge_sources_confidence, reinforce_claim,
