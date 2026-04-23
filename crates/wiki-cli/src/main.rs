@@ -5,13 +5,14 @@ use time::{format_description::well_known::Rfc3339, Duration, OffsetDateTime};
 use walkdir::WalkDir;
 use wiki_core::{
     document_visible_to_viewer, parse_memory_tier, ClaimId, DomainSchema, Entity, EntityId,
-    EntityKind, EntryStatus, EntryType, GapFinding, GapSeverity, LlmIngestPlanV1, MemoryTier,
-    PageId, QueryContext, RelationKind, Scope, SessionCrystallizationInput, SourceId, TypedEdge,
-    WikiPage,
+    EntityKind, EntryStatus, EntryType, FixAction, FixActionType, FixPatch, GapFinding,
+    GapSeverity, LlmIngestPlanV1, MemoryTier, PageId, QueryContext, RelationKind, Scope,
+    SessionCrystallizationInput, SourceId, TypedEdge, WikiPage,
 };
 use wiki_kernel::{
-    format_claim_doc_id, initial_status_for, merge_graph_rankings, write_lint_report,
-    write_projection, InMemorySearchPorts, InMemoryStore, LlmWikiEngine, NoopWikiHook, SearchPorts,
+    format_claim_doc_id, initial_status_for, map_findings_to_fixes, merge_graph_rankings,
+    write_lint_report, write_projection, InMemorySearchPorts, InMemoryStore, LlmWikiEngine,
+    NoopWikiHook, SearchPorts,
 };
 use wiki_mempalace_bridge::{
     consume_outbox_ndjson_with_resolver_and_stats, LiveMempalaceSink, MempalaceError,
@@ -119,6 +120,18 @@ enum Cmd {
         /// 将 gap 报告写入 wiki page（draft 状态）。
         #[arg(long, default_value_t = false)]
         write_page: bool,
+    },
+    /// 检测并修复 lint/gap finding，输出修复动作列表。
+    Fix {
+        /// 只输出修复建议，不执行任何变更。
+        #[arg(long, default_value_t = false)]
+        dry_run: bool,
+        /// 只处理可自动修复的项（Auto 类型）。
+        #[arg(long, default_value_t = false)]
+        auto_only: bool,
+        /// 执行自动修复（无此 flag 则仅输出列表）。
+        #[arg(long, default_value_t = false)]
+        write: bool,
     },
     Promote {
         claim_id: String,
@@ -866,6 +879,9 @@ fn verify_restore_vault(
         .filter_map(Result::ok)
         .filter(|entry| entry.file_type().is_file())
         .count();
+    if sources == 0 {
+        return Err(format!("vault sources/ 下没有文件: {}", sources_dir.display()).into());
+    }
 
     Ok(RestoreVaultSummary {
         pages,
@@ -1311,6 +1327,23 @@ fn run_with_engine(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                 low_coverage_threshold,
                 write_page,
                 &schema,
+            )?;
+        }
+        Cmd::Fix {
+            dry_run,
+            auto_only,
+            write,
+        } => {
+            run_fix_job(
+                &mut eng,
+                &repo,
+                &viewer,
+                sync_wiki,
+                wiki_root.as_deref(),
+                &schema,
+                dry_run,
+                auto_only,
+                write,
             )?;
         }
         Cmd::Promote { claim_id } => {
@@ -2012,6 +2045,225 @@ mod tests {
         let content = std::fs::read_to_string(&path).unwrap();
         assert!(content.contains("gap.missing_xref"));
     }
+
+    #[test]
+    fn fix_empty_db_no_panic() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("test.db");
+        let repo = SqliteRepository::open(&db_path).unwrap();
+        let schema = DomainSchema::permissive_default();
+        let mut eng = LlmWikiEngine::load_from_repo(schema.clone(), &repo, NoopWikiHook).unwrap();
+        let viewer = Scope::Private {
+            agent_id: "cli".into(),
+        };
+        assert!(
+            run_fix_job(&mut eng, &repo, &viewer, false, None, &schema, false, false, false)
+                .is_ok()
+        );
+        assert!(
+            run_fix_job(&mut eng, &repo, &viewer, false, None, &schema, true, false, true).is_ok()
+        );
+        assert!(
+            run_fix_job(&mut eng, &repo, &viewer, false, None, &schema, false, true, false).is_ok()
+        );
+    }
+
+    #[test]
+    fn fix_dry_run_does_not_modify() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("test.db");
+        let repo = SqliteRepository::open(&db_path).unwrap();
+        let schema = DomainSchema::permissive_default();
+        let mut eng = LlmWikiEngine::load_from_repo(schema.clone(), &repo, NoopWikiHook).unwrap();
+        let viewer = Scope::Private {
+            agent_id: "cli".into(),
+        };
+
+        // 创建一页空标题页面，会触发 page.empty_title → Auto
+        let page = WikiPage::new("", "body", viewer.clone());
+        let pid = page.id;
+        eng.store.pages.insert(pid, page);
+
+        let before = eng.store.pages.get(&pid).unwrap().title.clone();
+
+        run_fix_job(
+            &mut eng, &repo, &viewer, false, None, &schema, true, false, true,
+        )
+        .unwrap();
+
+        let after = eng.store.pages.get(&pid).unwrap().title.clone();
+        assert_eq!(before, after, "dry_run 不应修改页面");
+    }
+
+    #[test]
+    fn fix_outputs_auto_and_manual() {
+        // 构造混合 findings，验证 map_findings_to_fixes 同时产出 Auto 和 Manual
+        let lint_auto = wiki_core::LintFinding {
+            code: "page.empty_title".into(),
+            message: "wiki page has empty title".into(),
+            severity: wiki_core::LintSeverity::Error,
+            subject: Some("00000000-0000-0000-0000-000000000001".into()),
+        };
+        let lint_manual = wiki_core::LintFinding {
+            code: "page.orphan".into(),
+            message: "page has no inbound wikilinks".into(),
+            severity: wiki_core::LintSeverity::Info,
+            subject: Some("00000000-0000-0000-0000-000000000002".into()),
+        };
+        let fixes = map_findings_to_fixes(&[lint_auto, lint_manual], &[]);
+        assert!(fixes.iter().any(|f| f.fix_type == FixActionType::Auto));
+        assert!(fixes.iter().any(|f| f.fix_type == FixActionType::Manual));
+    }
+
+    #[test]
+    fn fix_auto_only_filters_correctly() {
+        let lint_auto = wiki_core::LintFinding {
+            code: "page.incomplete".into(),
+            message: "页面缺少必需段落：定义".into(),
+            severity: wiki_core::LintSeverity::Warn,
+            subject: Some("00000000-0000-0000-0000-000000000001".into()),
+        };
+        let lint_manual = wiki_core::LintFinding {
+            code: "page.orphan".into(),
+            message: "page has no inbound wikilinks".into(),
+            severity: wiki_core::LintSeverity::Info,
+            subject: Some("00000000-0000-0000-0000-000000000002".into()),
+        };
+        let mut fixes = map_findings_to_fixes(&[lint_auto, lint_manual], &[]);
+        fixes.retain(|f| f.fix_type == FixActionType::Auto);
+        assert_eq!(fixes.len(), 1);
+        assert_eq!(fixes[0].fix_type, FixActionType::Auto);
+        assert_eq!(fixes[0].code, "page.incomplete");
+    }
+
+    #[test]
+    fn fix_write_applies_append_sections() {
+        // 构造：一个 Concept page 缺少"关键要点"段落
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("test.db");
+        let repo = SqliteRepository::open(&db_path).unwrap();
+        let schema = DomainSchema::permissive_default();
+        let mut eng = LlmWikiEngine::load_from_repo(schema.clone(), &repo, NoopWikiHook).unwrap();
+        let viewer = Scope::Private {
+            agent_id: "cli".into(),
+        };
+
+        // 创建 Concept 页面，只包含"定义"段落，缺少"关键要点"和"来源引用"
+        let page = WikiPage::new("测试页面", "## 定义\n\n这是定义段。\n", viewer.clone())
+            .with_entry_type(wiki_core::EntryType::Concept);
+        let pid = page.id;
+        eng.store.pages.insert(pid, page);
+
+        // 执行：run_fix_job(dry_run=false, auto_only=false, write=true)
+        run_fix_job(
+            &mut eng, &repo, &viewer, false, None, &schema, false, false, true,
+        )
+        .unwrap();
+
+        // 断言：page markdown 末尾追加了 "## 关键要点\n\n（待补充）\n\n"
+        let page = eng.store.pages.get(&pid).unwrap();
+        assert!(
+            page.markdown.contains("## 关键要点"),
+            "markdown 应包含新追加的关键要点段落"
+        );
+        assert!(
+            page.markdown.contains("（待补充）"),
+            "markdown 应包含占位符文本"
+        );
+    }
+
+    #[test]
+    fn fix_write_applies_set_title_from_first_line() {
+        // 创建空标题 page，markdown 首行是 ## 某个标题，执行 fix write，验证 title 被设为 某个标题
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("test.db");
+        let repo = SqliteRepository::open(&db_path).unwrap();
+        let schema = DomainSchema::permissive_default();
+        let mut eng = LlmWikiEngine::load_from_repo(schema.clone(), &repo, NoopWikiHook).unwrap();
+        let viewer = Scope::Private {
+            agent_id: "cli".into(),
+        };
+
+        // 创建空标题页面，markdown 首行是二级标题
+        let page = WikiPage::new("", "## 某个标题\n\n正文内容\n", viewer.clone());
+        let pid = page.id;
+        eng.store.pages.insert(pid, page);
+
+        // 执行：run_fix_job(dry_run=false, auto_only=false, write=true)
+        run_fix_job(
+            &mut eng, &repo, &viewer, false, None, &schema, false, false, true,
+        )
+        .unwrap();
+
+        // 断言：page 标题应被设为"某个标题"
+        let page = eng.store.pages.get(&pid).unwrap();
+        assert_eq!(page.title, "某个标题", "空标题应从 markdown 首行提取");
+    }
+
+    #[test]
+    fn fix_write_does_not_overwrite_non_empty_title() {
+        // 安全：当页面已有非空标题时，SetTitle 不应覆盖
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("test.db");
+        let repo = SqliteRepository::open(&db_path).unwrap();
+        let schema = DomainSchema::permissive_default();
+        let mut eng = LlmWikiEngine::load_from_repo(schema.clone(), &repo, NoopWikiHook).unwrap();
+        let viewer = Scope::Private {
+            agent_id: "cli".into(),
+        };
+
+        let page = WikiPage::new("现有标题", "## 新标题\n\n正文\n", viewer.clone());
+        let pid = page.id;
+        eng.store.pages.insert(pid, page);
+
+        // 直接调用 apply_auto_fixes 并传入强制 SetTitle
+        let fix = FixAction {
+            code: "page.empty_title".into(),
+            fix_type: FixActionType::Auto,
+            description: "test".into(),
+            subject: Some(pid.0.to_string()),
+            subject_label: None,
+            patch: Some(FixPatch::SetTitle {
+                title: "新标题".into(),
+            }),
+        };
+        let modified = apply_auto_fixes(&mut eng, &[fix]);
+        assert_eq!(modified, 0, "已有标题不应被覆盖");
+        assert_eq!(eng.store.pages.get(&pid).unwrap().title, "现有标题");
+    }
+
+    #[test]
+    fn fix_write_does_not_duplicate_existing_sections() {
+        // 安全：AppendSections 不应重复追加已存在的段落
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("test.db");
+        let repo = SqliteRepository::open(&db_path).unwrap();
+        let schema = DomainSchema::permissive_default();
+        let mut eng = LlmWikiEngine::load_from_repo(schema.clone(), &repo, NoopWikiHook).unwrap();
+        let viewer = Scope::Private {
+            agent_id: "cli".into(),
+        };
+
+        let page = WikiPage::new("测试", "## 定义\n\n已有内容\n", viewer.clone());
+        let pid = page.id;
+        eng.store.pages.insert(pid, page);
+
+        let fix = FixAction {
+            code: "page.incomplete".into(),
+            fix_type: FixActionType::Auto,
+            description: "test".into(),
+            subject: Some(pid.0.to_string()),
+            subject_label: None,
+            patch: Some(FixPatch::AppendSections {
+                sections: vec!["定义".into(), "新段落".into()],
+            }),
+        };
+        let modified = apply_auto_fixes(&mut eng, &[fix]);
+        assert_eq!(modified, 1);
+        let md = &eng.store.pages.get(&pid).unwrap().markdown;
+        assert_eq!(md.matches("## 定义").count(), 1, "已存在的段落不应重复追加");
+        assert!(md.contains("## 新段落"), "新段落应该被追加");
+    }
 }
 
 fn maybe_sync_projection(
@@ -2155,6 +2407,116 @@ fn run_gap_job(
     }
     Ok(())
 }
+
+/// 执行 Auto 类型 fix action 的 patch，返回实际修改的 page 数量。
+fn apply_auto_fixes(eng: &mut LlmWikiEngine<NoopWikiHook>, fixes: &[FixAction]) -> usize {
+    let mut modified_pages = std::collections::HashSet::new();
+    for fix in fixes {
+        if fix.fix_type != FixActionType::Auto {
+            continue;
+        }
+        let Some(ref subject) = fix.subject else {
+            continue;
+        };
+        let Ok(pid) = uuid::Uuid::parse_str(subject) else {
+            continue;
+        };
+        let pid = PageId(pid);
+        let Some(page) = eng.store.pages.get_mut(&pid) else {
+            continue;
+        };
+
+        // 优先使用 fix.patch；若 patch 为 None 且 code 是 page.empty_title，
+        // 则从 markdown 第一行提取标题作为 fallback。
+        let patch = fix.patch.clone().or_else(|| {
+            if fix.code == "page.empty_title" {
+                page.markdown
+                    .lines()
+                    .find(|line| {
+                        let t = line.trim();
+                        !t.is_empty() && !t.starts_with("---")
+                    })
+                    .map(|line| line.trim().trim_start_matches('#').trim_start().to_string())
+                    .filter(|t| !t.is_empty())
+                    .map(|title| FixPatch::SetTitle { title })
+            } else {
+                None
+            }
+        });
+
+        let Some(patch) = patch else { continue };
+
+        match patch {
+            FixPatch::AppendSections { sections } => {
+                for section in sections {
+                    // 若 markdown 中已存在同名的 ## 标题，则跳过，防止重复追加
+                    let heading = format!("## {section}");
+                    if page.markdown.contains(&heading) {
+                        continue;
+                    }
+                    page.markdown
+                        .push_str(&format!("## {section}\n\n（待补充）\n\n"));
+                }
+                page.updated_at = OffsetDateTime::now_utc();
+                modified_pages.insert(pid);
+            }
+            FixPatch::SetTitle { title } => {
+                // 安全：仅当当前标题为空时才设置，避免覆盖已有标题
+                if page.title.trim().is_empty() {
+                    page.title = title;
+                    page.updated_at = OffsetDateTime::now_utc();
+                    modified_pages.insert(pid);
+                }
+            }
+            FixPatch::AddXref { .. } => {
+                // 第一版不实现 AddXref 的自动执行
+            }
+        }
+    }
+    modified_pages.len()
+}
+
+/// 检测并修复 lint/gap finding，输出修复动作列表。
+fn run_fix_job(
+    eng: &mut LlmWikiEngine<NoopWikiHook>,
+    repo: &SqliteRepository,
+    viewer: &Scope,
+    sync_wiki: bool,
+    wiki_root: Option<&std::path::Path>,
+    _schema: &DomainSchema,
+    dry_run: bool,
+    auto_only: bool,
+    write: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let lint_findings = eng.run_basic_lint("cli", Some(viewer));
+    let gap_findings = eng.run_gap_scan(Some(viewer), 2);
+    let mut fixes = map_findings_to_fixes(&lint_findings, &gap_findings);
+
+    if auto_only {
+        fixes.retain(|f| f.fix_type == FixActionType::Auto);
+    }
+
+    for fix in &fixes {
+        let type_str = match fix.fix_type {
+            FixActionType::Auto => "Auto",
+            FixActionType::Draft => "Draft",
+            FixActionType::Manual => "Manual",
+        };
+        println!("{}\t{}\t{}", type_str, fix.code, fix.description);
+    }
+
+    if write && !dry_run {
+        let modified = apply_auto_fixes(eng, &fixes);
+        if modified > 0 {
+            eng.save_to_repo(repo)?;
+            eng.flush_outbox_to_repo_with_policy(repo, 128, 3)?;
+            maybe_sync_projection(sync_wiki, wiki_root, eng)?;
+        }
+    }
+
+    Ok(())
+}
+
 /// 将 GapFinding 列表渲染为 markdown 字符串（用于 --write-page）
 fn gap_report_markdown(findings: &[GapFinding]) -> String {
     render_gap_markdown(findings)

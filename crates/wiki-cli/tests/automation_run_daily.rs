@@ -143,6 +143,35 @@ fn automation_verify_restore_fails_when_vault_missing_sources_dir() {
 }
 
 #[test]
+fn automation_verify_restore_fails_when_sources_dir_is_empty() {
+    let db = tempfile::NamedTempFile::new().unwrap();
+    let db_path = db.path().to_owned();
+    let _repo = SqliteRepository::open(&db_path).unwrap();
+
+    let vault_dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(vault_dir.path().join("pages/concept")).unwrap();
+    std::fs::create_dir_all(vault_dir.path().join("sources")).unwrap();
+    std::fs::write(vault_dir.path().join("index.md"), "# Index\n").unwrap();
+    std::fs::write(vault_dir.path().join("log.md"), "# Log\n").unwrap();
+    std::fs::write(
+        vault_dir.path().join("pages/concept/example.md"),
+        "---\nstatus: Draft\n---\nbody\n",
+    )
+    .unwrap();
+
+    wiki_cli()
+        .arg("--db")
+        .arg(&db_path)
+        .arg("--wiki-dir")
+        .arg(vault_dir.path())
+        .arg("automation")
+        .arg("verify-restore")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("vault sources/ 下没有文件"));
+}
+
+#[test]
 fn automation_verify_restore_fails_when_page_missing_status() {
     let db = tempfile::NamedTempFile::new().unwrap();
     let db_path = db.path().to_owned();

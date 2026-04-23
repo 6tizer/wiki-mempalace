@@ -2,6 +2,7 @@
 
 mod auto_hooks;
 mod engine;
+mod fix;
 mod gap;
 mod hooks;
 mod memory;
@@ -10,6 +11,7 @@ mod wiki_writer;
 
 pub use auto_hooks::AutoWikiHook;
 pub use engine::{initial_status_for, EngineError, LlmWikiEngine, PromotePageError};
+pub use fix::{map_findings_to_fixes, map_gap_finding, map_lint_finding};
 pub use gap::run_gap_scan;
 pub use hooks::{NoopWikiHook, WikiHook};
 pub use memory::InMemoryStore;
