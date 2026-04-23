@@ -31,20 +31,26 @@ pub fn finalize_consumed_page(
     // 2. 根据类型做段落映射
     match &entry_type {
         EntryType::Synthesis => {
-            remap_sections(&mut page.markdown, &[
-                ("# 问题\n\n", "## 研究问题\n\n"),
-                ("## 结论与发现", "## 综合分析"),
-                ("## 涉及文件", "## 来源列表"),
-                ("## 可复用教训", "## 关键发现"),
-            ]);
+            remap_sections(
+                &mut page.markdown,
+                &[
+                    ("# 问题\n\n", "## 研究问题\n\n"),
+                    ("## 结论与发现", "## 综合分析"),
+                    ("## 涉及文件", "## 来源列表"),
+                    ("## 可复用教训", "## 关键发现"),
+                ],
+            );
         }
         EntryType::LintReport => {
-            remap_sections(&mut page.markdown, &[
-                ("# Gap Report\n\n", "## 总体健康度\n\n"),
-                ("## high", "## 问题清单"),
-                ("## medium", "## 建议"),
-                ("## low", "## 检查日期"),
-            ]);
+            remap_sections(
+                &mut page.markdown,
+                &[
+                    ("# Gap Report\n\n", "## 总体健康度\n\n"),
+                    ("## high", "## 问题清单"),
+                    ("## medium", "## 建议"),
+                    ("## low", "## 检查日期"),
+                ],
+            );
         }
         _ => {}
     }
