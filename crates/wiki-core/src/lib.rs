@@ -45,9 +45,7 @@ pub use model::{
     SourceId, TypedEdge,
 };
 pub mod page_contract;
-pub use page::{
-    extract_headings, extract_wikilinks, Confidence, WikiPage,
-};
+pub use page::{extract_headings, extract_wikilinks, Confidence, WikiPage};
 pub use page_contract::PageContract;
 pub use privacy::{redact_for_ingest, RedactionFinding, SensitiveKind};
 pub use quality::{check_page_completeness, ContradictionHint, LintFinding, LintSeverity};

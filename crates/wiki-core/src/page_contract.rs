@@ -103,6 +103,7 @@ impl PageContract {
                     .join("\n"),
             );
         } else {
+            // 先按模板顺序输出段落
             md.push_str(
                 &template
                     .iter()
@@ -117,6 +118,19 @@ impl PageContract {
                     .collect::<Vec<_>>()
                     .join("\n"),
             );
+            // 追加模板中未定义但用户通过 with_section 传入的额外段落
+            let template_names: std::collections::HashSet<&str> =
+                template.iter().copied().collect();
+            let extras: Vec<_> = self
+                .sections
+                .iter()
+                .filter(|(name, _)| !template_names.contains(name.as_str()))
+                .map(|(name, content)| format!("## {}\n\n{}\n", name, content))
+                .collect();
+            if !extras.is_empty() {
+                md.push('\n');
+                md.push_str(&extras.join("\n"));
+            }
         }
         md
     }
@@ -230,10 +244,7 @@ mod tests {
         assert_eq!(contract.confidence, Confidence::High);
         assert_eq!(contract.tags, vec!["tag1", "tag2"]);
         assert_eq!(contract.source, "query");
-        assert_eq!(
-            contract.sections.get("定义"),
-            Some(&"定义内容".to_string())
-        );
+        assert_eq!(contract.sections.get("定义"), Some(&"定义内容".to_string()));
         assert_eq!(contract.source_url, Some("https://example.com".to_string()));
         assert_eq!(contract.source_tags, vec!["a"]);
     }
@@ -254,5 +265,30 @@ mod tests {
         assert!(md.contains("## A段\n\nA内容"));
         assert!(md.contains("## B段\n\nB内容"));
         assert!(md.contains("## C段\n\nC内容"));
+    }
+
+    #[test]
+    fn render_markdown_preserves_extra_sections() {
+        let contract = PageContract::new("测试", EntryType::Concept)
+            .with_section("问题", "什么是Rust?")
+            .with_section("回答", "系统语言");
+        let md = contract.render_markdown();
+        assert!(md.contains("## 问题\n\n什么是Rust?"));
+        assert!(md.contains("## 回答\n\n系统语言"));
+    }
+
+    #[test]
+    fn render_markdown_template_sections_first() {
+        let contract = PageContract::new("测试", EntryType::Concept)
+            .with_section("定义", "定义内容")
+            .with_section("问题", "额外问题")
+            .with_section("来源引用", "引用内容");
+        let md = contract.render_markdown();
+        let pos_def = md.find("## 定义").unwrap();
+        let pos_src = md.find("## 来源引用").unwrap();
+        let pos_q = md.find("## 问题").unwrap();
+        // 模板段落在前，额外段落在后
+        assert!(pos_def < pos_q);
+        assert!(pos_src < pos_q);
     }
 }

@@ -1,18 +1,18 @@
 use clap::{Parser, Subcommand, ValueEnum};
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::PathBuf;
 use time::{format_description::well_known::Rfc3339, Duration, OffsetDateTime};
 use walkdir::WalkDir;
 use wiki_core::{
-    document_visible_to_viewer, parse_memory_tier, ClaimId, Confidence, DomainSchema, Entity, EntityId,
-    EntityKind, EntryStatus, EntryType, FixAction, FixActionType, FixPatch, GapFinding,
-    GapSeverity, LlmIngestPlanV1, MemoryTier, PageContract, PageId, QueryContext, RelationKind, Scope,
-    SessionCrystallizationInput, SourceId, TypedEdge, WikiPage,
+    document_visible_to_viewer, parse_memory_tier, ClaimId, Confidence, DomainSchema, Entity,
+    EntityId, EntityKind, EntryStatus, EntryType, FixAction, FixActionType, FixPatch, GapFinding,
+    GapSeverity, LlmIngestPlanV1, MemoryTier, PageContract, PageId, QueryContext, RelationKind,
+    Scope, SessionCrystallizationInput, SourceId, TypedEdge, WikiPage,
 };
 use wiki_kernel::{
-    finalize_consumed_page, format_claim_doc_id, initial_status_for, map_findings_to_fixes, merge_graph_rankings,
-    write_lint_report, write_projection, InMemorySearchPorts, InMemoryStore, LlmWikiEngine,
-    NoopWikiHook, SearchPorts,
+    finalize_consumed_page, format_claim_doc_id, initial_status_for, map_findings_to_fixes,
+    merge_graph_rankings, write_lint_report, write_projection, InMemorySearchPorts, InMemoryStore,
+    LlmWikiEngine, NoopWikiHook, SearchPorts,
 };
 use wiki_mempalace_bridge::{
     consume_outbox_ndjson_with_resolver_and_stats, LiveMempalaceSink, MempalaceError,
@@ -167,12 +167,6 @@ enum Cmd {
         /// 可选：覆盖 EntryType（默认 qa）
         #[arg(long)]
         entry_type: Option<String>,
-        /// 置信度（high/medium/low）
-        #[arg(long, default_value = "medium")]
-        confidence: String,
-        /// 标签（逗号分隔）
-        #[arg(long, default_value = "")]
-        tags: String,
     },
     /// 聚合分析生成综合研究条目。
     Synthesis {
@@ -181,12 +175,6 @@ enum Cmd {
         /// 综合分析正文（省略则从 stdin 读取）
         #[arg(long)]
         body: Option<String>,
-        /// 置信度（high/medium/low）
-        #[arg(long, default_value = "medium")]
-        confidence: String,
-        /// 标签（逗号分隔）
-        #[arg(long, default_value = "")]
-        tags: String,
     },
     ExportOutboxNdjson,
     ExportOutboxNdjsonFrom {
@@ -1223,7 +1211,12 @@ fn run_with_engine(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                 let pid = page.id;
                 eng.store.pages.insert(pid, page);
                 if let Some(page) = eng.store.pages.get_mut(&pid) {
-                    finalize_consumed_page(page, EntryType::Summary, Confidence::default(), &schema);
+                    finalize_consumed_page(
+                        page,
+                        EntryType::Summary,
+                        Confidence::default(),
+                        &schema,
+                    );
                 }
                 eng.save_to_repo(&repo)?;
                 eng.flush_outbox_to_repo_with_policy(&repo, 128, 3)?;
@@ -1451,17 +1444,12 @@ fn run_with_engine(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             question,
             answer,
             entry_type,
-            confidence,
-            tags,
         } => {
             let et = parse_entry_type_opt(&entry_type)?.unwrap_or(EntryType::Qa);
-            let conf = parse_confidence(&confidence)?;
-            let tag_list = parse_tags(&tags);
             let status = initial_status_for(Some(&et), &schema);
 
             let page = PageContract::new(&question, et)
-                .with_confidence(conf)
-                .with_tags(tag_list)
+                .with_confidence(Confidence::default())
                 .with_source("qa")
                 .with_section("问题", &question)
                 .with_section("回答", &answer)
@@ -1474,14 +1462,7 @@ fn run_with_engine(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             maybe_sync_projection(sync_wiki, wiki_root.as_deref(), &eng)?;
             println!("page={}", pid.0);
         }
-        Cmd::Synthesis {
-            topic,
-            body,
-            confidence,
-            tags,
-        } => {
-            let conf = parse_confidence(&confidence)?;
-            let tag_list = parse_tags(&tags);
+        Cmd::Synthesis { topic, body } => {
             let et = EntryType::Synthesis;
             let status = initial_status_for(Some(&et), &schema);
 
@@ -1490,15 +1471,16 @@ fn run_with_engine(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                 Some(b) => b,
                 None => {
                     let mut buf = String::new();
-                    std::io::stdin().read_line(&mut buf).ok();
+                    std::io::stdin()
+                        .read_to_string(&mut buf)
+                        .map_err(|e| -> Box<dyn std::error::Error> { e.to_string().into() })?;
                     buf.trim_end().to_string()
                 }
             };
 
             let title = topic.clone();
             let page = PageContract::new(&title, et)
-                .with_confidence(conf)
-                .with_tags(tag_list)
+                .with_confidence(Confidence::default())
                 .with_source("synthesis")
                 .with_section("研究问题", &topic)
                 .with_section("综合分析", &body_text)
@@ -1802,24 +1784,6 @@ pub(crate) fn parse_entry_type_opt(
 #[allow(dead_code)]
 pub(crate) fn effective_ingest_entry_type(explicit: Option<EntryType>) -> EntryType {
     explicit.unwrap_or(EntryType::Concept)
-}
-
-/// 解析 confidence 字符串。
-fn parse_confidence(s: &str) -> Result<Confidence, Box<dyn std::error::Error>> {
-    match s.trim().to_ascii_lowercase().as_str() {
-        "high" => Ok(Confidence::High),
-        "medium" => Ok(Confidence::Medium),
-        "low" => Ok(Confidence::Low),
-        other => Err(format!("unknown confidence: {other}").into()),
-    }
-}
-
-/// 解析逗号分隔的 tags 字符串。
-fn parse_tags(s: &str) -> Vec<String> {
-    s.split(',')
-        .map(|t| t.trim().to_string())
-        .filter(|t| !t.is_empty())
-        .collect()
 }
 
 #[cfg(test)]
@@ -2429,14 +2393,13 @@ mod tests {
         let schema = DomainSchema::permissive_default();
         let question = "什么是 Rust？".to_string();
         let answer = "Rust 是一门系统编程语言。".to_string();
-        let et = parse_entry_type_opt(&None).unwrap_or(None).unwrap_or(EntryType::Qa);
-        let conf = parse_confidence("medium").unwrap();
-        let tag_list = parse_tags("");
+        let et = parse_entry_type_opt(&None)
+            .unwrap_or(None)
+            .unwrap_or(EntryType::Qa);
         let status = initial_status_for(Some(&et), &schema);
 
         let page = PageContract::new(&question, et)
-            .with_confidence(conf)
-            .with_tags(tag_list)
+            .with_confidence(Confidence::default())
             .with_source("qa")
             .with_section("问题", &question)
             .with_section("回答", &answer)
@@ -2461,13 +2424,10 @@ mod tests {
         let et = parse_entry_type_opt(&Some("concept".into()))
             .unwrap()
             .unwrap_or(EntryType::Qa);
-        let conf = parse_confidence("medium").unwrap();
-        let tag_list = parse_tags("");
         let status = initial_status_for(Some(&et), &schema);
 
         let page = PageContract::new(&question, et)
-            .with_confidence(conf)
-            .with_tags(tag_list)
+            .with_confidence(Confidence::default())
             .with_source("qa")
             .with_section("问题", &question)
             .with_section("回答", &answer)
@@ -2482,37 +2442,15 @@ mod tests {
     }
 
     #[test]
-    fn qa_command_with_tags() {
-        let question = "问题".to_string();
-        let answer = "回答".to_string();
-        let et = EntryType::Qa;
-        let conf = parse_confidence("medium").unwrap();
-        let tag_list = parse_tags("tag1,tag2");
-
-        let contract = PageContract::new(&question, et)
-            .with_confidence(conf)
-            .with_tags(tag_list.clone())
-            .with_source("qa")
-            .with_section("问题", &question)
-            .with_section("回答", &answer);
-
-        // 验证 PageContract 正确接收了 tags
-        assert_eq!(contract.tags, vec!["tag1", "tag2"]);
-    }
-
-    #[test]
     fn synthesis_command_creates_synthesis_type_page() {
         let schema = DomainSchema::permissive_default();
         let topic = "Rust 异步编程研究".to_string();
         let body_text = "综合分析正文内容。".to_string();
-        let conf = parse_confidence("medium").unwrap();
-        let tag_list = parse_tags("");
         let et = EntryType::Synthesis;
         let status = initial_status_for(Some(&et), &schema);
 
         let page = PageContract::new(&topic, et)
-            .with_confidence(conf)
-            .with_tags(tag_list)
+            .with_confidence(Confidence::default())
             .with_source("synthesis")
             .with_section("研究问题", &topic)
             .with_section("综合分析", &body_text)
@@ -2527,35 +2465,6 @@ mod tests {
         assert_eq!(page.status, EntryStatus::Draft);
         assert!(page.markdown.contains("## 研究问题"));
         assert!(page.markdown.contains("## 综合分析"));
-    }
-
-    #[test]
-    fn parse_confidence_valid() {
-        assert_eq!(parse_confidence("high").unwrap(), Confidence::High);
-        assert_eq!(parse_confidence("HIGH").unwrap(), Confidence::High);
-        assert_eq!(parse_confidence("medium").unwrap(), Confidence::Medium);
-        assert_eq!(parse_confidence("MEDIUM").unwrap(), Confidence::Medium);
-        assert_eq!(parse_confidence("low").unwrap(), Confidence::Low);
-        assert_eq!(parse_confidence(" LOW ").unwrap(), Confidence::Low);
-    }
-
-    #[test]
-    fn parse_confidence_invalid() {
-        let result = parse_confidence("unknown");
-        assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("unknown confidence"));
-    }
-
-    #[test]
-    fn parse_tags_comma_separated() {
-        let tags = parse_tags("tag1, tag2, tag3");
-        assert_eq!(tags, vec!["tag1", "tag2", "tag3"]);
-    }
-
-    #[test]
-    fn parse_tags_empty() {
-        let tags = parse_tags("");
-        assert!(tags.is_empty());
     }
 }
 
