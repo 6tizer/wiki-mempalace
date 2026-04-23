@@ -879,6 +879,9 @@ fn verify_restore_vault(
         .filter_map(Result::ok)
         .filter(|entry| entry.file_type().is_file())
         .count();
+    if sources == 0 {
+        return Err(format!("vault sources/ 下没有文件: {}", sources_dir.display()).into());
+    }
 
     Ok(RestoreVaultSummary {
         pages,

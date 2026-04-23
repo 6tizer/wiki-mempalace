@@ -100,7 +100,9 @@ fn scan_low_coverage(
         let count = store
             .claims
             .values()
-            .filter(|c| visible(&c.scope) && c.text.to_ascii_lowercase().contains(&label_lower))
+            .filter(|c| {
+                visible(&c.scope) && !c.stale && c.text.to_ascii_lowercase().contains(&label_lower)
+            })
             .count();
         entity_claim_counts.insert(e.id, count);
     }
@@ -156,7 +158,7 @@ fn scan_orphan_source(store: &InMemoryStore, viewer_scope: Option<&Scope>) -> Ve
     let mut source_to_claims: std::collections::HashMap<_, Vec<_>> =
         std::collections::HashMap::new();
     for c in store.claims.values() {
-        if !visible(&c.scope) {
+        if !visible(&c.scope) || c.stale {
             continue;
         }
         for sid in &c.source_ids {
@@ -323,6 +325,31 @@ mod tests {
     }
 
     #[test]
+    fn stale_claims_do_not_count_toward_low_coverage() {
+        let mut store = InMemoryStore::default();
+        let entity = Entity {
+            id: EntityId(Uuid::new_v4()),
+            kind: EntityKind::Project,
+            label: "AlphaProject".into(),
+            scope: private_scope("a"),
+        };
+        store.entities.insert(entity.id, entity.clone());
+
+        let mut stale_claim = Claim::new(
+            "AlphaProject 使用 Rust 开发",
+            private_scope("a"),
+            MemoryTier::Semantic,
+        );
+        stale_claim.stale = true;
+        store.claims.insert(stale_claim.id, stale_claim);
+
+        let findings = scan_low_coverage(&store, None, 2);
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].code, "gap.low_coverage");
+        assert_eq!(findings[0].severity, GapSeverity::High);
+    }
+
+    #[test]
     fn orphan_source_detected() {
         let mut store = InMemoryStore::default();
         let source = RawArtifact::new("file:///tmp/note.md", "some body", private_scope("a"));
@@ -372,5 +399,33 @@ mod tests {
             findings.is_empty(),
             "source 的 claim 已被 page 引用，不应触发 gap"
         );
+    }
+
+    #[test]
+    fn stale_claims_do_not_prevent_orphan_source_detection() {
+        let mut store = InMemoryStore::default();
+        let source = RawArtifact::new("file:///tmp/note.md", "some body", private_scope("a"));
+        let sid = source.id;
+        store.sources.insert(sid, source);
+
+        let mut claim = Claim::new(
+            "项目使用 Redis 进行缓存",
+            private_scope("a"),
+            MemoryTier::Semantic,
+        );
+        claim.source_ids.push(sid);
+        claim.stale = true;
+        store.claims.insert(claim.id, claim);
+
+        let page = WikiPage::new(
+            "技术方案",
+            "我们的项目使用 Redis 进行缓存。",
+            private_scope("a"),
+        );
+        store.pages.insert(page.id, page);
+
+        let findings = scan_orphan_source(&store, None);
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].code, "gap.orphan_source");
     }
 }
