@@ -1,10 +1,10 @@
 use clap::{Parser, Subcommand, ValueEnum};
 use std::io::{Read, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use time::{format_description::well_known::Rfc3339, Duration, OffsetDateTime};
 use walkdir::WalkDir;
 use wiki_core::{
-    document_visible_to_viewer, parse_memory_tier, ClaimId, Confidence, DomainSchema, Entity,
+    document_visible_to_viewer, parse_memory_tier, ClaimId, CompositeSearchPorts, Confidence, DomainSchema, Entity,
     EntityId, EntityKind, EntryStatus, EntryType, FixAction, FixActionType, FixPatch, GapFinding,
     GapSeverity, LlmIngestPlanV1, MemoryTier, PageContract, PageId, QueryContext, RelationKind,
     Scope, SessionCrystallizationInput, SourceId, TypedEdge, WikiPage,
@@ -16,7 +16,7 @@ use wiki_kernel::{
 };
 use wiki_mempalace_bridge::{
     consume_outbox_ndjson_with_resolver_and_stats, LiveMempalaceSink, MempalaceError,
-    MempalaceWikiSink, OutboxDispatchStats, OutboxResolver,
+    MempalaceSearchPorts, MempalaceWikiSink, OutboxDispatchStats, OutboxResolver,
 };
 use wiki_storage::{
     AutomationJobFailureSummary, AutomationRunRecord, AutomationRunStatus, OutboxConsumerProgress,
@@ -110,6 +110,26 @@ enum Cmd {
         /// 为 query 生成的 page 绑定 EntryType（如 concept、entity、qa）。
         #[arg(long)]
         entry_type: Option<String>,
+        /// 可选：mempalace DB 路径（开启融合检索）
+        #[arg(long)]
+        palace_db: Option<String>,
+        /// 可选：mempalace bank ID（配合 --palace-db 使用）
+        #[arg(long, default_value = "wiki")]
+        palace_bank: String,
+    },
+    /// 解释搜索结果。
+    Explain {
+        query: String,
+        #[arg(long, default_value_t = 60.0)]
+        rrf_k: f64,
+        #[arg(long, default_value_t = 50)]
+        per_stream_limit: usize,
+        /// 可选：mempalace DB 路径（开启融合检索）
+        #[arg(long)]
+        palace_db: Option<String>,
+        /// 可选：mempalace bank ID（配合 --palace-db 使用）
+        #[arg(long, default_value = "wiki")]
+        palace_bank: String,
     },
     Lint,
     /// 检测知识缺口并生成 gap 报告。
@@ -1278,6 +1298,8 @@ fn run_with_engine(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             write_page,
             page_title,
             entry_type,
+            palace_db,
+            palace_bank,
         } => {
             let ctx = QueryContext::new(&query)
                 .with_rrf_k(rrf_k)
@@ -1309,13 +1331,18 @@ fn run_with_engine(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             } else {
                 None
             };
-            let ranked = eng.query_pipeline_memory(
+            let ranked = run_fusion_query(
+                palace_db.as_deref(),
+                &palace_bank,
+                &eng,
+                &viewer,
                 &ctx,
                 OffsetDateTime::now_utc(),
-                "cli",
                 vec_override,
                 graph_override,
             );
+            let top: Vec<String> = ranked.iter().take(24).map(|(id, _)| id.clone()).collect();
+            eng.record_query(&query, top, "cli");
             if write_page {
                 let title = page_title.unwrap_or_else(|| format!("query-{}", timestamp_slug()));
                 let page = query_to_page(
@@ -1331,6 +1358,57 @@ fn run_with_engine(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             eng.save_to_repo(&repo)?;
             eng.flush_outbox_to_repo_with_policy(&repo, 128, 3)?;
             maybe_sync_projection(sync_wiki, wiki_root.as_deref(), &eng)?;
+            for (id, score) in ranked.into_iter().take(20) {
+                println!("{score:.6}\t{id}");
+            }
+        }
+        Cmd::Explain {
+            query,
+            rrf_k,
+            per_stream_limit,
+            palace_db,
+            palace_bank,
+        } => {
+            let ctx = QueryContext::new(&query)
+                .with_rrf_k(rrf_k)
+                .with_per_stream_limit(per_stream_limit)
+                .with_viewer_scope(viewer.clone());
+            let vec_override = if cli.vectors {
+                let app = llm::load_app_config(&cli.llm_config)?;
+                let qv = llm::embed_first(&app, &query)?;
+                let raw = repo.search_embeddings_cosine(&qv, per_stream_limit.saturating_mul(8))?;
+                let ids: Vec<String> = raw
+                    .into_iter()
+                    .filter(|(id, _)| doc_id_visible_to_viewer(id, &eng.store, &viewer))
+                    .map(|(id, _)| id)
+                    .take(per_stream_limit)
+                    .collect();
+                if ids.is_empty() {
+                    None
+                } else {
+                    Some(ids)
+                }
+            } else {
+                None
+            };
+            let graph_override = if let Some(ref path) = cli.graph_extras_file {
+                let extras = read_graph_extras_lines(path)?;
+                let ports = InMemorySearchPorts::new(&eng.store, Some(viewer.clone()));
+                let kernel = SearchPorts::graph_ranked_ids(&ports, &query, per_stream_limit);
+                Some(merge_graph_rankings(kernel, extras, per_stream_limit))
+            } else {
+                None
+            };
+            let ranked = run_fusion_query(
+                palace_db.as_deref(),
+                &palace_bank,
+                &eng,
+                &viewer,
+                &ctx,
+                OffsetDateTime::now_utc(),
+                vec_override,
+                graph_override,
+            );
             for (id, score) in ranked.into_iter().take(20) {
                 println!("{score:.6}\t{id}");
             }
@@ -1736,6 +1814,41 @@ pub(crate) fn doc_id_visible_to_viewer(
 
 fn truncate_chars(s: &str, max: usize) -> String {
     s.chars().take(max).collect()
+}
+
+/// 执行融合检索：根据 palace_db 配置构建 SearchPorts 并调用 query_ranked_with_ports。
+/// ports 在函数内部创建和销毁，不与外部 eng 的 mutable 借用冲突。
+fn run_fusion_query<'a>(
+    palace_db: Option<&str>,
+    palace_bank: &str,
+    eng: &'a LlmWikiEngine<NoopWikiHook>,
+    viewer: &'a Scope,
+    ctx: &QueryContext<'_>,
+    now: OffsetDateTime,
+    vec_override: Option<Vec<String>>,
+    graph_override: Option<Vec<String>>,
+) -> Vec<(String, f64)> {
+    let ports: Box<dyn SearchPorts + 'a> = if let Some(pdb) = palace_db {
+        match MempalaceSearchPorts::open(Path::new(pdb), Some(palace_bank.to_string())) {
+            Ok(mp_ports) => {
+                let wiki_ports = InMemorySearchPorts::new(&eng.store, Some(viewer.clone()));
+                Box::new(CompositeSearchPorts::new(vec![
+                    Box::new(wiki_ports),
+                    Box::new(mp_ports),
+                ]))
+            }
+            Err(e) => {
+                eprintln!(
+                    "警告：无法打开 mempalace DB ({}): {}，回退到纯 wiki 检索",
+                    pdb, e
+                );
+                Box::new(InMemorySearchPorts::new(&eng.store, Some(viewer.clone())))
+            }
+        }
+    } else {
+        Box::new(InMemorySearchPorts::new(&eng.store, Some(viewer.clone())))
+    };
+    eng.query_ranked_with_ports(ctx, now, ports.as_ref(), vec_override, graph_override)
 }
 
 pub(crate) fn parse_scope(s: &str) -> Scope {
@@ -2466,6 +2579,149 @@ mod tests {
         assert!(page.markdown.contains("## 研究问题"));
         assert!(page.markdown.contains("## 综合分析"));
     }
+
+    #[test]
+    fn query_without_palace_db_uses_in_memory() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("test.db");
+        let repo = SqliteRepository::open(&db_path).unwrap();
+        let schema = DomainSchema::permissive_default();
+        let mut eng = LlmWikiEngine::load_from_repo(schema.clone(), &repo, NoopWikiHook).unwrap();
+        let viewer = Scope::Private {
+            agent_id: "cli".into(),
+        };
+
+        eng.file_claim(
+            "Rust 是一门系统编程语言",
+            viewer.clone(),
+            MemoryTier::Semantic,
+            "test",
+        );
+
+        let ctx = QueryContext::new("Rust 编程语言")
+            .with_rrf_k(60.0)
+            .with_per_stream_limit(10)
+            .with_viewer_scope(viewer.clone());
+        let ports = InMemorySearchPorts::new(&eng.store, Some(viewer.clone()));
+        let ranked =
+            eng.query_ranked_with_ports(&ctx, OffsetDateTime::now_utc(), &ports, None, None);
+        assert!(!ranked.is_empty(), "应该能检索到结果");
+        assert!(
+            ranked.iter().any(|(id, _)| id.starts_with("claim:")),
+            "结果应包含 claim"
+        );
+    }
+
+    #[test]
+    fn query_with_invalid_palace_db_falls_back_gracefully() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("test.db");
+        let repo = SqliteRepository::open(&db_path).unwrap();
+        let schema = DomainSchema::permissive_default();
+        let mut eng = LlmWikiEngine::load_from_repo(schema.clone(), &repo, NoopWikiHook).unwrap();
+        let viewer = Scope::Private {
+            agent_id: "cli".into(),
+        };
+
+        eng.file_claim(
+            "Rust 是一门系统编程语言",
+            viewer.clone(),
+            MemoryTier::Semantic,
+            "test",
+        );
+
+        // 用一个目录路径作为 palace_db，让 MempalaceSearchPorts::open 失败
+        let palace_dir = dir.path().join("palace_dir");
+        std::fs::create_dir(&palace_dir).unwrap();
+
+        let result = MempalaceSearchPorts::open(&palace_dir, Some("wiki".into()));
+        assert!(result.is_err(), "目录路径应该无法打开为 palace DB");
+
+        // 回退到纯 wiki 检索，确保不崩溃
+        let ctx = QueryContext::new("Rust 编程语言")
+            .with_rrf_k(60.0)
+            .with_per_stream_limit(10)
+            .with_viewer_scope(viewer.clone());
+        let ports = InMemorySearchPorts::new(&eng.store, Some(viewer.clone()));
+        let ranked =
+            eng.query_ranked_with_ports(&ctx, OffsetDateTime::now_utc(), &ports, None, None);
+        assert!(!ranked.is_empty(), "回退后应该能检索到结果");
+    }
+
+    #[test]
+    fn composite_search_ports_can_be_constructed() {
+        // 验证 CompositeSearchPorts 导入正确且可构建
+        let composite = CompositeSearchPorts::new(vec![]);
+        assert!(composite.bm25_ranked_ids("q", 10).is_empty());
+    }
+
+    #[test]
+    fn explain_without_palace_db_uses_in_memory() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("test.db");
+        let repo = SqliteRepository::open(&db_path).unwrap();
+        let schema = DomainSchema::permissive_default();
+        let mut eng = LlmWikiEngine::load_from_repo(schema.clone(), &repo, NoopWikiHook).unwrap();
+        let viewer = Scope::Private {
+            agent_id: "cli".into(),
+        };
+
+        eng.file_claim(
+            "Rust 是一门系统编程语言",
+            viewer.clone(),
+            MemoryTier::Semantic,
+            "test",
+        );
+
+        let ctx = QueryContext::new("Rust 编程语言")
+            .with_rrf_k(60.0)
+            .with_per_stream_limit(10)
+            .with_viewer_scope(viewer.clone());
+        let ports = InMemorySearchPorts::new(&eng.store, Some(viewer.clone()));
+        let ranked =
+            eng.query_ranked_with_ports(&ctx, OffsetDateTime::now_utc(), &ports, None, None);
+        assert!(!ranked.is_empty(), "explain 应该能检索到结果");
+        assert!(
+            ranked.iter().any(|(id, _)| id.starts_with("claim:")),
+            "explain 结果应包含 claim"
+        );
+    }
+
+    #[test]
+    fn explain_with_invalid_palace_db_falls_back() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("test.db");
+        let repo = SqliteRepository::open(&db_path).unwrap();
+        let schema = DomainSchema::permissive_default();
+        let mut eng = LlmWikiEngine::load_from_repo(schema.clone(), &repo, NoopWikiHook).unwrap();
+        let viewer = Scope::Private {
+            agent_id: "cli".into(),
+        };
+
+        eng.file_claim(
+            "Rust 是一门系统编程语言",
+            viewer.clone(),
+            MemoryTier::Semantic,
+            "test",
+        );
+
+        // 用一个目录路径作为 palace_db，让 MempalaceSearchPorts::open 失败
+        let palace_dir = dir.path().join("palace_dir");
+        std::fs::create_dir(&palace_dir).unwrap();
+
+        let result = MempalaceSearchPorts::open(&palace_dir, Some("wiki".into()));
+        assert!(result.is_err(), "目录路径应该无法打开为 palace DB");
+
+        // 回退到纯 wiki 检索，确保不崩溃
+        let ctx = QueryContext::new("Rust 编程语言")
+            .with_rrf_k(60.0)
+            .with_per_stream_limit(10)
+            .with_viewer_scope(viewer.clone());
+        let ports = InMemorySearchPorts::new(&eng.store, Some(viewer.clone()));
+        let ranked =
+            eng.query_ranked_with_ports(&ctx, OffsetDateTime::now_utc(), &ports, None, None);
+        assert!(!ranked.is_empty(), "explain 回退后应该能检索到结果");
+    }
 }
 
 fn maybe_sync_projection(
@@ -2915,6 +3171,7 @@ fn read_graph_extras_lines(path: &PathBuf) -> Result<Vec<String>, Box<dyn std::e
         .map(|l| l.to_string())
         .collect())
 }
+
 
 fn timestamp_slug() -> String {
     let now = OffsetDateTime::now_utc();

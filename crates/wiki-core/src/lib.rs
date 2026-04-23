@@ -56,5 +56,5 @@ pub use schema::{
     PromotionRule, SchemaLoadError, SchemaValidationError, TagConfig, DEFAULT_MAINTENANCE_BATCH,
 };
 pub use scope_policy::document_visible_to_viewer;
-pub use search::{reciprocal_rank_fusion, RankedDoc};
+pub use search::{reciprocal_rank_fusion, CompositeSearchPorts, FusionConfig, RankedDoc};
 pub use search_ports::SearchPorts;
