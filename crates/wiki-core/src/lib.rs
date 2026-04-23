@@ -16,6 +16,7 @@ pub mod model;
 pub mod page;
 pub mod privacy;
 pub mod quality;
+pub mod gap;
 pub mod query;
 pub mod retention;
 pub mod schema;
@@ -43,6 +44,7 @@ pub use model::{
 pub use page::{extract_headings, extract_wikilinks, WikiPage};
 pub use privacy::{redact_for_ingest, RedactionFinding, SensitiveKind};
 pub use quality::{check_page_completeness, ContradictionHint, LintFinding, LintSeverity};
+pub use gap::{GapFinding, GapSeverity};
 pub use query::QueryContext;
 pub use retention::{retention_strength, RetentionParams};
 pub use schema::{

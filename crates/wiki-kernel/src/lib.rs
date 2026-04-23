@@ -2,6 +2,7 @@
 
 mod auto_hooks;
 mod engine;
+mod gap;
 mod hooks;
 mod memory;
 mod search_ports;
@@ -16,3 +17,4 @@ pub use search_ports::{
     EmptySearchPorts, InMemorySearchPorts, SearchPorts,
 };
 pub use wiki_writer::{write_lint_report, write_projection, ProjectionStats};
+pub use gap::run_gap_scan;

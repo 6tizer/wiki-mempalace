@@ -12,9 +12,9 @@ use wiki_core::{
     merge_sources_confidence, reciprocal_rank_fusion, redact_for_ingest, reinforce_claim,
     retention_strength, supersede_claim, walk_entities, AuditOperation, AuditRecord, Claim,
     ClaimId, ContradictionHint, CrystallizationDraft, DomainSchema, Entity, EntityId, EntryStatus,
-    EntryType, GraphWalkOptions, LintFinding, LintSeverity, MemoryTier, PageId, QueryContext,
-    RankedDoc, RawArtifact, RelationKind, SchemaLoadError, Scope, SessionCrystallizationInput,
-    SourceId, TypedEdge, WikiEvent,
+    EntryType, GapFinding, GraphWalkOptions, LintFinding, LintSeverity, MemoryTier, PageId,
+    QueryContext, RankedDoc, RawArtifact, RelationKind, SchemaLoadError, Scope,
+    SessionCrystallizationInput, SourceId, TypedEdge, WikiEvent,
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -824,6 +824,18 @@ impl<H: WikiHook> LlmWikiEngine<H> {
         }
         self.outbox.clear();
         Ok(n)
+    }
+
+    /// Run gap scan on the knowledge base, returning detected knowledge gaps.
+    ///
+    /// Delegates to [`crate::gap::run_gap_scan`]. The caller is responsible for
+    /// persistence (save_to_repo / flush_outbox) if findings are written to a page.
+    pub fn run_gap_scan(
+        &self,
+        viewer_scope: Option<&Scope>,
+        low_coverage_threshold: usize,
+    ) -> Vec<GapFinding> {
+        crate::gap::run_gap_scan(&self.store, viewer_scope, low_coverage_threshold)
     }
 }
 
