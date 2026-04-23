@@ -931,7 +931,7 @@ pub fn initial_status_for(entry_type: Option<&EntryType>, schema: &DomainSchema)
 #[cfg(test)]
 mod tests {
     use super::*;
-    use wiki_core::WikiPage;
+    use wiki_core::{SessionCrystallizationInput, WikiEvent, WikiPage};
     use wiki_storage::{SqliteRepository, WikiRepository};
 
     #[test]
@@ -1121,6 +1121,73 @@ mod tests {
         assert!(ndjson.contains("query_served"));
         assert!(ndjson.contains("claim_upserted"));
         assert!(ndjson.contains("claim_superseded"));
+    }
+
+    #[test]
+    fn crystallize_emits_session_crystallized_event() {
+        let mut eng = LlmWikiEngine::new(DomainSchema::permissive_default());
+        let draft = eng
+            .crystallize(
+                SessionCrystallizationInput {
+                    question: "What changed?".into(),
+                    findings: vec!["Redis enabled".into()],
+                    files_touched: vec!["src/main.rs".into()],
+                    lessons: vec!["Prefer explicit config".into()],
+                    scope: Scope::Private {
+                        agent_id: "a".into(),
+                    },
+                },
+                "tester",
+            )
+            .unwrap();
+        assert!(eng.outbox.iter().any(|event| {
+            matches!(
+                event,
+                WikiEvent::SessionCrystallized { page_id, .. } if *page_id == draft.page.id
+            )
+        }));
+    }
+
+    #[test]
+    fn run_basic_lint_emits_lint_run_finished_event() {
+        let mut eng = LlmWikiEngine::new(DomainSchema::permissive_default());
+        let page = WikiPage::new(
+            "Alpha",
+            "Link to [[MissingPage]]",
+            Scope::Private {
+                agent_id: "a".into(),
+            },
+        );
+        eng.store.pages.insert(page.id, page);
+        let findings = eng.run_basic_lint(
+            "tester",
+            Some(&Scope::Private {
+                agent_id: "a".into(),
+            }),
+        );
+        assert!(eng.outbox.iter().any(|event| {
+            matches!(
+                event,
+                WikiEvent::LintRunFinished { findings: emitted, .. } if *emitted == findings.len()
+            )
+        }));
+    }
+
+    #[test]
+    fn record_query_emits_query_served_event() {
+        let mut eng = LlmWikiEngine::new(DomainSchema::permissive_default());
+        let top = vec!["claim:1".into(), "page:2".into()];
+        eng.record_query("redis", top.clone(), "tester");
+        assert!(eng.outbox.iter().any(|event| {
+            matches!(
+                event,
+                WikiEvent::QueryServed {
+                    query_fingerprint,
+                    top_doc_ids,
+                    ..
+                } if query_fingerprint == "redis" && top_doc_ids == &top
+            )
+        }));
     }
 
     // --- initial_status_for 测试 ---
@@ -1479,6 +1546,35 @@ mod tests {
     }
 
     #[test]
+    fn mark_stale_emits_page_status_changed_event() {
+        let mut eng = LlmWikiEngine::new(schema_with_stale_rule(30, false));
+        let mut p = WikiPage::new(
+            "Old",
+            "body",
+            Scope::Private {
+                agent_id: "a".into(),
+            },
+        )
+        .with_entry_type(EntryType::Concept);
+        p.updated_at = OffsetDateTime::now_utc() - time::Duration::days(60);
+        let pid = p.id;
+        eng.store.pages.insert(pid, p);
+        let now = OffsetDateTime::now_utc();
+        assert_eq!(eng.mark_stale_pages(now), 1);
+        assert!(eng.outbox.iter().any(|event| {
+            matches!(
+                event,
+                WikiEvent::PageStatusChanged {
+                    page_id,
+                    from: EntryStatus::Draft,
+                    to: EntryStatus::NeedsUpdate,
+                    ..
+                } if *page_id == pid
+            )
+        }));
+    }
+
+    #[test]
     fn mark_stale_skips_not_expired() {
         let mut eng = LlmWikiEngine::new(schema_with_stale_rule(30, false));
         let p = WikiPage::new(
@@ -1552,6 +1648,27 @@ mod tests {
         let count = eng.cleanup_expired_pages(now);
         assert_eq!(count, 1);
         assert!(!eng.store.pages.contains_key(&pid));
+    }
+
+    #[test]
+    fn cleanup_expired_pages_emits_page_deleted_event() {
+        let mut eng = LlmWikiEngine::new(schema_with_stale_rule(10, true));
+        let mut p = WikiPage::new(
+            "LintReport",
+            "body",
+            Scope::Private {
+                agent_id: "a".into(),
+            },
+        )
+        .with_entry_type(EntryType::Concept);
+        p.updated_at = OffsetDateTime::now_utc() - time::Duration::days(30);
+        let pid = p.id;
+        eng.store.pages.insert(pid, p);
+        let now = OffsetDateTime::now_utc();
+        assert_eq!(eng.cleanup_expired_pages(now), 1);
+        assert!(eng.outbox.iter().any(
+            |event| matches!(event, WikiEvent::PageDeleted { page_id, .. } if *page_id == pid)
+        ));
     }
 
     #[test]

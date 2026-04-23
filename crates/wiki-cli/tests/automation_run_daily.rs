@@ -401,6 +401,11 @@ fn consume_to_mempalace_starts_from_latest_progress_and_advances_it() {
         .arg("consume-to-mempalace")
         .assert()
         .success()
+        .stdout(predicate::str::contains("seen=1"))
+        .stdout(predicate::str::contains("dispatched=0"))
+        .stdout(predicate::str::contains("ignored=1"))
+        .stdout(predicate::str::contains("filtered=0"))
+        .stdout(predicate::str::contains("unresolved=0"))
         .stdout(predicate::str::contains("start_id=2"))
         .stdout(predicate::str::contains("acked=1"))
         .stdout(predicate::str::contains("consumer_tag=mempalace"));
@@ -429,7 +434,11 @@ fn consume_to_mempalace_empty_increment_does_not_ack() {
         .arg("archive")
         .assert()
         .success()
-        .stdout(predicate::str::contains("consumed=0"))
+        .stdout(predicate::str::contains("seen=0"))
+        .stdout(predicate::str::contains("dispatched=0"))
+        .stdout(predicate::str::contains("ignored=0"))
+        .stdout(predicate::str::contains("filtered=0"))
+        .stdout(predicate::str::contains("unresolved=0"))
         .stdout(predicate::str::contains("start_id=2"))
         .stdout(predicate::str::contains("acked=0"))
         .stdout(predicate::str::contains("consumer_tag=archive"));
@@ -473,6 +482,128 @@ fn automation_run_consume_to_mempalace_executes_only_target_job() {
         .get_latest_automation_run("batch-ingest")
         .unwrap()
         .is_none());
+}
+
+#[test]
+fn consume_to_mempalace_dispatches_active_events_from_cli_flow() {
+    let db = tempfile::NamedTempFile::new().unwrap();
+    let db_path = db.path().to_owned();
+    let repo = SqliteRepository::open(&db_path).unwrap();
+
+    wiki_cli()
+        .arg("--db")
+        .arg(&db_path)
+        .arg("ingest")
+        .arg("file:///tmp/source.md")
+        .arg("source body with redis")
+        .arg("--scope")
+        .arg("private:cli")
+        .assert()
+        .success();
+
+    let claim_id_output = wiki_cli()
+        .arg("--db")
+        .arg(&db_path)
+        .arg("file-claim")
+        .arg("redis is enabled")
+        .arg("--scope")
+        .arg("private:cli")
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let claim_id = String::from_utf8(claim_id_output).unwrap();
+    let claim_id = claim_id
+        .lines()
+        .find_map(|line| line.strip_prefix("claim_id="))
+        .unwrap()
+        .trim()
+        .to_string();
+
+    wiki_cli()
+        .arg("--db")
+        .arg(&db_path)
+        .arg("supersede-claim")
+        .arg(&claim_id)
+        .arg("redis is enabled by default")
+        .arg("--scope")
+        .arg("private:cli")
+        .assert()
+        .success();
+
+    wiki_cli()
+        .arg("--db")
+        .arg(&db_path)
+        .arg("consume-to-mempalace")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("seen=3"))
+        .stdout(predicate::str::contains("dispatched=3"))
+        .stdout(predicate::str::contains("ignored=0"))
+        .stdout(predicate::str::contains("filtered=0"))
+        .stdout(predicate::str::contains("unresolved=0"))
+        .stdout(predicate::str::contains("acked=3"));
+
+    let progress_after = repo.get_outbox_consumer_progress("mempalace").unwrap();
+    assert_eq!(progress_after.acked_up_to_id, Some(3));
+}
+
+#[test]
+fn consume_to_mempalace_ignores_query_crystallize_and_lint_events() {
+    let db = tempfile::NamedTempFile::new().unwrap();
+    let db_path = db.path().to_owned();
+    let repo = SqliteRepository::open(&db_path).unwrap();
+
+    wiki_cli()
+        .arg("--db")
+        .arg(&db_path)
+        .arg("file-claim")
+        .arg("redis is enabled")
+        .assert()
+        .success();
+
+    let seeded_head = repo.get_outbox_stats().unwrap().head_id;
+    repo.mark_outbox_processed(seeded_head, "mempalace")
+        .unwrap();
+
+    wiki_cli()
+        .arg("--db")
+        .arg(&db_path)
+        .arg("query")
+        .arg("redis")
+        .assert()
+        .success();
+
+    wiki_cli()
+        .arg("--db")
+        .arg(&db_path)
+        .arg("crystallize")
+        .arg("What changed?")
+        .arg("--finding")
+        .arg("redis enabled")
+        .assert()
+        .success();
+
+    wiki_cli()
+        .arg("--db")
+        .arg(&db_path)
+        .arg("lint")
+        .assert()
+        .success();
+
+    wiki_cli()
+        .arg("--db")
+        .arg(&db_path)
+        .arg("consume-to-mempalace")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("seen=3"))
+        .stdout(predicate::str::contains("dispatched=0"))
+        .stdout(predicate::str::contains("ignored=3"))
+        .stdout(predicate::str::contains("filtered=0"))
+        .stdout(predicate::str::contains("unresolved=0"))
+        .stdout(predicate::str::contains("acked=3"));
 }
 
 #[test]
