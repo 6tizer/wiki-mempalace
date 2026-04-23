@@ -685,7 +685,7 @@ impl<H: WikiHook> LlmWikiEngine<H> {
                     severity: LintSeverity::Warn,
                     subject: Some(c.id.0.to_string()),
                 });
-            } else if !claim_has_page_reference(&c.text, &page_text) {
+            } else if !crate::gap::claim_has_page_reference(&c.text, &page_text) {
                 findings.push(LintFinding {
                     code: "xref.missing".into(),
                     message: "claim keywords are not referenced in current pages".into(),
@@ -826,10 +826,9 @@ impl<H: WikiHook> LlmWikiEngine<H> {
         Ok(n)
     }
 
-    /// Run gap scan on the knowledge base, returning detected knowledge gaps.
+    /// 对知识库运行 gap 扫描，返回检测到的知识缺口。
     ///
-    /// Delegates to [`crate::gap::run_gap_scan`]. The caller is responsible for
-    /// persistence (save_to_repo / flush_outbox) if findings are written to a page.
+    /// 委托给 [`crate::gap::run_gap_scan`]。调用方负责持久化（save_to_repo / flush_outbox）。
     pub fn run_gap_scan(
         &self,
         viewer_scope: Option<&Scope>,
@@ -907,18 +906,6 @@ fn contradicts_heuristic(a: &str, b: &str) -> bool {
         || (lb.contains("不是") && la.contains("是"))
         || (la.contains("cannot") && lb.contains("can "))
         || (lb.contains("cannot") && la.contains("can "))
-}
-
-fn claim_has_page_reference(claim_text: &str, page_text: &str) -> bool {
-    let keys: Vec<String> = claim_text
-        .split(|c: char| !c.is_alphanumeric() && c != '_')
-        .map(|x| x.trim().to_ascii_lowercase())
-        .filter(|x| x.len() >= 4)
-        .collect();
-    if keys.is_empty() {
-        return true;
-    }
-    keys.iter().any(|k| page_text.contains(k))
 }
 
 /// 根据 EntryType 和 DomainSchema 计算创建时的初始 EntryStatus：

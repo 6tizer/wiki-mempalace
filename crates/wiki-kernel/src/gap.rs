@@ -184,12 +184,20 @@ fn scan_orphan_source(
         };
 
         if !has_page_ref {
+            let msg = if related_claims.is_empty() {
+                format!(
+                    "source '{}' 无关联 claim，尚未被知识库消化",
+                    s.uri.chars().take(60).collect::<String>()
+                )
+            } else {
+                format!(
+                    "source '{}' 的 claim 未被任何 page 引用",
+                    s.uri.chars().take(60).collect::<String>()
+                )
+            };
             findings.push(GapFinding {
                 code: "gap.orphan_source".into(),
-                message: format!(
-                    "source '{}' 没有任何 claim 被 page 引用",
-                    s.uri.chars().take(60).collect::<String>()
-                ),
+                message: msg,
                 severity: GapSeverity::High,
                 subject: Some(s.id.0.to_string()),
                 subject_label: Some(s.uri.clone()),
@@ -200,7 +208,10 @@ fn scan_orphan_source(
 }
 
 /// 判断 claim 的文本关键词是否至少有一个出现在 page 文本中。
-fn claim_has_page_reference(claim_text: &str, page_text: &str) -> bool {
+///
+/// 共享函数：engine.rs 的 run_basic_lint 和 gap.rs 的扫描规则都依赖它。
+/// 保持单一定义以避免关键词提取策略漂移。
+pub fn claim_has_page_reference(claim_text: &str, page_text: &str) -> bool {
     let keys: Vec<String> = claim_text
         .split(|c: char| !c.is_alphanumeric() && c != '_')
         .map(|x| x.trim().to_ascii_lowercase())

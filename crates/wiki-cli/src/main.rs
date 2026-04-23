@@ -110,12 +110,12 @@ enum Cmd {
         entry_type: Option<String>,
     },
     Lint,
-    /// Detect knowledge gaps and produce a gap report.
+    /// 检测知识缺口并生成 gap 报告。
     Gap {
-        /// Low coverage threshold: entities with fewer claims are flagged.
+        /// 低覆盖阈值：关联 claim 数量少于此值的 entity 会被标记。
         #[arg(long, default_value_t = 2)]
         low_coverage_threshold: usize,
-        /// Write gap report as a wiki page (draft).
+        /// 将 gap 报告写入 wiki page（draft 状态）。
         #[arg(long, default_value_t = false)]
         write_page: bool,
     },
@@ -2052,24 +2052,13 @@ fn run_lint_job(
     Ok(())
 }
 
-/// 生成 gap 报告的 markdown 文件，写入 wiki/reports/gap-{timestamp}.md
-fn write_gap_report(
-    wiki_root: &std::path::Path,
-    report_name: &str,
-    findings: &[GapFinding],
-) -> std::io::Result<std::path::PathBuf> {
-    use std::collections::BTreeMap;
-    use std::fs;
-
-    let reports_dir = wiki_root.join("reports");
-    fs::create_dir_all(&reports_dir)?;
-    let filename = if report_name.ends_with(".md") {
-        report_name.to_string()
-    } else {
-        format!("{report_name}.md")
-    };
-    let out = reports_dir.join(filename);
-    let mut grouped: BTreeMap<&str, Vec<&GapFinding>> = BTreeMap::new();
+/// 将 GapFinding 列表渲染为 markdown 字符串。
+///
+/// 共享函数：`write_gap_report`（写文件）和 `gap_report_markdown`（写 page）都调用它。
+fn render_gap_markdown(findings: &[GapFinding]) -> String {
+    let severity_order = [GapSeverity::High, GapSeverity::Medium, GapSeverity::Low];
+    let mut grouped: std::collections::BTreeMap<&str, Vec<&GapFinding>> =
+        std::collections::BTreeMap::new();
     for f in findings {
         let key = match f.severity {
             GapSeverity::High => "high",
@@ -2080,19 +2069,49 @@ fn write_gap_report(
     }
     let mut md = String::from("# Gap Report\n\n");
     md.push_str(&format!("- total gaps: `{}`\n\n", findings.len()));
-    for (k, items) in grouped {
-        md.push_str(&format!("## {k}\n\n"));
-        for item in items {
-            let subject_info = match (&item.subject, &item.subject_label) {
-                (Some(s), Some(l)) => format!(" (subject={s}, label={l})"),
-                (Some(s), None) => format!(" (subject={s})"),
-                (None, Some(l)) => format!(" (label={l})"),
-                (None, None) => String::new(),
-            };
-            md.push_str(&format!("- `{}` {}{}\n", item.code, item.message, subject_info));
+    for sev in &severity_order {
+        let key = match sev {
+            GapSeverity::High => "high",
+            GapSeverity::Medium => "medium",
+            GapSeverity::Low => "low",
+        };
+        if let Some(items) = grouped.get(key) {
+            md.push_str(&format!("## {key}\n\n"));
+            for item in items {
+                let subject_info = match (&item.subject, &item.subject_label) {
+                    (Some(s), Some(l)) => format!(" (subject={s}, label={l})"),
+                    (Some(s), None) => format!(" (subject={s})"),
+                    (None, Some(l)) => format!(" (label={l})"),
+                    (None, None) => String::new(),
+                };
+                md.push_str(&format!(
+                    "- `{}` {}{}\n",
+                    item.code, item.message, subject_info
+                ));
+            }
+            md.push('\n');
         }
-        md.push('\n');
     }
+    md
+}
+
+/// 生成 gap 报告的 markdown 文件，写入 wiki/reports/gap-{timestamp}.md
+fn write_gap_report(
+    wiki_root: &std::path::Path,
+    report_name: &str,
+    findings: &[GapFinding],
+) -> std::io::Result<std::path::PathBuf> {
+    use std::fs;
+
+    let reports_dir = wiki_root.join("reports");
+    fs::create_dir_all(&reports_dir)?;
+    let filename = if report_name.ends_with(".md") {
+        report_name.to_string()
+    } else {
+        format!("{report_name}.md")
+    };
+    let out = reports_dir.join(filename);
+    let md = render_gap_markdown(findings);
     fs::write(&out, md)?;
     Ok(out)
 }
@@ -2121,7 +2140,7 @@ fn run_gap_job(
     if write_page {
         let title = format!("gap-report-{}", timestamp_slug());
         let status = initial_status_for(Some(&EntryType::LintReport), schema);
-        let page = WikiPage::new(title, report_md, Scope::Private { agent_id: "cli".into() })
+        let page = WikiPage::new(title, report_md, viewer.clone())
             .with_entry_type(EntryType::LintReport)
             .with_status(status);
         eng.store.pages.insert(page.id, page);
@@ -2135,36 +2154,9 @@ fn run_gap_job(
     }
     Ok(())
 }
-
 /// 将 GapFinding 列表渲染为 markdown 字符串（用于 --write-page）
 fn gap_report_markdown(findings: &[GapFinding]) -> String {
-    use std::collections::BTreeMap;
-
-    let mut grouped: BTreeMap<&str, Vec<&GapFinding>> = BTreeMap::new();
-    for f in findings {
-        let key = match f.severity {
-            GapSeverity::High => "high",
-            GapSeverity::Medium => "medium",
-            GapSeverity::Low => "low",
-        };
-        grouped.entry(key).or_default().push(f);
-    }
-    let mut md = String::from("# Gap Report\n\n");
-    md.push_str(&format!("- total gaps: `{}`\n\n", findings.len()));
-    for (k, items) in grouped {
-        md.push_str(&format!("## {k}\n\n"));
-        for item in items {
-            let subject_info = match (&item.subject, &item.subject_label) {
-                (Some(s), Some(l)) => format!(" (subject={s}, label={l})"),
-                (Some(s), None) => format!(" (subject={s})"),
-                (None, Some(l)) => format!(" (label={l})"),
-                (None, None) => String::new(),
-            };
-            md.push_str(&format!("- `{}` {}{}\n", item.code, item.message, subject_info));
-        }
-        md.push('\n');
-    }
-    md
+    render_gap_markdown(findings)
 }
 
 fn run_maintenance_job(

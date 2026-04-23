@@ -36,7 +36,7 @@
 | M3 告警与运维出口     | 失败告警、状态聚合、last failures、health                     | **✅ 已完成**         | `health`（green/yellow/red）、`last-failures`、阈值判定、stderr 告警出口                                                  | 无                   |
 | M4 Outbox 闭环增强 | 事件矩阵、消费闭环、消费健康、backlog                             | **✅ 已完成**         | `docs/outbox-event-matrix.md`、bridge 结构化 dispatch stats、CLI `consume-to-mempalace` 闭环摘要、active/ignored 全链路测试 | 无                   |
 | M5 恢复与回滚       | 备份、恢复、重建、演练、恢复成功检查                                 | **✅ 已完成**         | `automation verify-restore`、升级后的 `recovery-drill.sh`、`recovery-drill-template.md`、CLI + 脚本行为测试               | 无                   |
-| M6 Gap 工作流     | 发现知识缺口、产出报告或草稿                                     | **未开始**           | 无 `gap` 命令、无 gap 规则集合                                                                                        | 全量实现                |
+| M6 Gap 工作流     | 发现知识缺口、产出报告或草稿                                     | **✅ 已完成**         | `wiki-cli gap` 命令、`GapFinding` / `GapSeverity` 结构、3 条规则（missing_xref / low_coverage / orphan_source）、markdown 报告、`--write-page` 写入 wiki page、5 条单元测试 | 无                   |
 | M7 Fixer 工作流   | 把 lint finding 转成 fix actions                      | **未开始**           | 无 `fix` 命令、无 fix action 模型                                                                                   | 全量实现                |
 | M8 消费链产品化      | 统一 qa / synthesis / crystallize / query-write-page | **未开始（仅有零散基础能力）** | 现有 `query --write-page`、`crystallize`、entry_type/status 零散逻辑                                                 | 抽成统一消费入口和统一 page 契约 |
 | M9 查询融合增强      | 把 mempalace 候选更自然接入 wiki query                     | **未开始（仅有桥接基础件）**  | 有 `MempalaceSearchPorts` / `live_ranker`，但 `wiki query` 仍以 in-memory 路为主                                     | 全量实现                |
@@ -45,8 +45,8 @@
 ### 当前结论
 
 - **P0 已收口**（J1/J2/J3/J4 已完成）
-- **P1 还没有正式启动**
-- 下一步重心：收尾 J4，启动 P1（J5-J8）
+- **P1 部分启动**（J5 Gap 工作流已完成）
+- 下一步重心：启动 J6（Fixer）、J7（消费链产品化）、J8（查询融合增强）
 
 ---
 
@@ -134,15 +134,22 @@
 
 **遗留**：无。J4 范围内的统一验证入口、真实 drill、模板、测试和文档已完成。
 
-### J5. Gap 工作流 — 完成度 0%
+### J5. Gap 工作流 — 完成度 100%
 
+> **2026-04-24 审计更新**：J5 全量完成。以下为代码实际状态。
 
-| 交付物                                                 | 状态  | 证据  |
-| --------------------------------------------------- | --- | --- |
-| `wiki-cli gap` 命令                                   | ❌   | 无   |
-| `GapFinding` 结构                                     | ❌   | 无   |
-| gap 规则（missing_xref / low_coverage / orphan_source） | ❌   | 无   |
-| markdown 报告                                         | ❌   | 无   |
+| 交付物                                                 | 状态  | 证据                                                                                                      |
+| --------------------------------------------------- | --- | ------------------------------------------------------------------------------------------------------- |
+| `wiki-cli gap` 命令                                   | ✅   | `Cmd::Gap { low_coverage_threshold, write_page }`，中文 help 文案                                                    |
+| `GapFinding` / `GapSeverity` 结构                     | ✅   | `wiki-core/src/lib.rs`：`GapFinding { code, message, severity, subject, subject_label }`，`GapSeverity { High, Medium, Low }` |
+| gap 规则（missing_xref / low_coverage / orphan_source） | ✅   | `wiki-kernel/src/gap.rs`：`scan_missing_xref`、`scan_low_coverage`、`scan_orphan_source`                            |
+| markdown 报告                                         | ✅   | `render_gap_markdown` 统一渲染函数，`write_gap_report`（写文件）+ `gap_report_markdown`（写 page）共用                       |
+| `--write-page` 写入 wiki page                          | ✅   | `run_gap_job` 中 `write_page` flag 控制，scope 跟随 viewer（非硬编码）                                                  |
+| 单元测试                                                 | ✅   | 5 条测试：`missing_xref_triggered/not_triggered`、`low_coverage_entity`、`orphan_source_detected/with_page_not_detected`    |
+| doc comment 中文统一                                     | ✅   | `run_gap_scan` / `claim_has_page_reference` / `Cmd::Gap` 均已统一为中文                                                  |
+| 报告 severity 分组排序                                   | ✅   | 按 High → Medium → Low 顺序输出（`severity_order` 数组控制）                                                            |
+
+**遗留**：无。J5 范围内的 gap 发现、报告输出、CLI 命令、单元测试均已全部完成。
 
 
 ### J6. Fixer 工作流 — 完成度 0%
@@ -193,7 +200,7 @@
 | J2 运维健康与告警   | **100%** | P0  | ✅ 已完成               |
 | J3 Outbox 闭环 | **100%** | P0  | ✅ 已完成               |
 | J4 恢复验证      | **100%** | P0  | ✅ 已完成               |
-| J5 Gap 工作流   | **0%**   | P1  | ❌ 未开始               |
+| J5 Gap 工作流   | **100%** | P1  | ✅ 已完成               |
 | J6 Fixer 工作流 | **0%**   | P1  | ❌ 未开始               |
 | J7 消费链产品化    | **20%**  | P1  | ⚠️ 零散能力在，统一契约缺      |
 | J8 查询融合增强    | **10%**  | P1  | ⚠️ 桥接基础件在，query 未接入 |
