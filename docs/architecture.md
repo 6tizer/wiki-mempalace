@@ -78,7 +78,7 @@ user CLI --------------> Cmd::Ingest (wiki-cli/main.rs)
                      (可选 --sync-wiki)
                                 ▼
                  write_projection(wiki_root, store, audits)
-                    → wiki/index.md, pages/*.md, concepts/*.md, sources/*.md, log.md
+                    → wiki/index.md, pages/**/*.md, log.md
 
 ─── 异步消费 ───（consume-to-mempalace --last-id N 或 export-outbox-ndjson）
 
@@ -88,7 +88,7 @@ repo.export_outbox_ndjson_from_id(last)
                 ▼
 bridge::consume_outbox_ndjson
     逐行反序列化 WikiEvent，按事件类型分发：
-      ├─ ClaimUpserted   → sink.on_claim_event
+      ├─ ClaimUpserted   → sink.on_claim_upserted（无 resolver/悬挂事件时才回退 on_claim_event）
       ├─ ClaimSuperseded → sink.on_claim_superseded
       └─ SourceIngested  → sink.on_source_ingested
                 │
@@ -168,7 +168,7 @@ WikiPage::new → engine.file_page → store.pages → write_projection
 | `Claim`                      | `kg_facts`              | `(subject, predicate, object)` SPO 三元组 |
 | `Claim.supersedes` / `stale` | `kg_facts.valid_to`     | 新结论写入后 `kg_invalidate` 旧事实             |
 | `WikiEvent::SourceIngested`  | `mine_path` 入库事件        | 桥接触发 drawer 写入                         |
-| `WikiEvent::ClaimUpserted`   | `kg_facts` 插入           | 事件驱动                                   |
+| `WikiEvent::ClaimUpserted`   | `drawers` / `drawer_vectors` 写入 | 事件驱动                           |
 | `Entity` / `TypedEdge`       | `kg_query` + `traverse` | 图路召回来源                                 |
 
 
@@ -185,4 +185,3 @@ WikiPage::new → engine.file_page → store.pages → write_projection
   `edition = "2024"`。等 workspace 整体升 2024 再统一。
 3. **两份 SQLite 最终一致**：依赖 outbox 消费器手动触发。未来可考虑内核 hook 直连
   bridge live sink，实现准实时一致。
-

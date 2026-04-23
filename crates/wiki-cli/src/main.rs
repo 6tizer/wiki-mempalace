@@ -1,6 +1,7 @@
 use clap::{Parser, Subcommand};
+use std::io::Write;
 use std::path::PathBuf;
-use time::OffsetDateTime;
+use time::{format_description::well_known::Rfc3339, OffsetDateTime};
 use wiki_core::{
     document_visible_to_viewer, parse_memory_tier, ClaimId, DomainSchema, Entity, EntityId,
     EntityKind, EntryStatus, EntryType, LlmIngestPlanV1, MemoryTier, PageId, QueryContext,
@@ -13,11 +14,13 @@ use wiki_kernel::{
 use wiki_mempalace_bridge::{
     consume_outbox_ndjson_with_resolver, MempalaceError, MempalaceWikiSink, OutboxResolver,
 };
-use wiki_storage::{SqliteRepository, WikiRepository};
+use wiki_storage::{AutomationRunRecord, OutboxConsumerProgress, OutboxStats, SqliteRepository, WikiRepository};
 
 mod banner;
 mod llm;
 mod mcp;
+
+const DEFAULT_MEMPALACE_CONSUMER_TAG: &str = "mempalace";
 
 #[derive(Parser)]
 #[command(name = "wiki")]
@@ -136,8 +139,12 @@ enum Cmd {
         consumer_tag: String,
     },
     ConsumeToMempalace {
+        /// 最小 outbox id；实际起点取 consumer progress 与此值中的较大者。
         #[arg(long, default_value_t = 0)]
         last_id: i64,
+        /// 用于 outbox ack / progress 跟踪的 consumer tag。
+        #[arg(long, default_value = "mempalace")]
+        consumer_tag: String,
     },
     LlmSmoke {
         #[arg(long, default_value = "llm-config.toml")]
@@ -174,6 +181,208 @@ enum Cmd {
         #[arg(long, default_value_t = 1)]
         delay_secs: u64,
     },
+    Automation {
+        #[command(subcommand)]
+        cmd: AutomationCmd,
+    },
+}
+
+#[derive(Subcommand)]
+enum AutomationCmd {
+    /// Run the fixed daily automation chain: batch-ingest, lint, maintenance, consume-to-mempalace.
+    RunDaily {
+        /// Print the execution plan without running any jobs.
+        #[arg(long, default_value_t = false)]
+        dry_run: bool,
+    },
+    /// Print the latest automation run status for each job in the fixed chain.
+    Status,
+    /// Print job status plus outbox / consumer health summary.
+    Doctor {
+        /// Consumer tag used for outbox ack / lag tracking.
+        #[arg(long, default_value = "mempalace")]
+        consumer_tag: String,
+    },
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+enum AutomationJob {
+    BatchIngest,
+    Lint,
+    Maintenance,
+    ConsumeToMempalace,
+}
+
+fn automation_run_daily_jobs() -> [AutomationJob; 4] {
+    [
+        AutomationJob::BatchIngest,
+        AutomationJob::Lint,
+        AutomationJob::Maintenance,
+        AutomationJob::ConsumeToMempalace,
+    ]
+}
+
+fn automation_job_name(job: AutomationJob) -> &'static str {
+    match job {
+        AutomationJob::BatchIngest => "batch-ingest",
+        AutomationJob::Lint => "lint",
+        AutomationJob::Maintenance => "maintenance",
+        AutomationJob::ConsumeToMempalace => "consume-to-mempalace",
+    }
+}
+
+fn format_automation_time(value: OffsetDateTime) -> String {
+    value
+        .format(&Rfc3339)
+        .unwrap_or_else(|_| value.unix_timestamp().to_string())
+}
+
+fn format_automation_record(record: &AutomationRunRecord) -> String {
+    let mut parts = vec![
+        format!("status={:?}", record.status).to_lowercase(),
+        format!("started_at={}", format_automation_time(record.started_at)),
+        format!("heartbeat_at={}", format_automation_time(record.heartbeat_at)),
+    ];
+    if let Some(finished_at) = record.finished_at {
+        parts.push(format!("finished_at={}", format_automation_time(finished_at)));
+    }
+    if let Some(duration_ms) = record.duration_ms {
+        parts.push(format!("duration_ms={duration_ms}"));
+    }
+    if let Some(error_summary) = &record.error_summary {
+        parts.push(format!("error_summary={}", truncate_chars(error_summary, 160)));
+    }
+    parts.join(" ")
+}
+
+fn format_outbox_stats(stats: &OutboxStats) -> String {
+    format!(
+        "head_id={} total_events={} unprocessed_events={}",
+        stats.head_id, stats.total_events, stats.unprocessed_events
+    )
+}
+
+fn format_outbox_consumer_progress(progress: &OutboxConsumerProgress) -> String {
+    let mut parts = Vec::new();
+    match progress.acked_up_to_id {
+        Some(id) => parts.push(format!("acked_up_to_id={id}")),
+        None => parts.push("acked_up_to_id=never".to_string()),
+    }
+    match progress.acked_at {
+        Some(ts) => parts.push(format!("acked_at={}", format_automation_time(ts))),
+        None => parts.push("acked_at=never".to_string()),
+    }
+    parts.push(format!("backlog_events={}", progress.backlog_events));
+    parts.join(" ")
+}
+
+fn run_automation_plan<W, F>(
+    jobs: &[AutomationJob],
+    dry_run: bool,
+    out: &mut W,
+    mut run_job: F,
+) -> Result<(), Box<dyn std::error::Error>>
+where
+    W: Write,
+    F: FnMut(AutomationJob) -> Result<(), Box<dyn std::error::Error>>,
+{
+    writeln!(out, "automation run-daily plan:")?;
+    for (idx, job) in jobs.iter().enumerate() {
+        writeln!(out, "{}. {}", idx + 1, automation_job_name(*job))?;
+    }
+
+    if dry_run {
+        writeln!(out, "dry-run: no jobs executed")?;
+        return Ok(());
+    }
+
+    for job in jobs {
+        writeln!(out, "automation: running {}", automation_job_name(*job))?;
+        run_job(*job)?;
+        writeln!(out, "automation: finished {}", automation_job_name(*job))?;
+    }
+
+    Ok(())
+}
+
+fn print_automation_status<W: Write>(
+    repo: &SqliteRepository,
+    jobs: &[AutomationJob],
+    out: &mut W,
+) -> Result<(), Box<dyn std::error::Error>> {
+    writeln!(out, "automation status:")?;
+    for job in jobs {
+        let job_name = automation_job_name(*job);
+        let latest = repo.get_latest_automation_run(job_name)?;
+        match latest {
+            Some(record) => {
+                writeln!(out, "{job_name}: {}", format_automation_record(&record))?;
+            }
+            None => {
+                writeln!(out, "{job_name}: never-run")?;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn print_automation_doctor<W: Write>(
+    repo: &SqliteRepository,
+    jobs: &[AutomationJob],
+    consumer_tag: &str,
+    out: &mut W,
+) -> Result<(), Box<dyn std::error::Error>> {
+    writeln!(out, "automation doctor:")?;
+    for job in jobs {
+        let job_name = automation_job_name(*job);
+        let latest = repo.get_latest_automation_run(job_name)?;
+        match latest {
+            Some(record) => {
+                writeln!(out, "{job_name}: {}", format_automation_record(&record))?;
+            }
+            None => {
+                writeln!(out, "{job_name}: never-run")?;
+            }
+        }
+    }
+    let outbox = repo.get_outbox_stats()?;
+    writeln!(out, "outbox: {}", format_outbox_stats(&outbox))?;
+    let progress = repo.get_outbox_consumer_progress(consumer_tag)?;
+    writeln!(
+        out,
+        "consumer {consumer_tag}: {}",
+        format_outbox_consumer_progress(&progress)
+    )?;
+    Ok(())
+}
+
+fn run_automation_job<F>(
+    repo: &SqliteRepository,
+    job: AutomationJob,
+    run: F,
+) -> Result<(), Box<dyn std::error::Error>>
+where
+    F: FnOnce() -> Result<(), Box<dyn std::error::Error>>,
+{
+    let job_name = automation_job_name(job);
+    let run_id = repo.start_automation_run(job_name)?;
+    repo.refresh_automation_heartbeat(run_id)?;
+    match run() {
+        Ok(()) => {
+            repo.mark_automation_run_succeeded(run_id)?;
+            Ok(())
+        }
+        Err(err) => {
+            let summary = truncate_chars(&err.to_string(), 240);
+            if let Err(storage_err) = repo.mark_automation_run_failed(run_id, &summary) {
+                return Err(format!(
+                    "{job_name} failed: {summary}; additionally failed to persist run state: {storage_err}"
+                )
+                .into());
+            }
+            Err(err)
+        }
+    }
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -213,6 +422,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 /// 所有需要 DB / engine 的子命令走这里。
 fn run_with_engine(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
+    if matches!(
+        &cli.cmd,
+        Cmd::Automation {
+            cmd: AutomationCmd::RunDaily { dry_run: true }
+        }
+    ) {
+        let jobs = automation_run_daily_jobs();
+        let mut stdout = std::io::stdout().lock();
+        run_automation_plan(&jobs, true, &mut stdout, |_| Ok(()))?;
+        return Ok(());
+    }
+
     let viewer = parse_scope(&cli.viewer_scope);
     let wiki_root = cli.wiki_dir.clone();
     let sync_wiki = cli.sync_wiki;
@@ -438,18 +659,7 @@ fn run_with_engine(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             }
         }
         Cmd::Lint => {
-            let findings = eng.run_basic_lint("cli", Some(&viewer));
-            eng.save_to_repo(&repo)?;
-            eng.flush_outbox_to_repo_with_policy(&repo, 128, 3)?;
-            if let Some(root) = wiki_root.as_deref() {
-                let report =
-                    write_lint_report(root, &format!("lint-{}", timestamp_slug()), &findings)?;
-                println!("lint_report={}", report.display());
-            }
-            maybe_sync_projection(sync_wiki, wiki_root.as_deref(), &eng)?;
-            for f in findings {
-                println!("{:?}\t{}\t{}", f.severity, f.code, f.message);
-            }
+            run_lint_job(&mut eng, &repo, &viewer, sync_wiki, wiki_root.as_deref())?;
         }
         Cmd::Promote { claim_id } => {
             let cid = wiki_core::ClaimId(uuid::Uuid::parse_str(&claim_id)?);
@@ -541,11 +751,15 @@ fn run_with_engine(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             let n = repo.mark_outbox_processed(up_to_id, &consumer_tag)?;
             println!("acked={n}");
         }
-        Cmd::ConsumeToMempalace { last_id } => {
-            let ndjson = repo.export_outbox_ndjson_from_id(last_id)?;
-            let resolver = EngineResolver { store: &eng.store };
-            let n = consume_outbox_ndjson_with_resolver(&CliMempalaceSink, &resolver, &ndjson)?;
-            println!("consumed={n}");
+        Cmd::ConsumeToMempalace {
+            last_id,
+            consumer_tag,
+        } => {
+            let (consumed, start_id, acked) =
+                run_consume_to_mempalace_job(&eng, &repo, &consumer_tag, last_id)?;
+            println!(
+                "consumed={consumed} start_id={start_id} acked={acked} consumer_tag={consumer_tag}"
+            );
         }
         Cmd::LlmSmoke { config, prompt } => {
             let cfg = llm::load_llm_config(&config)?;
@@ -565,25 +779,7 @@ fn run_with_engine(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             )?;
         }
         Cmd::Maintenance => {
-            let now = OffsetDateTime::now_utc();
-            eng.apply_confidence_decay_all(now, 30.0);
-            let findings = eng.run_basic_lint("cli", Some(&viewer));
-            let mut promoted = 0u32;
-            let claim_ids: Vec<ClaimId> = eng.store.claims.keys().copied().collect();
-            for cid in claim_ids {
-                if eng.promote_if_qualified(cid, "cli", &viewer).is_ok() {
-                    promoted += 1;
-                }
-            }
-            let pages_marked = eng.mark_stale_pages(now);
-            let pages_cleaned = eng.cleanup_expired_pages(now);
-            eng.save_to_repo(&repo)?;
-            eng.flush_outbox_to_repo_with_policy(&repo, 128, 3)?;
-            maybe_sync_projection(sync_wiki, wiki_root.as_deref(), &eng)?;
-            println!(
-                "decay=applied lint_findings={} promoted={promoted} pages_marked_needs_update={pages_marked} pages_auto_cleaned={pages_cleaned}",
-                findings.len()
-            );
+            run_maintenance_job(&mut eng, &repo, &viewer, sync_wiki, wiki_root.as_deref())?;
         }
         Cmd::BatchIngest {
             ref vault,
@@ -603,6 +799,40 @@ fn run_with_engine(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                 wiki_root.as_deref(),
                 &schema,
             )?;
+        }
+        Cmd::Automation {
+            cmd: AutomationCmd::RunDaily { dry_run: false },
+        } => {
+            run_daily_automation(
+                &cli,
+                &mut eng,
+                &repo,
+                &viewer,
+                sync_wiki,
+                wiki_root.as_deref(),
+                &schema,
+            )?;
+        }
+        Cmd::Automation {
+            cmd: AutomationCmd::RunDaily { dry_run: true },
+        } => {
+            let jobs = automation_run_daily_jobs();
+            let mut stdout = std::io::stdout().lock();
+            run_automation_plan(&jobs, true, &mut stdout, |_| Ok(()))?;
+        }
+        Cmd::Automation {
+            cmd: AutomationCmd::Status,
+        } => {
+            let jobs = automation_run_daily_jobs();
+            let mut stdout = std::io::stdout().lock();
+            print_automation_status(&repo, &jobs, &mut stdout)?;
+        }
+        Cmd::Automation {
+            cmd: AutomationCmd::Doctor { consumer_tag },
+        } => {
+            let jobs = automation_run_daily_jobs();
+            let mut stdout = std::io::stdout().lock();
+            print_automation_doctor(&repo, &jobs, &consumer_tag, &mut stdout)?;
         }
         // SchemaValidate 已在 main() 中短路，此处不可达
         Cmd::SchemaValidate { .. } => unreachable!(),
@@ -729,6 +959,91 @@ mod tests {
             EntryType::Synthesis
         );
     }
+
+    #[test]
+    fn automation_run_daily_plan_is_fixed_and_ordered() {
+        let jobs = automation_run_daily_jobs();
+        let labels: Vec<&str> = jobs.iter().copied().map(automation_job_name).collect();
+        assert_eq!(
+            labels,
+            vec![
+                "batch-ingest",
+                "lint",
+                "maintenance",
+                "consume-to-mempalace",
+            ]
+        );
+    }
+
+    #[test]
+    fn automation_run_daily_dry_run_prints_plan_only() {
+        let jobs = automation_run_daily_jobs();
+        let mut out = Vec::new();
+        let mut called = Vec::new();
+
+        run_automation_plan(&jobs, true, &mut out, |job| {
+            called.push(job);
+            Ok(())
+        })
+        .unwrap();
+
+        assert!(called.is_empty());
+        let stdout = String::from_utf8(out).unwrap();
+        assert!(stdout.contains("automation run-daily plan:"));
+        assert!(stdout.contains("1. batch-ingest"));
+        assert!(stdout.contains("2. lint"));
+        assert!(stdout.contains("3. maintenance"));
+        assert!(stdout.contains("4. consume-to-mempalace"));
+        assert!(stdout.contains("dry-run: no jobs executed"));
+    }
+
+    #[test]
+    fn automation_run_daily_stops_after_first_failure() {
+        let jobs = automation_run_daily_jobs();
+        let mut out = Vec::new();
+        let mut seen = Vec::new();
+
+        let err = run_automation_plan(&jobs, false, &mut out, |job| {
+            seen.push(job);
+            if job == AutomationJob::Lint {
+                Err("boom".into())
+            } else {
+                Ok(())
+            }
+        })
+        .unwrap_err();
+
+        assert_eq!(seen, vec![AutomationJob::BatchIngest, AutomationJob::Lint]);
+        assert!(err.to_string().contains("boom"));
+        let stdout = String::from_utf8(out).unwrap();
+        assert!(stdout.contains("automation: running batch-ingest"));
+        assert!(stdout.contains("automation: finished batch-ingest"));
+        assert!(stdout.contains("automation: running lint"));
+        assert!(!stdout.contains("automation: finished lint"));
+        assert!(!stdout.contains("automation: running consume-to-mempalace"));
+        assert!(!stdout.contains("automation: finished consume-to-mempalace"));
+    }
+
+    #[test]
+    fn consume_start_id_prefers_progress_and_respects_last_id_floor() {
+        let progress = OutboxConsumerProgress {
+            consumer_tag: "mempalace".into(),
+            acked_up_to_id: Some(3),
+            acked_at: None,
+            backlog_events: 2,
+        };
+        assert_eq!(effective_consume_start_id(&progress, 0), 3);
+        assert_eq!(effective_consume_start_id(&progress, 5), 5);
+
+        let empty_progress = OutboxConsumerProgress {
+            consumer_tag: "mempalace".into(),
+            acked_up_to_id: None,
+            acked_at: None,
+            backlog_events: 0,
+        };
+        assert_eq!(effective_consume_start_id(&empty_progress, 0), 0);
+        assert_eq!(effective_consume_start_id(&empty_progress, 4), 4);
+    }
 }
 
 fn maybe_sync_projection(
@@ -747,6 +1062,135 @@ fn maybe_sync_projection(
         );
     }
     Ok(())
+}
+
+fn run_lint_job(
+    eng: &mut LlmWikiEngine<NoopWikiHook>,
+    repo: &SqliteRepository,
+    viewer: &Scope,
+    sync_wiki: bool,
+    wiki_root: Option<&std::path::Path>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let findings = eng.run_basic_lint("cli", Some(viewer));
+    eng.save_to_repo(repo)?;
+    eng.flush_outbox_to_repo_with_policy(repo, 128, 3)?;
+    if let Some(root) = wiki_root {
+        let report = write_lint_report(root, &format!("lint-{}", timestamp_slug()), &findings)?;
+        println!("lint_report={}", report.display());
+    }
+    maybe_sync_projection(sync_wiki, wiki_root, eng)?;
+    for f in findings {
+        println!("{:?}\t{}\t{}", f.severity, f.code, f.message);
+    }
+    Ok(())
+}
+
+fn run_maintenance_job(
+    eng: &mut LlmWikiEngine<NoopWikiHook>,
+    repo: &SqliteRepository,
+    viewer: &Scope,
+    sync_wiki: bool,
+    wiki_root: Option<&std::path::Path>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let now = OffsetDateTime::now_utc();
+    eng.apply_confidence_decay_all(now, 30.0);
+    let findings = eng.run_basic_lint("cli", Some(viewer));
+    let mut promoted = 0u32;
+    let claim_ids: Vec<ClaimId> = eng.store.claims.keys().copied().collect();
+    for cid in claim_ids {
+        if eng.promote_if_qualified(cid, "cli", viewer).is_ok() {
+            promoted += 1;
+        }
+    }
+    let pages_marked = eng.mark_stale_pages(now);
+    let pages_cleaned = eng.cleanup_expired_pages(now);
+    eng.save_to_repo(repo)?;
+    eng.flush_outbox_to_repo_with_policy(repo, 128, 3)?;
+    maybe_sync_projection(sync_wiki, wiki_root, eng)?;
+    println!(
+        "decay=applied lint_findings={} promoted={promoted} pages_marked_needs_update={pages_marked} pages_auto_cleaned={pages_cleaned}",
+        findings.len()
+    );
+    Ok(())
+}
+
+fn effective_consume_start_id(
+    progress: &OutboxConsumerProgress,
+    requested_last_id: i64,
+) -> i64 {
+    progress
+        .acked_up_to_id
+        .map_or(requested_last_id, |acked| acked.max(requested_last_id))
+}
+
+fn run_consume_to_mempalace_job(
+    eng: &LlmWikiEngine<NoopWikiHook>,
+    repo: &SqliteRepository,
+    consumer_tag: &str,
+    last_id: i64,
+) -> Result<(usize, i64, usize), Box<dyn std::error::Error>> {
+    let progress = repo.get_outbox_consumer_progress(consumer_tag)?;
+    let start_id = effective_consume_start_id(&progress, last_id);
+    let stats = repo.get_outbox_stats()?;
+    if start_id >= stats.head_id {
+        return Ok((0, start_id, 0));
+    }
+
+    let ndjson = repo.export_outbox_ndjson_from_id(start_id)?;
+    if ndjson.is_empty() {
+        return Ok((0, start_id, 0));
+    }
+
+    let resolver = EngineResolver { store: &eng.store };
+    let n = consume_outbox_ndjson_with_resolver(&CliMempalaceSink, &resolver, &ndjson)?;
+    let acked = repo.mark_outbox_processed(stats.head_id, consumer_tag)?;
+    Ok((n, start_id, acked))
+}
+
+fn run_daily_automation(
+    cli: &Cli,
+    eng: &mut LlmWikiEngine<NoopWikiHook>,
+    repo: &SqliteRepository,
+    viewer: &Scope,
+    sync_wiki: bool,
+    wiki_root: Option<&std::path::Path>,
+    schema: &DomainSchema,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let jobs = automation_run_daily_jobs();
+    let mut stdout = std::io::stdout().lock();
+    run_automation_plan(&jobs, false, &mut stdout, |job| {
+        run_automation_job(repo, job, || match job {
+            AutomationJob::BatchIngest => {
+                let vault = cli
+                    .wiki_dir
+                    .clone()
+                    .unwrap_or_else(|| PathBuf::from("/Users/mac-mini/Documents/wiki"));
+                batch_ingest_cmd(
+                    eng,
+                    repo,
+                    cli,
+                    &vault,
+                    None,
+                    false,
+                    1,
+                    sync_wiki,
+                    wiki_root,
+                    schema,
+                )
+            }
+            AutomationJob::Lint => run_lint_job(eng, repo, viewer, sync_wiki, wiki_root),
+            AutomationJob::Maintenance => {
+                run_maintenance_job(eng, repo, viewer, sync_wiki, wiki_root)
+            }
+            AutomationJob::ConsumeToMempalace => run_consume_to_mempalace_job(
+                eng,
+                repo,
+                DEFAULT_MEMPALACE_CONSUMER_TAG,
+                0,
+            )
+            .map(|_| ()),
+        })
+    })
 }
 
 fn query_to_page(

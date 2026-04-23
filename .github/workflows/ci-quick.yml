@@ -27,3 +27,17 @@ jobs:
 
       - name: Workspace tests
         run: cargo test --workspace
+
+      - name: Shell script syntax check
+        run: |
+          bash -n scripts/backup.sh
+          bash -n scripts/e2e.sh
+          bash -n scripts/recovery-drill.sh
+
+      - name: Automation CLI smoke
+        run: |
+          tmpdir="$(mktemp -d)"
+          db="$tmpdir/wiki.db"
+          cargo run -q -p wiki-cli -- --db "$db" automation run-daily --dry-run
+          cargo run -q -p wiki-cli -- --db "$db" automation status
+          cargo run -q -p wiki-cli -- --db "$db" automation doctor

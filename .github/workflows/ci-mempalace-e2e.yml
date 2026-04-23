@@ -6,7 +6,13 @@ on:
     branches:
       - main
     paths:
+      - 'crates/wiki-core/**'
+      - 'crates/wiki-kernel/**'
+      - 'crates/wiki-storage/**'
+      - 'crates/wiki-cli/**'
+      - 'crates/wiki-mempalace-bridge/**'
       - 'crates/rust-mempalace/**'
+      - 'scripts/e2e.sh'
       - '.github/workflows/ci-mempalace-*.yml'
   schedule:
     - cron: "0 2 * * *"
