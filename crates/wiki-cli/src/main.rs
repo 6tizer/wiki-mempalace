@@ -1,18 +1,18 @@
 use clap::{Parser, Subcommand, ValueEnum};
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::PathBuf;
 use time::{format_description::well_known::Rfc3339, Duration, OffsetDateTime};
 use walkdir::WalkDir;
 use wiki_core::{
-    document_visible_to_viewer, parse_memory_tier, ClaimId, DomainSchema, Entity, EntityId,
-    EntityKind, EntryStatus, EntryType, FixAction, FixActionType, FixPatch, GapFinding,
-    GapSeverity, LlmIngestPlanV1, MemoryTier, PageId, QueryContext, RelationKind, Scope,
-    SessionCrystallizationInput, SourceId, TypedEdge, WikiPage,
+    document_visible_to_viewer, parse_memory_tier, ClaimId, Confidence, DomainSchema, Entity,
+    EntityId, EntityKind, EntryStatus, EntryType, FixAction, FixActionType, FixPatch, GapFinding,
+    GapSeverity, LlmIngestPlanV1, MemoryTier, PageContract, PageId, QueryContext, RelationKind,
+    Scope, SessionCrystallizationInput, SourceId, TypedEdge, WikiPage,
 };
 use wiki_kernel::{
-    format_claim_doc_id, initial_status_for, map_findings_to_fixes, merge_graph_rankings,
-    write_lint_report, write_projection, InMemorySearchPorts, InMemoryStore, LlmWikiEngine,
-    NoopWikiHook, SearchPorts,
+    finalize_consumed_page, format_claim_doc_id, initial_status_for, map_findings_to_fixes,
+    merge_graph_rankings, write_lint_report, write_projection, InMemorySearchPorts, InMemoryStore,
+    LlmWikiEngine, NoopWikiHook, SearchPorts,
 };
 use wiki_mempalace_bridge::{
     consume_outbox_ndjson_with_resolver_and_stats, LiveMempalaceSink, MempalaceError,
@@ -157,6 +157,24 @@ enum Cmd {
         /// 为 crystallize 生成的 page 绑定 EntryType。
         #[arg(long)]
         entry_type: Option<String>,
+    },
+    /// 生成问答式知识条目。
+    Qa {
+        /// 问题文本
+        question: String,
+        /// 回答文本
+        answer: String,
+        /// 可选：覆盖 EntryType（默认 qa）
+        #[arg(long)]
+        entry_type: Option<String>,
+    },
+    /// 聚合分析生成综合研究条目。
+    Synthesis {
+        /// 研究主题
+        topic: String,
+        /// 综合分析正文（省略则从 stdin 读取）
+        #[arg(long)]
+        body: Option<String>,
     },
     ExportOutboxNdjson,
     ExportOutboxNdjsonFrom {
@@ -1189,11 +1207,17 @@ fn run_with_engine(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                     plan.summary_title.trim().to_string()
                 };
                 let md = plan.to_five_section_summary_body(Some(&uri));
-                let status = initial_status_for(Some(&EntryType::Summary), &schema);
-                let page = WikiPage::new(title, md, sc.clone())
-                    .with_entry_type(EntryType::Summary)
-                    .with_status(status);
-                eng.store.pages.insert(page.id, page);
+                let page = WikiPage::new(title, md, sc.clone());
+                let pid = page.id;
+                eng.store.pages.insert(pid, page);
+                if let Some(page) = eng.store.pages.get_mut(&pid) {
+                    finalize_consumed_page(
+                        page,
+                        EntryType::Summary,
+                        Confidence::default(),
+                        &schema,
+                    );
+                }
                 eng.save_to_repo(&repo)?;
                 eng.flush_outbox_to_repo_with_policy(&repo, 128, 3)?;
             }
@@ -1390,7 +1414,7 @@ fn run_with_engine(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             lessons,
             entry_type,
         } => {
-            let et = parse_entry_type_opt(&entry_type)?;
+            let et = parse_entry_type_opt(&entry_type)?.unwrap_or(EntryType::Synthesis);
             let draft = eng.crystallize(
                 SessionCrystallizationInput {
                     question,
@@ -1403,16 +1427,9 @@ fn run_with_engine(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                 },
                 "cli",
             )?;
-            // crystallize 内部已经 insert page，此处覆盖 entry_type 和 status
-            let status = initial_status_for(et.as_ref(), &schema);
+            // 用 finalize 替代手动覆盖
             if let Some(page) = eng.store.pages.get_mut(&draft.page.id) {
-                if let Some(et) = et {
-                    page.entry_type = Some(et);
-                }
-                if page.status != status {
-                    page.status = status;
-                    page.status_entered_at = Some(OffsetDateTime::now_utc());
-                }
+                finalize_consumed_page(page, et, Confidence::default(), &schema);
             }
             eng.save_to_repo(&repo)?;
             eng.flush_outbox_to_repo_with_policy(&repo, 128, 3)?;
@@ -1422,6 +1439,59 @@ fn run_with_engine(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                 draft.page.id.0,
                 draft.claim_candidates.len()
             );
+        }
+        Cmd::Qa {
+            question,
+            answer,
+            entry_type,
+        } => {
+            let et = parse_entry_type_opt(&entry_type)?.unwrap_or(EntryType::Qa);
+            let status = initial_status_for(Some(&et), &schema);
+
+            let page = PageContract::new(&question, et)
+                .with_confidence(Confidence::default())
+                .with_source("qa")
+                .with_section("问题", &question)
+                .with_section("回答", &answer)
+                .into_page(viewer.clone(), status);
+
+            let pid = page.id;
+            eng.store.pages.insert(pid, page);
+            eng.save_to_repo(&repo)?;
+            eng.flush_outbox_to_repo_with_policy(&repo, 128, 3)?;
+            maybe_sync_projection(sync_wiki, wiki_root.as_deref(), &eng)?;
+            println!("page={}", pid.0);
+        }
+        Cmd::Synthesis { topic, body } => {
+            let et = EntryType::Synthesis;
+            let status = initial_status_for(Some(&et), &schema);
+
+            // body 未提供时从 stdin 读取
+            let body_text = match body {
+                Some(b) => b,
+                None => {
+                    let mut buf = String::new();
+                    std::io::stdin()
+                        .read_to_string(&mut buf)
+                        .map_err(|e| -> Box<dyn std::error::Error> { e.to_string().into() })?;
+                    buf.trim_end().to_string()
+                }
+            };
+
+            let title = topic.clone();
+            let page = PageContract::new(&title, et)
+                .with_confidence(Confidence::default())
+                .with_source("synthesis")
+                .with_section("研究问题", &topic)
+                .with_section("综合分析", &body_text)
+                .into_page(viewer.clone(), status);
+
+            let pid = page.id;
+            eng.store.pages.insert(pid, page);
+            eng.save_to_repo(&repo)?;
+            eng.flush_outbox_to_repo_with_policy(&repo, 128, 3)?;
+            maybe_sync_projection(sync_wiki, wiki_root.as_deref(), &eng)?;
+            println!("page={}", pid.0);
         }
         Cmd::ExportOutboxNdjson => {
             print!("{}", repo.export_outbox_ndjson()?);
@@ -2264,6 +2334,138 @@ mod tests {
         assert_eq!(md.matches("## 定义").count(), 1, "已存在的段落不应重复追加");
         assert!(md.contains("## 新段落"), "新段落应该被追加");
     }
+
+    #[test]
+    fn query_to_page_uses_page_contract_qa_type() {
+        let schema = DomainSchema::permissive_default();
+        let page = query_to_page(
+            "测试查询",
+            "这是问题",
+            &[("doc1".into(), 0.9)],
+            Scope::Private {
+                agent_id: "test".into(),
+            },
+            None,
+            &schema,
+        );
+        assert_eq!(page.entry_type, Some(EntryType::Qa));
+        assert_eq!(page.status, EntryStatus::Approved);
+    }
+
+    #[test]
+    fn query_to_page_custom_entry_type() {
+        let schema = DomainSchema::permissive_default();
+        let page = query_to_page(
+            "测试查询",
+            "这是问题",
+            &[],
+            Scope::Private {
+                agent_id: "test".into(),
+            },
+            Some(EntryType::Concept),
+            &schema,
+        );
+        assert_eq!(page.entry_type, Some(EntryType::Concept));
+        assert_eq!(page.status, EntryStatus::Draft);
+    }
+
+    #[test]
+    fn query_to_page_has_question_and_answer_sections() {
+        let schema = DomainSchema::permissive_default();
+        let page = query_to_page(
+            "测试查询",
+            "这是问题",
+            &[("doc1".into(), 0.9), ("doc2".into(), 0.8)],
+            Scope::Private {
+                agent_id: "test".into(),
+            },
+            None,
+            &schema,
+        );
+        assert!(page.markdown.contains("## 问题\n\n这是问题"));
+        assert!(page.markdown.contains("## 回答"));
+        assert!(page.markdown.contains("`doc1` score=0.900000"));
+        assert!(page.markdown.contains("`doc2` score=0.800000"));
+    }
+
+    #[test]
+    fn qa_command_creates_qa_type_page() {
+        let schema = DomainSchema::permissive_default();
+        let question = "什么是 Rust？".to_string();
+        let answer = "Rust 是一门系统编程语言。".to_string();
+        let et = parse_entry_type_opt(&None)
+            .unwrap_or(None)
+            .unwrap_or(EntryType::Qa);
+        let status = initial_status_for(Some(&et), &schema);
+
+        let page = PageContract::new(&question, et)
+            .with_confidence(Confidence::default())
+            .with_source("qa")
+            .with_section("问题", &question)
+            .with_section("回答", &answer)
+            .into_page(
+                Scope::Private {
+                    agent_id: "test".into(),
+                },
+                status,
+            );
+
+        assert_eq!(page.entry_type, Some(EntryType::Qa));
+        assert_eq!(page.status, EntryStatus::Approved);
+        assert!(page.markdown.contains("## 问题"));
+        assert!(page.markdown.contains("## 回答"));
+    }
+
+    #[test]
+    fn qa_command_custom_entry_type() {
+        let schema = DomainSchema::permissive_default();
+        let question = "问题".to_string();
+        let answer = "回答".to_string();
+        let et = parse_entry_type_opt(&Some("concept".into()))
+            .unwrap()
+            .unwrap_or(EntryType::Qa);
+        let status = initial_status_for(Some(&et), &schema);
+
+        let page = PageContract::new(&question, et)
+            .with_confidence(Confidence::default())
+            .with_source("qa")
+            .with_section("问题", &question)
+            .with_section("回答", &answer)
+            .into_page(
+                Scope::Private {
+                    agent_id: "test".into(),
+                },
+                status,
+            );
+
+        assert_eq!(page.entry_type, Some(EntryType::Concept));
+    }
+
+    #[test]
+    fn synthesis_command_creates_synthesis_type_page() {
+        let schema = DomainSchema::permissive_default();
+        let topic = "Rust 异步编程研究".to_string();
+        let body_text = "综合分析正文内容。".to_string();
+        let et = EntryType::Synthesis;
+        let status = initial_status_for(Some(&et), &schema);
+
+        let page = PageContract::new(&topic, et)
+            .with_confidence(Confidence::default())
+            .with_source("synthesis")
+            .with_section("研究问题", &topic)
+            .with_section("综合分析", &body_text)
+            .into_page(
+                Scope::Private {
+                    agent_id: "test".into(),
+                },
+                status,
+            );
+
+        assert_eq!(page.entry_type, Some(EntryType::Synthesis));
+        assert_eq!(page.status, EntryStatus::Draft);
+        assert!(page.markdown.contains("## 研究问题"));
+        assert!(page.markdown.contains("## 综合分析"));
+    }
 }
 
 fn maybe_sync_projection(
@@ -2392,11 +2594,12 @@ fn run_gap_job(
 
     if write_page {
         let title = format!("gap-report-{}", timestamp_slug());
-        let status = initial_status_for(Some(&EntryType::LintReport), schema);
-        let page = WikiPage::new(title, report_md, viewer.clone())
-            .with_entry_type(EntryType::LintReport)
-            .with_status(status);
-        eng.store.pages.insert(page.id, page);
+        let page = WikiPage::new(title, report_md, viewer.clone());
+        let pid = page.id;
+        eng.store.pages.insert(pid, page);
+        if let Some(page) = eng.store.pages.get_mut(&pid) {
+            finalize_consumed_page(page, EntryType::LintReport, Confidence::default(), schema);
+        }
         eng.save_to_repo(repo)?;
         eng.flush_outbox_to_repo_with_policy(repo, 128, 3)?;
     }
@@ -2687,16 +2890,21 @@ fn query_to_page(
     entry_type: Option<EntryType>,
     schema: &DomainSchema,
 ) -> WikiPage {
-    let mut md = format!("# {title}\n\n## Query\n\n{query}\n\n## Top Results\n\n");
+    let et = entry_type.unwrap_or(EntryType::Qa);
+
+    // 拼回答内容（ranked results 列表）
+    let mut answer = String::new();
     for (doc, score) in ranked.iter().take(20) {
-        md.push_str(&format!("- `{doc}` score={score:.6}\n"));
+        answer.push_str(&format!("- `{doc}` score={score:.6}\n"));
     }
-    let status = initial_status_for(entry_type.as_ref(), schema);
-    let page = WikiPage::new(title, md, scope).with_status(status);
-    match entry_type {
-        Some(et) => page.with_entry_type(et),
-        None => page,
-    }
+
+    let status = initial_status_for(Some(&et), schema);
+
+    PageContract::new(title, et)
+        .with_section("问题", query)
+        .with_section("回答", answer.trim_end())
+        .with_source("query")
+        .into_page(scope, status)
 }
 
 fn read_graph_extras_lines(path: &PathBuf) -> Result<Vec<String>, Box<dyn std::error::Error>> {

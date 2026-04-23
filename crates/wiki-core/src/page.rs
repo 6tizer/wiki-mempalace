@@ -6,6 +6,16 @@ use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 use uuid::Uuid;
 
+/// 置信度：frontmatter 中的 confidence 字段。
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum Confidence {
+    #[default]
+    Medium,
+    High,
+    Low,
+}
+
 /// `status` 字段的 serde default：历史 JSON 无此字段时反序列化为 Draft。
 fn default_status() -> EntryStatus {
     EntryStatus::Draft

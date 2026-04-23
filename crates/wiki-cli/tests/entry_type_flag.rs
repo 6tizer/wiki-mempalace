@@ -97,10 +97,11 @@ fn query_write_page_with_entry_type_concept_triggers_incomplete_lint() {
     );
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    // lint 输出包含 page.incomplete 说明 completeness check 生效
+    // PageContract 保证了 Concept 类型的骨架段落完整（定义、关键要点、本文语境、来源引用），
+    // 所以 lint 不应再报 page.incomplete。验证 lint 通过且无 incomplete finding。
     assert!(
-        stdout.contains("page.incomplete"),
-        "expected page.incomplete finding in lint output, got: {stdout}"
+        !stdout.contains("page.incomplete"),
+        "PageContract 应保证 Concept 骨架完整，不应有 page.incomplete finding。lint output: {stdout}"
     );
 }
 

@@ -85,6 +85,25 @@ impl EntryType {
             Self::Summary | Self::Qa | Self::LintReport | Self::Index
         )
     }
+
+    /// 该类型对应的正文骨架段落名称（按固定顺序）。无固定骨架的类型返回空切片。
+    pub fn section_template(&self) -> &'static [&'static str] {
+        match self {
+            Self::Concept => &["定义", "关键要点", "本文语境", "来源引用"],
+            Self::Entity => &["定义", "关键要点", "来源引用"],
+            Self::Summary => &[
+                "一句话摘要",
+                "关键洞察",
+                "提取的概念",
+                "原始文章信息",
+                "个人评注",
+            ],
+            Self::Qa => &["问题", "回答"],
+            Self::Synthesis => &["研究问题", "综合分析", "关键发现", "来源列表"],
+            Self::LintReport => &["检查日期", "总体健康度", "问题清单", "建议"],
+            Self::Index => &[],
+        }
+    }
 }
 
 /// 条目状态：可晋升的 draft → in_review → approved 三态，加一个独立 needs_update。
