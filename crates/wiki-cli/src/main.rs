@@ -5,8 +5,9 @@ use time::{format_description::well_known::Rfc3339, Duration, OffsetDateTime};
 use walkdir::WalkDir;
 use wiki_core::{
     document_visible_to_viewer, parse_memory_tier, ClaimId, DomainSchema, Entity, EntityId,
-    EntityKind, EntryStatus, EntryType, GapFinding, GapSeverity, LlmIngestPlanV1, MemoryTier, PageId,
-    QueryContext, RelationKind, Scope, SessionCrystallizationInput, SourceId, TypedEdge, WikiPage,
+    EntityKind, EntryStatus, EntryType, GapFinding, GapSeverity, LlmIngestPlanV1, MemoryTier,
+    PageId, QueryContext, RelationKind, Scope, SessionCrystallizationInput, SourceId, TypedEdge,
+    WikiPage,
 };
 use wiki_kernel::{
     format_claim_doc_id, initial_status_for, merge_graph_rankings, write_lint_report,

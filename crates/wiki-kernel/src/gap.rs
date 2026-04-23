@@ -21,7 +21,11 @@ pub fn run_gap_scan(
     let mut findings = Vec::new();
 
     findings.extend(scan_missing_xref(store, viewer_scope));
-    findings.extend(scan_low_coverage(store, viewer_scope, low_coverage_threshold));
+    findings.extend(scan_low_coverage(
+        store,
+        viewer_scope,
+        low_coverage_threshold,
+    ));
     findings.extend(scan_orphan_source(store, viewer_scope));
 
     findings
@@ -31,10 +35,7 @@ pub fn run_gap_scan(
 ///
 /// 逻辑：对每个非 stale 的 claim，提取其关键词（>=4 字符的词），
 /// 如果没有任何 page 的 markdown 包含这些关键词，则报告缺口。
-fn scan_missing_xref(
-    store: &InMemoryStore,
-    viewer_scope: Option<&Scope>,
-) -> Vec<GapFinding> {
+fn scan_missing_xref(store: &InMemoryStore, viewer_scope: Option<&Scope>) -> Vec<GapFinding> {
     let visible = |s: &Scope| match viewer_scope {
         None => true,
         Some(v) => document_visible_to_viewer(s, v),
@@ -136,10 +137,7 @@ fn scan_low_coverage(
 /// 逻辑：检查每个 source 是否至少被一个 page（通过 claim 引用链）
 /// 关联。如果一个 source 的所有 claim 的关键词都没有出现在任何 page markdown 中，
 /// 则该 source 是孤立的。
-fn scan_orphan_source(
-    store: &InMemoryStore,
-    viewer_scope: Option<&Scope>,
-) -> Vec<GapFinding> {
+fn scan_orphan_source(store: &InMemoryStore, viewer_scope: Option<&Scope>) -> Vec<GapFinding> {
     let visible = |s: &Scope| match viewer_scope {
         None => true,
         Some(v) => document_visible_to_viewer(s, v),
@@ -226,8 +224,10 @@ pub fn claim_has_page_reference(claim_text: &str, page_text: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use wiki_core::{Claim, Entity, EntityId, EntityKind, MemoryTier, RawArtifact, Scope, WikiPage};
     use uuid::Uuid;
+    use wiki_core::{
+        Claim, Entity, EntityId, EntityKind, MemoryTier, RawArtifact, Scope, WikiPage,
+    };
 
     fn private_scope(agent_id: &str) -> Scope {
         Scope::Private {
@@ -275,7 +275,10 @@ mod tests {
         store.pages.insert(page.id, page);
 
         let findings = scan_missing_xref(&store, None);
-        assert!(findings.is_empty(), "claim 关键词已在 page 中，不应触发 gap");
+        assert!(
+            findings.is_empty(),
+            "claim 关键词已在 page 中，不应触发 gap"
+        );
     }
 
     #[test]
@@ -322,11 +325,7 @@ mod tests {
     #[test]
     fn orphan_source_detected() {
         let mut store = InMemoryStore::default();
-        let source = RawArtifact::new(
-            "file:///tmp/note.md",
-            "some body",
-            private_scope("a"),
-        );
+        let source = RawArtifact::new("file:///tmp/note.md", "some body", private_scope("a"));
         let sid = source.id;
         store.sources.insert(sid, source);
 
@@ -348,11 +347,7 @@ mod tests {
     #[test]
     fn orphan_source_with_page_not_detected() {
         let mut store = InMemoryStore::default();
-        let source = RawArtifact::new(
-            "file:///tmp/note.md",
-            "some body",
-            private_scope("a"),
-        );
+        let source = RawArtifact::new("file:///tmp/note.md", "some body", private_scope("a"));
         let sid = source.id;
         store.sources.insert(sid, source);
 
@@ -373,6 +368,9 @@ mod tests {
         store.pages.insert(page.id, page);
 
         let findings = scan_orphan_source(&store, None);
-        assert!(findings.is_empty(), "source 的 claim 已被 page 引用，不应触发 gap");
+        assert!(
+            findings.is_empty(),
+            "source 的 claim 已被 page 引用，不应触发 gap"
+        );
     }
 }

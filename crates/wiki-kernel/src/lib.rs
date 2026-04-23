@@ -10,6 +10,7 @@ mod wiki_writer;
 
 pub use auto_hooks::AutoWikiHook;
 pub use engine::{initial_status_for, EngineError, LlmWikiEngine, PromotePageError};
+pub use gap::run_gap_scan;
 pub use hooks::{NoopWikiHook, WikiHook};
 pub use memory::InMemoryStore;
 pub use search_ports::{
@@ -17,4 +18,3 @@ pub use search_ports::{
     EmptySearchPorts, InMemorySearchPorts, SearchPorts,
 };
 pub use wiki_writer::{write_lint_report, write_projection, ProjectionStats};
-pub use gap::run_gap_scan;

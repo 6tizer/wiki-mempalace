@@ -36,4 +36,3 @@ pub struct GapFinding {
     /// 缺口关联的标题或标签（方便人类定位）
     pub subject_label: Option<String>,
 }
-
