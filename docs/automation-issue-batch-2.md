@@ -93,23 +93,28 @@
 
 **遗留**：无。
 
-### J3. Outbox 事件矩阵与闭环完成版 — 完成度 55%
+### J3. Outbox 事件矩阵与闭环完成版 — 完成度 100%
 
 
-| 交付物                       | 状态  | 证据                                                                                                                                                                            |
-| ------------------------- | --- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| consume-to-mempalace 消费闭环 | ✅   | `--palace` 启用 `LiveMempalaceSink`，否则 `CliMempalaceSink`（日志）                                                                                                                   |
-| consumer progress / ack   | ✅   | `mark_outbox_processed` + `get_outbox_consumer_progress`                                                                                                                      |
-| outbox backlog 统计         | ✅   | `get_outbox_stats` + backlog 计算                                                                                                                                               |
-| WikiEvent 变体清单            | ✅   | 11 个变体：SourceIngested / ClaimUpserted / ClaimSuperseded / PageWritten / QueryServed / SessionCrystallized / GraphExpanded / LintRunFinished / PageStatusChanged / PageDeleted |
-| Bridge 消费覆盖               | ⚠️  | **仅消费 3 类**：ClaimUpserted / ClaimSuperseded / SourceIngested；其余 8 类 `_ => {}` 静默丢弃                                                                                            |
-| 事件矩阵文档                    | ❌   | 无专用文档；相关信息分散在 architecture.md / outbox-and-consumers.md                                                                                                                       |
-| 未消费事件策略                   | ❌   | 未文档化哪些事件无消费者及原因                                                                                                                                                               |
-| 端到端闭环测试                   | ⚠️  | bridge 有 NDJSON 单元测试（合成数据）；CLI 有 automation 集成测试（append_outbox）；无 ingest→outbox→consume→palace.db 全链路测试                                                                       |
-| consumer lag 验收用例         | ⚠️  | wiki-storage 有 backlog 单元测试；缺 CLI 级 lag 验收场景                                                                                                                                  |
+| 交付物                       | 状态  | 证据                                                                                                                                                                                                 |
+| ------------------------- | --- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| consume-to-mempalace 消费闭环 | ✅   | `run_consume_to_mempalace_job` 统一走 resolver + bridge stats；`--palace` 时启用 `LiveMempalaceSink`，否则走 `CliMempalaceSink`                                                                                 |
+| consumer progress / ack   | ✅   | `mark_outbox_processed` + `get_outbox_consumer_progress`；CLI 集成测试 `consume_to_mempalace_starts_from_latest_progress_and_advances_it`、`consume_to_mempalace_empty_increment_does_not_ack`                                                  |
+| outbox backlog 统计         | ✅   | `get_outbox_stats` + backlog 计算；J2 的 `automation doctor/health` 已接入 consumer backlog 展示                                                                                                               |
+| WikiEvent 变体清单            | ✅   | 10 个变体：SourceIngested / ClaimUpserted / ClaimSuperseded / PageWritten / QueryServed / SessionCrystallized / GraphExpanded / LintRunFinished / PageStatusChanged / PageDeleted                                                            |
+| Bridge 结构化派发统计            | ✅   | `OutboxDispatchStats` + `OutboxEventDispatchStats`；新增 `consume_outbox_ndjson_with_stats` / `consume_outbox_ndjson_with_resolver_and_stats`，兼容 wrapper 仍返回 dispatched count                                                              |
+| Bridge 消费覆盖               | ✅   | **正式消费 3 类**：ClaimUpserted / ClaimSuperseded / SourceIngested；其余事件不再静默丢弃，而是明确计入 `ignored`；resolver 缺失的 claim upsert 计入 `unresolved`                                                                 |
+| consume-to-mempalace 输出升级 | ✅   | CLI 输出已固定为 `seen/dispatched/ignored/filtered/unresolved/start_id/acked/consumer_tag`                                                                                                                 |
+| 事件矩阵文档                    | ✅   | 新增 [docs/outbox-event-matrix.md](/Users/mac-mini/wiki-migration/wiki-mempalace/docs/outbox-event-matrix.md)，并回填到 `docs/architecture.md` / `docs/mempalace-linkage.md`                                                                          |
+| 未消费事件策略                   | ✅   | `retained-no-consumer` / `defined-not-emitted` 已在矩阵中明确；`PageWritten` / `GraphExpanded` 明确标注为 defined-not-emitted                                                                                     |
+| 生产端事件测试                   | ✅   | `wiki-kernel` 新增 `crystallize_emits_session_crystallized_event`、`run_basic_lint_emits_lint_run_finished_event`、`record_query_emits_query_served_event`、`mark_stale_emits_page_status_changed_event`、`cleanup_expired_pages_emits_page_deleted_event` |
+| Bridge 单元测试               | ✅   | `consumes_source_ingested`、`consumes_ndjson_and_dispatches_claim_events`、`resolver_path_materializes_claim_and_enforces_scope`、`stats_mark_unresolved_and_ignored_events`                                                                       |
+| 端到端闭环测试                   | ✅   | CLI 集成测试 `consume_to_mempalace_dispatches_active_events_from_cli_flow`、`consume_to_mempalace_ignores_query_crystallize_and_lint_events`                                                                 |
+| 文档一致性测试                   | ✅   | `event_matrix_doc_stays_in_sync_with_wiki_event_variants` 会校验 `docs/outbox-event-matrix.md` 与 `WikiEvent` 变体集合不漂移                                                                                     |
+| consumer lag 验收用例         | ✅   | CLI 集成测试覆盖 progress 起点/ack 前进；J2 的 `automation doctor` / `automation health` 已验证 backlog 展示与阈值；手工 smoke 已验证 active/ignored 两条消费链都能给出一行闭环摘要                                                     |
 
 
-**遗留**：事件矩阵文档（关键）；8 类事件的消费决策文档化；全链路 E2E 测试。
+**遗留**：无。J3 范围内的事件矩阵、消费边界、结构化统计、自动化测试与手工验收均已完成。
 
 ### J4. 恢复验证与恢复成功检查 — 完成度 100%
 
