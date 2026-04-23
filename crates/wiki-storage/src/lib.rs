@@ -1,6 +1,8 @@
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
-use time::{format_description, format_description::well_known::Rfc3339, OffsetDateTime, PrimitiveDateTime};
+use time::{
+    format_description, format_description::well_known::Rfc3339, OffsetDateTime, PrimitiveDateTime,
+};
 use wiki_core::{AuditRecord, Claim, Entity, RawArtifact, TypedEdge, WikiEvent, WikiPage};
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -369,8 +371,8 @@ CREATE INDEX IF NOT EXISTS wiki_automation_run_job_status_id_idx
         }
         let started_at = parse_time(&started_at_raw)?;
         let finished_at_raw = encode_time(finished_at)?;
-        let duration_ms = i64::try_from((finished_at - started_at).whole_milliseconds())
-            .map_err(|_| {
+        let duration_ms =
+            i64::try_from((finished_at - started_at).whole_milliseconds()).map_err(|_| {
                 StorageError::InvalidAutomationRunState(format!(
                     "duration overflow for run_id={run_id}"
                 ))
@@ -420,10 +422,14 @@ CREATE INDEX IF NOT EXISTS wiki_automation_run_job_status_id_idx
             }
         };
         let result = match status {
-            Some(status) => self.conn.query_row(sql, params![job_name, status.as_str()], |row| {
-                decode_automation_run_row(row)
-            }),
-            None => self.conn.query_row(sql, params![job_name], |row| decode_automation_run_row(row)),
+            Some(status) => self
+                .conn
+                .query_row(sql, params![job_name, status.as_str()], |row| {
+                    decode_automation_run_row(row)
+                }),
+            None => self
+                .conn
+                .query_row(sql, params![job_name], |row| decode_automation_run_row(row)),
         };
         match result {
             Ok(run) => Ok(Some(run)),
@@ -466,10 +472,14 @@ fn parse_time(value: &str) -> Result<OffsetDateTime, StorageError> {
         })?;
     PrimitiveDateTime::parse(value, &sqlite_fmt)
         .map(|dt| dt.assume_utc())
-        .map_err(|err| StorageError::InvalidAutomationRunState(format!("invalid timestamp {value:?}: {err}")))
+        .map_err(|err| {
+            StorageError::InvalidAutomationRunState(format!("invalid timestamp {value:?}: {err}"))
+        })
 }
 
-fn decode_automation_run_row(row: &rusqlite::Row<'_>) -> Result<AutomationRunRecord, rusqlite::Error> {
+fn decode_automation_run_row(
+    row: &rusqlite::Row<'_>,
+) -> Result<AutomationRunRecord, rusqlite::Error> {
     let id: i64 = row.get(0)?;
     let job_name: String = row.get(1)?;
     let started_at_raw: String = row.get(2)?;
@@ -479,14 +489,13 @@ fn decode_automation_run_row(row: &rusqlite::Row<'_>) -> Result<AutomationRunRec
     let error_summary: Option<String> = row.get(6)?;
     let heartbeat_at_raw: String = row.get(7)?;
 
-    let started_at = parse_time(&started_at_raw)
-        .map_err(|err| rusqlite::Error::FromSqlConversionFailure(2, rusqlite::types::Type::Text, Box::new(err)))?;
+    let started_at = parse_time(&started_at_raw).map_err(|err| {
+        rusqlite::Error::FromSqlConversionFailure(2, rusqlite::types::Type::Text, Box::new(err))
+    })?;
     let finished_at = match finished_at_raw {
-        Some(value) => Some(
-            parse_time(&value).map_err(|err| {
-                rusqlite::Error::FromSqlConversionFailure(3, rusqlite::types::Type::Text, Box::new(err))
-            })?,
-        ),
+        Some(value) => Some(parse_time(&value).map_err(|err| {
+            rusqlite::Error::FromSqlConversionFailure(3, rusqlite::types::Type::Text, Box::new(err))
+        })?),
         None => None,
     };
     let heartbeat_at = parse_time(&heartbeat_at_raw).map_err(|err| {
@@ -645,9 +654,7 @@ mod tests {
         let heartbeat = OffsetDateTime::from_unix_timestamp(1_700_000_060).unwrap();
         let finished = OffsetDateTime::from_unix_timestamp(1_700_000_120).unwrap();
 
-        let run_id = repo
-            .start_automation_run_at("batch-sync", start)
-            .unwrap();
+        let run_id = repo.start_automation_run_at("batch-sync", start).unwrap();
         repo.refresh_automation_heartbeat_at(run_id, heartbeat)
             .unwrap();
         repo.mark_automation_run_succeeded_at(run_id, finished)
@@ -682,11 +689,15 @@ mod tests {
         let start_fail = OffsetDateTime::from_unix_timestamp(1_700_000_100).unwrap();
         let finish_fail = OffsetDateTime::from_unix_timestamp(1_700_000_150).unwrap();
 
-        let ok_id = repo.start_automation_run_at("batch-sync", start_ok).unwrap();
+        let ok_id = repo
+            .start_automation_run_at("batch-sync", start_ok)
+            .unwrap();
         repo.mark_automation_run_succeeded_at(ok_id, finish_ok)
             .unwrap();
 
-        let fail_id = repo.start_automation_run_at("batch-sync", start_fail).unwrap();
+        let fail_id = repo
+            .start_automation_run_at("batch-sync", start_fail)
+            .unwrap();
         repo.mark_automation_run_failed_at(fail_id, finish_fail, "network timeout")
             .unwrap();
 

@@ -70,7 +70,8 @@ fn automation_status_reads_latest_run_state() {
     repo.mark_automation_run_succeeded(lint_run).unwrap();
 
     let maintenance_run = repo.start_automation_run("maintenance").unwrap();
-    repo.mark_automation_run_failed(maintenance_run, "boom").unwrap();
+    repo.mark_automation_run_failed(maintenance_run, "boom")
+        .unwrap();
 
     wiki_cli()
         .arg("--db")
@@ -97,8 +98,12 @@ fn automation_doctor_reports_empty_outbox_health() {
         .assert()
         .success()
         .stdout(predicate::str::contains("automation doctor:"))
-        .stdout(predicate::str::contains("outbox: head_id=0 total_events=0 unprocessed_events=0"))
-        .stdout(predicate::str::contains("consumer mempalace: acked_up_to_id=never"))
+        .stdout(predicate::str::contains(
+            "outbox: head_id=0 total_events=0 unprocessed_events=0",
+        ))
+        .stdout(predicate::str::contains(
+            "consumer mempalace: acked_up_to_id=never",
+        ))
         .stdout(predicate::str::contains("backlog_events=0"));
 }
 
@@ -125,8 +130,12 @@ fn automation_doctor_reports_consumer_backlog() {
         .arg("doctor")
         .assert()
         .success()
-        .stdout(predicate::str::contains("outbox: head_id=3 total_events=3 unprocessed_events=1"))
-        .stdout(predicate::str::contains("consumer mempalace: acked_up_to_id=2"))
+        .stdout(predicate::str::contains(
+            "outbox: head_id=3 total_events=3 unprocessed_events=1",
+        ))
+        .stdout(predicate::str::contains(
+            "consumer mempalace: acked_up_to_id=2",
+        ))
         .stdout(predicate::str::contains("backlog_events=1"));
 }
 

@@ -14,7 +14,9 @@ use wiki_kernel::{
 use wiki_mempalace_bridge::{
     consume_outbox_ndjson_with_resolver, MempalaceError, MempalaceWikiSink, OutboxResolver,
 };
-use wiki_storage::{AutomationRunRecord, OutboxConsumerProgress, OutboxStats, SqliteRepository, WikiRepository};
+use wiki_storage::{
+    AutomationRunRecord, OutboxConsumerProgress, OutboxStats, SqliteRepository, WikiRepository,
+};
 
 mod banner;
 mod llm;
@@ -241,16 +243,25 @@ fn format_automation_record(record: &AutomationRunRecord) -> String {
     let mut parts = vec![
         format!("status={:?}", record.status).to_lowercase(),
         format!("started_at={}", format_automation_time(record.started_at)),
-        format!("heartbeat_at={}", format_automation_time(record.heartbeat_at)),
+        format!(
+            "heartbeat_at={}",
+            format_automation_time(record.heartbeat_at)
+        ),
     ];
     if let Some(finished_at) = record.finished_at {
-        parts.push(format!("finished_at={}", format_automation_time(finished_at)));
+        parts.push(format!(
+            "finished_at={}",
+            format_automation_time(finished_at)
+        ));
     }
     if let Some(duration_ms) = record.duration_ms {
         parts.push(format!("duration_ms={duration_ms}"));
     }
     if let Some(error_summary) = &record.error_summary {
-        parts.push(format!("error_summary={}", truncate_chars(error_summary, 160)));
+        parts.push(format!(
+            "error_summary={}",
+            truncate_chars(error_summary, 160)
+        ));
     }
     parts.join(" ")
 }
@@ -1114,10 +1125,7 @@ fn run_maintenance_job(
     Ok(())
 }
 
-fn effective_consume_start_id(
-    progress: &OutboxConsumerProgress,
-    requested_last_id: i64,
-) -> i64 {
+fn effective_consume_start_id(progress: &OutboxConsumerProgress, requested_last_id: i64) -> i64 {
     progress
         .acked_up_to_id
         .map_or(requested_last_id, |acked| acked.max(requested_last_id))
@@ -1166,29 +1174,17 @@ fn run_daily_automation(
                     .clone()
                     .unwrap_or_else(|| PathBuf::from("/Users/mac-mini/Documents/wiki"));
                 batch_ingest_cmd(
-                    eng,
-                    repo,
-                    cli,
-                    &vault,
-                    None,
-                    false,
-                    1,
-                    sync_wiki,
-                    wiki_root,
-                    schema,
+                    eng, repo, cli, &vault, None, false, 1, sync_wiki, wiki_root, schema,
                 )
             }
             AutomationJob::Lint => run_lint_job(eng, repo, viewer, sync_wiki, wiki_root),
             AutomationJob::Maintenance => {
                 run_maintenance_job(eng, repo, viewer, sync_wiki, wiki_root)
             }
-            AutomationJob::ConsumeToMempalace => run_consume_to_mempalace_job(
-                eng,
-                repo,
-                DEFAULT_MEMPALACE_CONSUMER_TAG,
-                0,
-            )
-            .map(|_| ()),
+            AutomationJob::ConsumeToMempalace => {
+                run_consume_to_mempalace_job(eng, repo, DEFAULT_MEMPALACE_CONSUMER_TAG, 0)
+                    .map(|_| ())
+            }
         })
     })
 }
