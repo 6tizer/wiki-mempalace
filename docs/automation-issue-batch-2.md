@@ -37,7 +37,7 @@
 | M4 Outbox 闭环增强 | 事件矩阵、消费闭环、消费健康、backlog                             | **✅ 已完成**         | `docs/outbox-event-matrix.md`、bridge 结构化 dispatch stats、CLI `consume-to-mempalace` 闭环摘要、active/ignored 全链路测试 | 无                   |
 | M5 恢复与回滚       | 备份、恢复、重建、演练、恢复成功检查                                 | **✅ 已完成**         | `automation verify-restore`、升级后的 `recovery-drill.sh`、`recovery-drill-template.md`、CLI + 脚本行为测试               | 无                   |
 | M6 Gap 工作流     | 发现知识缺口、产出报告或草稿                                     | **✅ 已完成**         | `wiki-cli gap` 命令、`GapFinding` / `GapSeverity` 结构、3 条规则（missing_xref / low_coverage / orphan_source）、markdown 报告、`--write-page` 写入 wiki page、5 条单元测试 | 无                   |
-| M7 Fixer 工作流   | 把 lint finding 转成 fix actions                      | **未开始**           | 无 `fix` 命令、无 fix action 模型                                                                                   | 全量实现                |
+| M7 Fixer 工作流   | 把 lint/gap finding 转成 fix actions                    | **✅ 已完成**         | `wiki-cli fix` 命令（dry_run/auto_only/write）、FixAction 模型、11 种 finding code 映射、dedup 合并、Auto 类型自动执行（AppendSections/SetTitle）、安全防护（不覆盖非空标题/不重复追加）、25 个测试 | 无                   |
 | M8 消费链产品化      | 统一 qa / synthesis / crystallize / query-write-page | **未开始（仅有零散基础能力）** | 现有 `query --write-page`、`crystallize`、entry_type/status 零散逻辑                                                 | 抽成统一消费入口和统一 page 契约 |
 | M9 查询融合增强      | 把 mempalace 候选更自然接入 wiki query                     | **未开始（仅有桥接基础件）**  | 有 `MempalaceSearchPorts` / `live_ranker`，但 `wiki query` 仍以 in-memory 路为主                                     | 全量实现                |
 
@@ -45,8 +45,8 @@
 ### 当前结论
 
 - **P0 已收口**（J1/J2/J3/J4 已完成）
-- **P1 部分启动**（J5 Gap 工作流已完成）
-- 下一步重心：启动 J6（Fixer）、J7（消费链产品化）、J8（查询融合增强）
+- **P1 已启动**（J5 Gap 工作流、J6 Fixer 工作流已完成）
+- 下一步重心：启动 J7（消费链产品化）、J8（查询融合增强）
 
 ---
 
@@ -152,15 +152,19 @@
 **遗留**：无。J5 范围内的 gap 发现、报告输出、CLI 命令、单元测试均已全部完成。
 
 
-### J6. Fixer 工作流 — 完成度 0%
+### J6. Fixer 工作流 — 完成度 100%
 
 
-| 交付物                     | 状态  | 证据  |
-| ----------------------- | --- | --- |
-| `wiki-cli fix` 命令       | ❌   | 无   |
-| `FixAction` 模型          | ❌   | 无   |
-| finding → fix action 映射 | ❌   | 无   |
-| 低风险自动修复集合               | ❌   | 无   |
+| 交付物                     | 状态  | 证据                                                                                                  |
+| ----------------------- | --- | --------------------------------------------------------------------------------------------------- |
+| `wiki-cli fix` 命令       | ✅   | `Cmd::Fix { dry_run, auto_only, write }`，clap 中文 help                                                |
+| `FixAction` 模型          | ✅   | `wiki-core/src/fix.rs`：FixAction, FixActionType(Auto/Draft/Manual), FixPatch(AppendSections/SetTitle/AddXref) |
+| finding → fix action 映射 | ✅   | `wiki-kernel/src/fix.rs`：`map_lint_finding` + `map_gap_finding`，覆盖 11 种已知 code + 未知兜底            |
+| 低风险自动修复集合               | ✅   | `apply_auto_fixes`：AppendSections（追加段落骨架）、SetTitle（空标题时从 markdown 首行提取）             |
+| dedup 合并                | ✅   | `dedup_fixes`：同一 subject 的多个 incomplete finding 合并为单条 fix action                                |
+| 安全防护                    | ✅   | SetTitle 只覆盖空标题、AppendSections 不重复追加已存在段落                                                         |
+| 测试                      | ✅   | 25 个测试（17 映射层 + 8 CLI 层），全量通过                                                                  |
+| PR                      | ✅   | PR #7，Codex 补审后合并至 main                                                                             |
 
 
 ### J7. 消费链产品化 — 完成度 20%
@@ -201,7 +205,7 @@
 | J3 Outbox 闭环 | **100%** | P0  | ✅ 已完成               |
 | J4 恢复验证      | **100%** | P0  | ✅ 已完成               |
 | J5 Gap 工作流   | **100%** | P1  | ✅ 已完成               |
-| J6 Fixer 工作流 | **0%**   | P1  | ❌ 未开始               |
+| J6 Fixer 工作流 | **100%** | P1  | ✅ 已完成（PR #7 合并）      |
 | J7 消费链产品化    | **20%**  | P1  | ⚠️ 零散能力在，统一契约缺      |
 | J8 查询融合增强    | **10%**  | P1  | ⚠️ 桥接基础件在，query 未接入 |
 
