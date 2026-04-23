@@ -1,7 +1,7 @@
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 use std::io::Write;
 use std::path::PathBuf;
-use time::{format_description::well_known::Rfc3339, OffsetDateTime};
+use time::{format_description::well_known::Rfc3339, Duration, OffsetDateTime};
 use wiki_core::{
     document_visible_to_viewer, parse_memory_tier, ClaimId, DomainSchema, Entity, EntityId,
     EntityKind, EntryStatus, EntryType, LlmIngestPlanV1, MemoryTier, PageId, QueryContext,
@@ -15,7 +15,8 @@ use wiki_mempalace_bridge::{
     consume_outbox_ndjson_with_resolver, MempalaceError, MempalaceWikiSink, OutboxResolver,
 };
 use wiki_storage::{
-    AutomationRunRecord, OutboxConsumerProgress, OutboxStats, SqliteRepository, WikiRepository,
+    AutomationJobFailureSummary, AutomationRunRecord, AutomationRunStatus, OutboxConsumerProgress,
+    OutboxStats, SqliteRepository, WikiRepository,
 };
 
 mod banner;
@@ -191,13 +192,25 @@ enum Cmd {
 
 #[derive(Subcommand)]
 enum AutomationCmd {
+    /// List all registered automation jobs and their execution semantics.
+    ListJobs,
     /// Run the fixed daily automation chain: batch-ingest, lint, maintenance, consume-to-mempalace.
     RunDaily {
         /// Print the execution plan without running any jobs.
         #[arg(long, default_value_t = false)]
         dry_run: bool,
     },
-    /// Print the latest automation run status for each job in the fixed chain.
+    /// Run a single named automation job.
+    Run {
+        #[arg(value_enum)]
+        job: AutomationJob,
+    },
+    /// Print the most recent failed automation runs across all jobs.
+    LastFailures {
+        #[arg(long, default_value_t = 10)]
+        limit: usize,
+    },
+    /// Print the latest automation run status for each registered job.
     Status,
     /// Print job status plus outbox / consumer health summary.
     Doctor {
@@ -205,23 +218,138 @@ enum AutomationCmd {
         #[arg(long, default_value = "mempalace")]
         consumer_tag: String,
     },
+    /// Evaluate health thresholds and emit alert-friendly output.
+    Health {
+        /// Consumer tag used for outbox ack / lag tracking.
+        #[arg(long, default_value = "mempalace")]
+        consumer_tag: String,
+        /// Optional local summary file path for operators / cron hooks.
+        #[arg(long)]
+        summary_file: Option<PathBuf>,
+    },
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq, ValueEnum)]
+enum AutomationJob {
+    #[value(name = "batch-ingest")]
+    BatchIngest,
+    #[value(name = "lint")]
+    Lint,
+    #[value(name = "maintenance")]
+    Maintenance,
+    #[value(name = "consume-to-mempalace")]
+    ConsumeToMempalace,
+    #[value(name = "llm-smoke")]
+    LlmSmoke,
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
-enum AutomationJob {
-    BatchIngest,
-    Lint,
-    Maintenance,
-    ConsumeToMempalace,
+struct AutomationJobSpec {
+    job: AutomationJob,
+    in_daily: bool,
+    requires_network: bool,
+    description: &'static str,
 }
 
-fn automation_run_daily_jobs() -> [AutomationJob; 4] {
-    [
-        AutomationJob::BatchIngest,
-        AutomationJob::Lint,
-        AutomationJob::Maintenance,
-        AutomationJob::ConsumeToMempalace,
-    ]
+const AUTOMATION_JOB_SPECS: &[AutomationJobSpec] = &[
+    AutomationJobSpec {
+        job: AutomationJob::BatchIngest,
+        in_daily: true,
+        requires_network: true,
+        description: "Compile vault sources with compiled_to_wiki=false into wiki.db.",
+    },
+    AutomationJobSpec {
+        job: AutomationJob::Lint,
+        in_daily: true,
+        requires_network: false,
+        description: "Run lint and write the latest report / projection outputs.",
+    },
+    AutomationJobSpec {
+        job: AutomationJob::Maintenance,
+        in_daily: true,
+        requires_network: false,
+        description: "Apply decay, lint, and auto-promote qualified claims/pages.",
+    },
+    AutomationJobSpec {
+        job: AutomationJob::ConsumeToMempalace,
+        in_daily: true,
+        requires_network: false,
+        description: "Replay outbox increments into palace.db and ack consumer progress.",
+    },
+    AutomationJobSpec {
+        job: AutomationJob::LlmSmoke,
+        in_daily: false,
+        requires_network: true,
+        description: "Check the configured LLM endpoint with a minimal chat completion.",
+    },
+];
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum AutomationHealthLevel {
+    Green,
+    Yellow,
+    Red,
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+struct AutomationHealthThresholds {
+    stale_heartbeat_yellow: Duration,
+    stale_heartbeat_red: Duration,
+    consecutive_failures_yellow: usize,
+    consecutive_failures_red: usize,
+    backlog_yellow: i64,
+    backlog_red: i64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct AutomationHealthIssue {
+    level: AutomationHealthLevel,
+    target: String,
+    code: &'static str,
+    detail: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct AutomationHealthReport {
+    level: AutomationHealthLevel,
+    issues: Vec<AutomationHealthIssue>,
+    outbox: OutboxStats,
+    progress: OutboxConsumerProgress,
+    failures: Vec<AutomationJobFailureSummary>,
+}
+
+fn automation_health_thresholds() -> AutomationHealthThresholds {
+    AutomationHealthThresholds {
+        stale_heartbeat_yellow: Duration::hours(6),
+        stale_heartbeat_red: Duration::hours(24),
+        consecutive_failures_yellow: 2,
+        consecutive_failures_red: 3,
+        backlog_yellow: 25,
+        backlog_red: 100,
+    }
+}
+
+fn automation_job_specs() -> &'static [AutomationJobSpec] {
+    AUTOMATION_JOB_SPECS
+}
+
+fn automation_job_spec(job: AutomationJob) -> &'static AutomationJobSpec {
+    automation_job_specs()
+        .iter()
+        .find(|spec| spec.job == job)
+        .expect("automation job must exist in registry")
+}
+
+fn automation_all_jobs() -> Vec<AutomationJob> {
+    automation_job_specs().iter().map(|spec| spec.job).collect()
+}
+
+fn automation_run_daily_jobs() -> Vec<AutomationJob> {
+    automation_job_specs()
+        .iter()
+        .filter(|spec| spec.in_daily)
+        .map(|spec| spec.job)
+        .collect()
 }
 
 fn automation_job_name(job: AutomationJob) -> &'static str {
@@ -230,7 +358,23 @@ fn automation_job_name(job: AutomationJob) -> &'static str {
         AutomationJob::Lint => "lint",
         AutomationJob::Maintenance => "maintenance",
         AutomationJob::ConsumeToMempalace => "consume-to-mempalace",
+        AutomationJob::LlmSmoke => "llm-smoke",
     }
+}
+
+fn print_automation_jobs<W: Write>(out: &mut W) -> Result<(), Box<dyn std::error::Error>> {
+    writeln!(out, "automation jobs:")?;
+    for spec in automation_job_specs() {
+        writeln!(
+            out,
+            "- {} daily={} requires_network={} :: {}",
+            automation_job_name(spec.job),
+            if spec.in_daily { "yes" } else { "no" },
+            if spec.requires_network { "yes" } else { "no" },
+            spec.description
+        )?;
+    }
+    Ok(())
 }
 
 fn format_automation_time(value: OffsetDateTime) -> String {
@@ -285,6 +429,227 @@ fn format_outbox_consumer_progress(progress: &OutboxConsumerProgress) -> String 
     }
     parts.push(format!("backlog_events={}", progress.backlog_events));
     parts.join(" ")
+}
+
+fn format_duration_compact(duration: Duration) -> String {
+    let secs = duration.whole_seconds().max(0);
+    let hours = secs / 3600;
+    let minutes = (secs % 3600) / 60;
+    let seconds = secs % 60;
+    if hours > 0 {
+        format!("{hours}h{minutes}m{seconds}s")
+    } else if minutes > 0 {
+        format!("{minutes}m{seconds}s")
+    } else {
+        format!("{seconds}s")
+    }
+}
+
+fn automation_health_level_name(level: AutomationHealthLevel) -> &'static str {
+    match level {
+        AutomationHealthLevel::Green => "green",
+        AutomationHealthLevel::Yellow => "yellow",
+        AutomationHealthLevel::Red => "red",
+    }
+}
+
+fn max_health_level(a: AutomationHealthLevel, b: AutomationHealthLevel) -> AutomationHealthLevel {
+    a.max(b)
+}
+
+fn classify_consecutive_failures(
+    consecutive_failures: usize,
+    thresholds: AutomationHealthThresholds,
+) -> AutomationHealthLevel {
+    if consecutive_failures >= thresholds.consecutive_failures_red {
+        AutomationHealthLevel::Red
+    } else if consecutive_failures >= thresholds.consecutive_failures_yellow {
+        AutomationHealthLevel::Yellow
+    } else {
+        AutomationHealthLevel::Green
+    }
+}
+
+fn classify_backlog(
+    backlog_events: i64,
+    thresholds: AutomationHealthThresholds,
+) -> AutomationHealthLevel {
+    if backlog_events >= thresholds.backlog_red {
+        AutomationHealthLevel::Red
+    } else if backlog_events >= thresholds.backlog_yellow {
+        AutomationHealthLevel::Yellow
+    } else {
+        AutomationHealthLevel::Green
+    }
+}
+
+fn classify_stale_heartbeat(
+    record: &AutomationRunRecord,
+    now: OffsetDateTime,
+    thresholds: AutomationHealthThresholds,
+) -> AutomationHealthLevel {
+    if record.status != AutomationRunStatus::Running {
+        return AutomationHealthLevel::Green;
+    }
+    let age = now - record.heartbeat_at;
+    if age >= thresholds.stale_heartbeat_red {
+        AutomationHealthLevel::Red
+    } else if age >= thresholds.stale_heartbeat_yellow {
+        AutomationHealthLevel::Yellow
+    } else {
+        AutomationHealthLevel::Green
+    }
+}
+
+fn collect_automation_health_report(
+    repo: &SqliteRepository,
+    jobs: &[AutomationJob],
+    consumer_tag: &str,
+    now: OffsetDateTime,
+) -> Result<AutomationHealthReport, Box<dyn std::error::Error>> {
+    let thresholds = automation_health_thresholds();
+    let mut issues = Vec::new();
+    let mut level = AutomationHealthLevel::Green;
+
+    for job in jobs {
+        let job_name = automation_job_name(*job);
+        if let Some(record) = repo.get_latest_automation_run(job_name)? {
+            let stale_level = classify_stale_heartbeat(&record, now, thresholds);
+            if stale_level != AutomationHealthLevel::Green {
+                let age = now - record.heartbeat_at;
+                issues.push(AutomationHealthIssue {
+                    level: stale_level,
+                    target: job_name.to_string(),
+                    code: "stale-heartbeat",
+                    detail: format!(
+                        "latest run is still running and heartbeat age={}",
+                        format_duration_compact(age)
+                    ),
+                });
+                level = max_health_level(level, stale_level);
+            }
+        }
+
+        let consecutive_failures = repo.count_consecutive_automation_run_failures(job_name)?;
+        let failure_level = classify_consecutive_failures(consecutive_failures, thresholds);
+        if failure_level != AutomationHealthLevel::Green {
+            issues.push(AutomationHealthIssue {
+                level: failure_level,
+                target: job_name.to_string(),
+                code: "consecutive-failures",
+                detail: format!("consecutive_failures={consecutive_failures}"),
+            });
+            level = max_health_level(level, failure_level);
+        }
+    }
+
+    let outbox = repo.get_outbox_stats()?;
+    let progress = repo.get_outbox_consumer_progress(consumer_tag)?;
+    let backlog_level = classify_backlog(progress.backlog_events, thresholds);
+    if backlog_level != AutomationHealthLevel::Green {
+        issues.push(AutomationHealthIssue {
+            level: backlog_level,
+            target: format!("consumer:{consumer_tag}"),
+            code: "consumer-backlog",
+            detail: format!("backlog_events={}", progress.backlog_events),
+        });
+        level = max_health_level(level, backlog_level);
+    }
+
+    let failures = repo.list_automation_job_failure_summaries()?;
+    Ok(AutomationHealthReport {
+        level,
+        issues,
+        outbox,
+        progress,
+        failures,
+    })
+}
+
+fn render_automation_health_report(report: &AutomationHealthReport, consumer_tag: &str) -> String {
+    let thresholds = automation_health_thresholds();
+    let mut out = String::new();
+    out.push_str(&format!(
+        "automation health: status={} consumer_tag={consumer_tag}\n",
+        automation_health_level_name(report.level)
+    ));
+    out.push_str(&format!(
+        "thresholds: stale_heartbeat_yellow={} stale_heartbeat_red={} consecutive_failures_yellow={} consecutive_failures_red={} backlog_yellow={} backlog_red={}\n",
+        format_duration_compact(thresholds.stale_heartbeat_yellow),
+        format_duration_compact(thresholds.stale_heartbeat_red),
+        thresholds.consecutive_failures_yellow,
+        thresholds.consecutive_failures_red,
+        thresholds.backlog_yellow,
+        thresholds.backlog_red,
+    ));
+    if report.issues.is_empty() {
+        out.push_str("issues: none\n");
+    } else {
+        out.push_str("issues:\n");
+        for issue in &report.issues {
+            out.push_str(&format!(
+                "- {} target={} code={} detail={}\n",
+                automation_health_level_name(issue.level),
+                issue.target,
+                issue.code,
+                issue.detail
+            ));
+        }
+    }
+    out.push_str(&format!(
+        "outbox: {}\n",
+        format_outbox_stats(&report.outbox)
+    ));
+    out.push_str(&format!(
+        "consumer {consumer_tag}: {}\n",
+        format_outbox_consumer_progress(&report.progress)
+    ));
+    out.push_str("last_failures:\n");
+    if report.failures.is_empty() {
+        out.push_str("- none\n");
+    } else {
+        for failure in &report.failures {
+            let detail = failure
+                .latest_failure
+                .as_ref()
+                .map(|run| format_automation_record(run))
+                .unwrap_or_else(|| "latest_failure=missing".to_string());
+            out.push_str(&format!(
+                "- job={} consecutive_failures={} {}\n",
+                failure.job_name, failure.consecutive_failures, detail
+            ));
+        }
+    }
+    let action = match report.level {
+        AutomationHealthLevel::Green => "manual_action=no_intervention_required",
+        AutomationHealthLevel::Yellow => "manual_action=review_warnings_before_next_daily_run",
+        AutomationHealthLevel::Red => "manual_action=investigate_and_fix_before_next_daily_run",
+    };
+    out.push_str(action);
+    out.push('\n');
+    out
+}
+
+fn print_automation_last_failures<W: Write>(
+    repo: &SqliteRepository,
+    limit: usize,
+    out: &mut W,
+) -> Result<(), Box<dyn std::error::Error>> {
+    writeln!(out, "automation last-failures:")?;
+    let failures = repo.list_recent_failed_automation_runs(limit)?;
+    if failures.is_empty() {
+        writeln!(out, "- none")?;
+        return Ok(());
+    }
+    for record in failures {
+        writeln!(
+            out,
+            "- job={} {}",
+            record.job_name,
+            format_automation_record(&record)
+        )?;
+    }
+    Ok(())
 }
 
 fn run_automation_plan<W, F>(
@@ -367,6 +732,18 @@ fn print_automation_doctor<W: Write>(
     Ok(())
 }
 
+fn emit_automation_health_alert(level: AutomationHealthLevel) {
+    match level {
+        AutomationHealthLevel::Green => {}
+        AutomationHealthLevel::Yellow => {
+            eprintln!("\x1b[33mALERT YELLOW\x1b[0m automation health requires review");
+        }
+        AutomationHealthLevel::Red => {
+            eprintln!("\x1b[31mALERT RED\x1b[0m automation health requires intervention");
+        }
+    }
+}
+
 fn run_automation_job<F>(
     repo: &SqliteRepository,
     job: AutomationJob,
@@ -394,6 +771,20 @@ where
             Err(err)
         }
     }
+}
+
+fn latest_automation_run_or_error(
+    repo: &SqliteRepository,
+    job: AutomationJob,
+) -> Result<AutomationRunRecord, Box<dyn std::error::Error>> {
+    repo.get_latest_automation_run(automation_job_name(job))?
+        .ok_or_else(|| {
+            format!(
+                "missing automation run record for job {}",
+                automation_job_name(job)
+            )
+            .into()
+        })
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -433,6 +824,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 /// 所有需要 DB / engine 的子命令走这里。
 fn run_with_engine(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
+    if matches!(
+        &cli.cmd,
+        Cmd::Automation {
+            cmd: AutomationCmd::ListJobs
+        }
+    ) {
+        let mut stdout = std::io::stdout().lock();
+        print_automation_jobs(&mut stdout)?;
+        return Ok(());
+    }
+
     if matches!(
         &cli.cmd,
         Cmd::Automation {
@@ -832,19 +1234,68 @@ fn run_with_engine(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             run_automation_plan(&jobs, true, &mut stdout, |_| Ok(()))?;
         }
         Cmd::Automation {
+            cmd: AutomationCmd::Run { job },
+        } => {
+            let mut stdout = std::io::stdout().lock();
+            run_single_automation_job(
+                &mut stdout,
+                job,
+                &cli,
+                &mut eng,
+                &repo,
+                &viewer,
+                sync_wiki,
+                wiki_root.as_deref(),
+                &schema,
+            )?;
+        }
+        Cmd::Automation {
+            cmd: AutomationCmd::LastFailures { limit },
+        } => {
+            let mut stdout = std::io::stdout().lock();
+            print_automation_last_failures(&repo, limit, &mut stdout)?;
+        }
+        Cmd::Automation {
             cmd: AutomationCmd::Status,
         } => {
-            let jobs = automation_run_daily_jobs();
+            let jobs = automation_all_jobs();
             let mut stdout = std::io::stdout().lock();
             print_automation_status(&repo, &jobs, &mut stdout)?;
         }
         Cmd::Automation {
             cmd: AutomationCmd::Doctor { consumer_tag },
         } => {
-            let jobs = automation_run_daily_jobs();
+            let jobs = automation_all_jobs();
             let mut stdout = std::io::stdout().lock();
             print_automation_doctor(&repo, &jobs, &consumer_tag, &mut stdout)?;
         }
+        Cmd::Automation {
+            cmd:
+                AutomationCmd::Health {
+                    consumer_tag,
+                    summary_file,
+                },
+        } => {
+            let report = collect_automation_health_report(
+                &repo,
+                &automation_all_jobs(),
+                &consumer_tag,
+                OffsetDateTime::now_utc(),
+            )?;
+            let rendered = render_automation_health_report(&report, &consumer_tag);
+            print!("{rendered}");
+            if let Some(path) = summary_file {
+                std::fs::write(&path, &rendered)?;
+                println!("summary_file={}", path.display());
+            }
+            emit_automation_health_alert(report.level);
+            if report.level == AutomationHealthLevel::Red {
+                std::process::exit(1);
+            }
+        }
+        Cmd::Automation {
+            cmd: AutomationCmd::ListJobs,
+        } => unreachable!(),
         // SchemaValidate 已在 main() 中短路，此处不可达
         Cmd::SchemaValidate { .. } => unreachable!(),
     }
@@ -953,6 +1404,23 @@ pub(crate) fn effective_ingest_entry_type(explicit: Option<EntryType>) -> EntryT
 #[cfg(test)]
 mod tests {
     use super::*;
+    use wiki_storage::AutomationJobFailureSummary;
+
+    fn sample_record(
+        status: AutomationRunStatus,
+        heartbeat_at: OffsetDateTime,
+    ) -> AutomationRunRecord {
+        AutomationRunRecord {
+            id: 1,
+            job_name: "lint".into(),
+            started_at: heartbeat_at - Duration::minutes(5),
+            finished_at: None,
+            status,
+            duration_ms: None,
+            error_summary: None,
+            heartbeat_at,
+        }
+    }
 
     #[test]
     fn effective_entry_type_defaults_to_concept() {
@@ -984,6 +1452,26 @@ mod tests {
                 "consume-to-mempalace",
             ]
         );
+    }
+
+    #[test]
+    fn automation_job_registry_lists_named_jobs_in_stable_order() {
+        let labels: Vec<&str> = automation_job_specs()
+            .iter()
+            .map(|spec| automation_job_name(spec.job))
+            .collect();
+        assert_eq!(
+            labels,
+            vec![
+                "batch-ingest",
+                "lint",
+                "maintenance",
+                "consume-to-mempalace",
+                "llm-smoke",
+            ]
+        );
+        assert!(automation_job_spec(AutomationJob::LlmSmoke).requires_network);
+        assert!(!automation_job_spec(AutomationJob::LlmSmoke).in_daily);
     }
 
     #[test]
@@ -1054,6 +1542,105 @@ mod tests {
         };
         assert_eq!(effective_consume_start_id(&empty_progress, 0), 0);
         assert_eq!(effective_consume_start_id(&empty_progress, 4), 4);
+    }
+
+    #[test]
+    fn stale_heartbeat_thresholds_classify_expected_levels() {
+        let now = OffsetDateTime::from_unix_timestamp(1_800_000_000).unwrap();
+        let thresholds = automation_health_thresholds();
+        let green = sample_record(AutomationRunStatus::Running, now - Duration::hours(1));
+        let yellow = sample_record(AutomationRunStatus::Running, now - Duration::hours(8));
+        let red = sample_record(AutomationRunStatus::Running, now - Duration::hours(36));
+        let finished = sample_record(AutomationRunStatus::Succeeded, now - Duration::hours(36));
+
+        assert_eq!(
+            classify_stale_heartbeat(&green, now, thresholds),
+            AutomationHealthLevel::Green
+        );
+        assert_eq!(
+            classify_stale_heartbeat(&yellow, now, thresholds),
+            AutomationHealthLevel::Yellow
+        );
+        assert_eq!(
+            classify_stale_heartbeat(&red, now, thresholds),
+            AutomationHealthLevel::Red
+        );
+        assert_eq!(
+            classify_stale_heartbeat(&finished, now, thresholds),
+            AutomationHealthLevel::Green
+        );
+    }
+
+    #[test]
+    fn consecutive_failure_thresholds_classify_expected_levels() {
+        let thresholds = automation_health_thresholds();
+        assert_eq!(
+            classify_consecutive_failures(0, thresholds),
+            AutomationHealthLevel::Green
+        );
+        assert_eq!(
+            classify_consecutive_failures(2, thresholds),
+            AutomationHealthLevel::Yellow
+        );
+        assert_eq!(
+            classify_consecutive_failures(3, thresholds),
+            AutomationHealthLevel::Red
+        );
+    }
+
+    #[test]
+    fn backlog_thresholds_classify_expected_levels() {
+        let thresholds = automation_health_thresholds();
+        assert_eq!(
+            classify_backlog(0, thresholds),
+            AutomationHealthLevel::Green
+        );
+        assert_eq!(
+            classify_backlog(25, thresholds),
+            AutomationHealthLevel::Yellow
+        );
+        assert_eq!(
+            classify_backlog(120, thresholds),
+            AutomationHealthLevel::Red
+        );
+    }
+
+    #[test]
+    fn health_report_render_includes_manual_action_and_failures() {
+        let report = AutomationHealthReport {
+            level: AutomationHealthLevel::Red,
+            issues: vec![AutomationHealthIssue {
+                level: AutomationHealthLevel::Red,
+                target: "lint".into(),
+                code: "consecutive-failures",
+                detail: "consecutive_failures=3".into(),
+            }],
+            outbox: OutboxStats {
+                head_id: 10,
+                total_events: 10,
+                unprocessed_events: 4,
+            },
+            progress: OutboxConsumerProgress {
+                consumer_tag: "mempalace".into(),
+                acked_up_to_id: Some(6),
+                acked_at: None,
+                backlog_events: 4,
+            },
+            failures: vec![AutomationJobFailureSummary {
+                job_name: "lint".into(),
+                consecutive_failures: 3,
+                latest_failure: Some(sample_record(
+                    AutomationRunStatus::Failed,
+                    OffsetDateTime::from_unix_timestamp(1_800_000_000).unwrap(),
+                )),
+            }],
+        };
+
+        let rendered = render_automation_health_report(&report, "mempalace");
+        assert!(rendered.contains("automation health: status=red"));
+        assert!(rendered.contains("code=consecutive-failures"));
+        assert!(rendered.contains("job=lint consecutive_failures=3"));
+        assert!(rendered.contains("manual_action=investigate_and_fix_before_next_daily_run"));
     }
 }
 
@@ -1155,6 +1742,72 @@ fn run_consume_to_mempalace_job(
     Ok((n, start_id, acked))
 }
 
+fn dispatch_automation_job(
+    job: AutomationJob,
+    cli: &Cli,
+    eng: &mut LlmWikiEngine<NoopWikiHook>,
+    repo: &SqliteRepository,
+    viewer: &Scope,
+    sync_wiki: bool,
+    wiki_root: Option<&std::path::Path>,
+    schema: &DomainSchema,
+) -> Result<(), Box<dyn std::error::Error>> {
+    match job {
+        AutomationJob::BatchIngest => {
+            let vault = cli
+                .wiki_dir
+                .clone()
+                .unwrap_or_else(|| PathBuf::from("/Users/mac-mini/Documents/wiki"));
+            batch_ingest_cmd(
+                eng, repo, cli, &vault, None, false, 1, sync_wiki, wiki_root, schema,
+            )
+        }
+        AutomationJob::Lint => run_lint_job(eng, repo, viewer, sync_wiki, wiki_root),
+        AutomationJob::Maintenance => run_maintenance_job(eng, repo, viewer, sync_wiki, wiki_root),
+        AutomationJob::ConsumeToMempalace => {
+            run_consume_to_mempalace_job(eng, repo, DEFAULT_MEMPALACE_CONSUMER_TAG, 0).map(|_| ())
+        }
+        AutomationJob::LlmSmoke => {
+            let cfg = llm::load_llm_config(&cli.llm_config)?;
+            let out = llm::smoke_chat_completion(&cfg, "Say 'ok' only.")?;
+            println!("{out}");
+            Ok(())
+        }
+    }
+}
+
+fn run_single_automation_job<W: Write>(
+    out: &mut W,
+    job: AutomationJob,
+    cli: &Cli,
+    eng: &mut LlmWikiEngine<NoopWikiHook>,
+    repo: &SqliteRepository,
+    viewer: &Scope,
+    sync_wiki: bool,
+    wiki_root: Option<&std::path::Path>,
+    schema: &DomainSchema,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let spec = automation_job_spec(job);
+    writeln!(
+        out,
+        "automation: running {} requires_network={} daily={}",
+        automation_job_name(spec.job),
+        if spec.requires_network { "yes" } else { "no" },
+        if spec.in_daily { "yes" } else { "no" }
+    )?;
+    run_automation_job(repo, job, || {
+        dispatch_automation_job(job, cli, eng, repo, viewer, sync_wiki, wiki_root, schema)
+    })?;
+    let latest = latest_automation_run_or_error(repo, job)?;
+    writeln!(
+        out,
+        "automation: finished {} {}",
+        automation_job_name(job),
+        format_automation_record(&latest)
+    )?;
+    Ok(())
+}
+
 fn run_daily_automation(
     cli: &Cli,
     eng: &mut LlmWikiEngine<NoopWikiHook>,
@@ -1167,24 +1820,8 @@ fn run_daily_automation(
     let jobs = automation_run_daily_jobs();
     let mut stdout = std::io::stdout().lock();
     run_automation_plan(&jobs, false, &mut stdout, |job| {
-        run_automation_job(repo, job, || match job {
-            AutomationJob::BatchIngest => {
-                let vault = cli
-                    .wiki_dir
-                    .clone()
-                    .unwrap_or_else(|| PathBuf::from("/Users/mac-mini/Documents/wiki"));
-                batch_ingest_cmd(
-                    eng, repo, cli, &vault, None, false, 1, sync_wiki, wiki_root, schema,
-                )
-            }
-            AutomationJob::Lint => run_lint_job(eng, repo, viewer, sync_wiki, wiki_root),
-            AutomationJob::Maintenance => {
-                run_maintenance_job(eng, repo, viewer, sync_wiki, wiki_root)
-            }
-            AutomationJob::ConsumeToMempalace => {
-                run_consume_to_mempalace_job(eng, repo, DEFAULT_MEMPALACE_CONSUMER_TAG, 0)
-                    .map(|_| ())
-            }
+        run_automation_job(repo, job, || {
+            dispatch_automation_job(job, cli, eng, repo, viewer, sync_wiki, wiki_root, schema)
         })
     })
 }
