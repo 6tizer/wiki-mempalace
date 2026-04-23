@@ -514,7 +514,7 @@ CREATE INDEX IF NOT EXISTS wiki_automation_run_job_status_id_idx
                 }),
             None => self
                 .conn
-                .query_row(sql, params![job_name], |row| decode_automation_run_row(row)),
+                .query_row(sql, params![job_name], decode_automation_run_row),
         };
         match result {
             Ok(run) => Ok(Some(run)),

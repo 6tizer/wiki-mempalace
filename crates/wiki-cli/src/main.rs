@@ -763,13 +763,6 @@ struct AutomationHeartbeat<'a> {
 }
 
 impl AutomationHeartbeat<'_> {
-    fn noop(repo: &SqliteRepository) -> AutomationHeartbeat<'_> {
-        AutomationHeartbeat {
-            repo,
-            run_id: None,
-        }
-    }
-
     fn tick(&self) {
         if let Some(id) = self.run_id {
             let _ = self.repo.refresh_automation_heartbeat(id);
@@ -1205,8 +1198,13 @@ fn run_with_engine(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             last_id,
             consumer_tag,
         } => {
-            let (consumed, start_id, acked) =
-                run_consume_to_mempalace_job(&eng, &repo, &consumer_tag, last_id, cli.palace.as_deref())?;
+            let (consumed, start_id, acked) = run_consume_to_mempalace_job(
+                &eng,
+                &repo,
+                &consumer_tag,
+                last_id,
+                cli.palace.as_deref(),
+            )?;
             println!(
                 "consumed={consumed} start_id={start_id} acked={acked} consumer_tag={consumer_tag}"
             );
@@ -1241,6 +1239,10 @@ fn run_with_engine(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             delay_secs,
         } => {
             let vault_dir = vault.clone().unwrap_or_else(default_vault_path);
+            let heartbeat = AutomationHeartbeat {
+                repo: &repo,
+                run_id: None,
+            };
             batch_ingest_cmd(
                 &mut eng,
                 &repo,
@@ -1252,6 +1254,7 @@ fn run_with_engine(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                 sync_wiki,
                 wiki_root.as_deref(),
                 &schema,
+                &heartbeat,
             )?;
         }
         Cmd::Automation {
@@ -1829,6 +1832,7 @@ fn run_consume_to_mempalace_job(
 
 fn dispatch_automation_job(
     job: AutomationJob,
+    heartbeat: &AutomationHeartbeat<'_>,
     cli: &Cli,
     eng: &mut LlmWikiEngine<NoopWikiHook>,
     repo: &SqliteRepository,
@@ -1837,21 +1841,24 @@ fn dispatch_automation_job(
     wiki_root: Option<&std::path::Path>,
     schema: &DomainSchema,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    heartbeat.tick();
     match job {
         AutomationJob::BatchIngest => {
-            let vault = cli
-                .wiki_dir
-                .clone()
-                .unwrap_or_else(default_vault_path);
+            let vault = cli.wiki_dir.clone().unwrap_or_else(default_vault_path);
             batch_ingest_cmd(
-                eng, repo, cli, &vault, None, false, 1, sync_wiki, wiki_root, schema,
+                eng, repo, cli, &vault, None, false, 1, sync_wiki, wiki_root, schema, heartbeat,
             )
         }
         AutomationJob::Lint => run_lint_job(eng, repo, viewer, sync_wiki, wiki_root),
         AutomationJob::Maintenance => run_maintenance_job(eng, repo, viewer, sync_wiki, wiki_root),
-        AutomationJob::ConsumeToMempalace => {
-            run_consume_to_mempalace_job(eng, repo, DEFAULT_MEMPALACE_CONSUMER_TAG, 0, cli.palace.as_deref()).map(|_| ())
-        }
+        AutomationJob::ConsumeToMempalace => run_consume_to_mempalace_job(
+            eng,
+            repo,
+            DEFAULT_MEMPALACE_CONSUMER_TAG,
+            0,
+            cli.palace.as_deref(),
+        )
+        .map(|_| ()),
         AutomationJob::LlmSmoke => {
             let cfg = llm::load_llm_config(&cli.llm_config)?;
             let out = llm::smoke_chat_completion(&cfg, "Say 'ok' only.")?;
@@ -1880,8 +1887,10 @@ fn run_single_automation_job<W: Write>(
         if spec.requires_network { "yes" } else { "no" },
         if spec.in_daily { "yes" } else { "no" }
     )?;
-    run_automation_job(repo, job, |_hb| {
-        dispatch_automation_job(job, cli, eng, repo, viewer, sync_wiki, wiki_root, schema)
+    run_automation_job(repo, job, |hb| {
+        dispatch_automation_job(
+            job, hb, cli, eng, repo, viewer, sync_wiki, wiki_root, schema,
+        )
     })?;
     let latest = latest_automation_run_or_error(repo, job)?;
     writeln!(
@@ -1905,8 +1914,10 @@ fn run_daily_automation(
     let jobs = automation_run_daily_jobs();
     let mut stdout = std::io::stdout().lock();
     run_automation_plan(&jobs, false, &mut stdout, |job| {
-        run_automation_job(repo, job, |_hb| {
-            dispatch_automation_job(job, cli, eng, repo, viewer, sync_wiki, wiki_root, schema)
+        run_automation_job(repo, job, |hb| {
+            dispatch_automation_job(
+                job, hb, cli, eng, repo, viewer, sync_wiki, wiki_root, schema,
+            )
         })
     })
 }
@@ -2366,7 +2377,9 @@ fn batch_ingest_cmd(
     _sync_wiki: bool,
     wiki_root: Option<&std::path::Path>,
     schema: &DomainSchema,
+    heartbeat: &AutomationHeartbeat<'_>,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    heartbeat.tick();
     eprintln!("扫描未编译 source...");
     let mut sources = scan_uncompiled_sources(vault)?;
     eprintln!("  → 找到 {} 条未编译 source", sources.len());
@@ -2401,6 +2414,7 @@ fn batch_ingest_cmd(
     let mut err_count = 0usize;
 
     for (i, src) in sources.iter().enumerate() {
+        heartbeat.tick();
         let uri = if src.url.is_empty() {
             format!("file://{}", src.path.display())
         } else {
