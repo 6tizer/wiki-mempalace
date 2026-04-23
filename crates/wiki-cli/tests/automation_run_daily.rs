@@ -437,3 +437,112 @@ fn consume_to_mempalace_empty_increment_does_not_ack() {
     let progress_after = repo.get_outbox_consumer_progress("archive").unwrap();
     assert_eq!(progress_after, progress_before);
 }
+
+#[test]
+fn automation_run_consume_to_mempalace_executes_only_target_job() {
+    let db = tempfile::NamedTempFile::new().unwrap();
+    let db_path = db.path().to_owned();
+    let repo = SqliteRepository::open(&db_path).unwrap();
+
+    append_outbox_query_events(&repo, 2);
+
+    wiki_cli()
+        .arg("--db")
+        .arg(&db_path)
+        .arg("automation")
+        .arg("run")
+        .arg("consume-to-mempalace")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "automation: running consume-to-mempalace",
+        ))
+        .stdout(predicate::str::contains("status=succeeded"))
+        .stdout(predicate::str::contains("duration_ms="));
+
+    assert!(repo
+        .get_latest_automation_run("consume-to-mempalace")
+        .unwrap()
+        .is_some());
+    assert!(repo.get_latest_automation_run("lint").unwrap().is_none());
+    assert!(repo
+        .get_latest_automation_run("maintenance")
+        .unwrap()
+        .is_none());
+    assert!(repo
+        .get_latest_automation_run("batch-ingest")
+        .unwrap()
+        .is_none());
+}
+
+#[test]
+fn automation_run_batch_ingest_executes_only_target_job() {
+    let db = tempfile::NamedTempFile::new().unwrap();
+    let db_path = db.path().to_owned();
+
+    let vault = tempfile::tempdir().unwrap();
+    std::fs::create_dir(vault.path().join("sources")).unwrap();
+
+    wiki_cli()
+        .arg("--db")
+        .arg(&db_path)
+        .arg("--wiki-dir")
+        .arg(vault.path())
+        .arg("automation")
+        .arg("run")
+        .arg("batch-ingest")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("automation: running batch-ingest"))
+        .stdout(predicate::str::contains("status=succeeded"))
+        .stdout(predicate::str::contains("duration_ms="));
+
+    let repo = SqliteRepository::open(&db_path).unwrap();
+    assert!(repo
+        .get_latest_automation_run("batch-ingest")
+        .unwrap()
+        .is_some());
+    assert!(repo.get_latest_automation_run("lint").unwrap().is_none());
+    assert!(repo
+        .get_latest_automation_run("maintenance")
+        .unwrap()
+        .is_none());
+    assert!(repo
+        .get_latest_automation_run("consume-to-mempalace")
+        .unwrap()
+        .is_none());
+}
+
+#[test]
+fn automation_health_exit_on_yellow_flag_exits_nonzero_for_yellow() {
+    let db = tempfile::NamedTempFile::new().unwrap();
+    let db_path = db.path().to_owned();
+    let repo = SqliteRepository::open(&db_path).unwrap();
+
+    // produce yellow backlog: 30 events, 4 acked → backlog=26, threshold yellow=25
+    append_outbox_query_events(&repo, 30);
+    repo.mark_outbox_processed(4, "mempalace").unwrap();
+
+    // without --exit-on-yellow: yellow exits 0
+    wiki_cli()
+        .arg("--db")
+        .arg(&db_path)
+        .arg("automation")
+        .arg("health")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("automation health: status=yellow"))
+        .stderr(predicate::str::contains("ALERT YELLOW"));
+
+    // with --exit-on-yellow: yellow exits 1
+    wiki_cli()
+        .arg("--db")
+        .arg(&db_path)
+        .arg("automation")
+        .arg("health")
+        .arg("--exit-on-yellow")
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains("automation health: status=yellow"))
+        .stderr(predicate::str::contains("ALERT YELLOW"));
+}

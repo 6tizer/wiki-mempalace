@@ -79,6 +79,8 @@ flowchart LR
     P1 --> P2["P2 成熟化<br/>指标、统一运维面板、策略增强"]
 ```
 
+
+
 ### 3.1 P0 目标
 
 把系统从“能用”变成“能稳定自动跑”。
@@ -97,20 +99,22 @@ flowchart LR
 
 整个计划按以下功能模块拆分。每个模块都可以成为一个独立开发单元。
 
-| 模块编号 | 模块名 | 主要职责 | 主要代码范围 |
-| --- | --- | --- | --- |
-| M1 | 调度编排层 | 定时、任务编排、任务依赖、任务状态 | `wiki-cli` + `scripts/` + 新增调度模块 |
-| M2 | 运行状态与心跳 | 最近运行、成功/失败、耗时、心跳、重试 | `wiki-storage` / 新增状态表或文件 |
-| M3 | 告警与运维出口 | 失败告警、状态摘要、人工介入入口 | `wiki-cli` / `scripts/` / 可选通知模块 |
-| M4 | Outbox 闭环增强 | 完整事件消费、事件派发、消费健康 | `wiki-core::events` / `wiki-mempalace-bridge` |
-| M5 | 恢复与回滚 | 备份、恢复、重建、演练脚本 | `scripts/backup.sh` + 新文档/脚本 |
-| M6 | Gap 工作流 | 识别知识缺口，产出建议或草稿 | `wiki-kernel` / `wiki-cli` |
-| M7 | Fixer 工作流 | 把 lint 结果分流成自动修、草稿修、人工修 | `wiki-kernel` / `wiki-cli` |
-| M8 | 消费链产品化 | QA / synthesis / crystallize 标准入口 | `wiki-cli` / `wiki-kernel` |
-| M9 | 查询融合增强 | 更深接入 mempalace 召回到 wiki 查询 | `wiki-kernel` / `wiki-mempalace-bridge` |
-| M10 | 指标与评估 | ingest / lint / query / stale / promotion 指标 | `wiki-storage` / `wiki-cli` |
-| M11 | 运维控制台 | 统一状态查看页或最小 Web UI | 新增 `viewer` 或 `dashboard` 模块 |
-| M12 | 策略层增强 | 自动 supersede / crystallize / stale / retention 策略 | `wiki-core` / `wiki-kernel` |
+
+| 模块编号 | 模块名         | 主要职责                                              | 主要代码范围                                        |
+| ---- | ----------- | ------------------------------------------------- | --------------------------------------------- |
+| M1   | 调度编排层       | 定时、任务编排、任务依赖、任务状态                                 | `wiki-cli` + `scripts/` + 新增调度模块              |
+| M2   | 运行状态与心跳     | 最近运行、成功/失败、耗时、心跳、重试                               | `wiki-storage` / 新增状态表或文件                     |
+| M3   | 告警与运维出口     | 失败告警、状态摘要、人工介入入口                                  | `wiki-cli` / `scripts/` / 可选通知模块              |
+| M4   | Outbox 闭环增强 | 完整事件消费、事件派发、消费健康                                  | `wiki-core::events` / `wiki-mempalace-bridge` |
+| M5   | 恢复与回滚       | 备份、恢复、重建、演练脚本                                     | `scripts/backup.sh` + 新文档/脚本                  |
+| M6   | Gap 工作流     | 识别知识缺口，产出建议或草稿                                    | `wiki-kernel` / `wiki-cli`                    |
+| M7   | Fixer 工作流   | 把 lint 结果分流成自动修、草稿修、人工修                           | `wiki-kernel` / `wiki-cli`                    |
+| M8   | 消费链产品化      | QA / synthesis / crystallize 标准入口                 | `wiki-cli` / `wiki-kernel`                    |
+| M9   | 查询融合增强      | 更深接入 mempalace 召回到 wiki 查询                        | `wiki-kernel` / `wiki-mempalace-bridge`       |
+| M10  | 指标与评估       | ingest / lint / query / stale / promotion 指标      | `wiki-storage` / `wiki-cli`                   |
+| M11  | 运维控制台       | 统一状态查看页或最小 Web UI                                 | 新增 `viewer` 或 `dashboard` 模块                  |
+| M12  | 策略层增强       | 自动 supersede / crystallize / stale / retention 策略 | `wiki-core` / `wiki-kernel`                   |
+
 
 ---
 
@@ -165,6 +169,8 @@ flowchart TD
     A --> E["M4 Outbox 闭环增强"]
     A --> F["M5 恢复与回滚"]
 ```
+
+
 
 ### M1. 调度编排层
 
@@ -438,6 +444,8 @@ flowchart TD
     A --> E["M9 查询融合增强"]
 ```
 
+
+
 ### M6. Gap 工作流
 
 #### 目标
@@ -607,6 +615,8 @@ flowchart TD
     A --> D["M12 策略层增强"]
 ```
 
+
+
 ### M10. 指标与评估
 
 #### 目标
@@ -692,34 +702,34 @@ flowchart TD
 
 ### 9.1 开发完成检查
 
-- [ ] 代码已提交到独立分支
-- [ ] 模块范围内文档已更新
-- [ ] 模块接口、状态、失败行为已写清楚
+- 代码已提交到独立分支
+- 模块范围内文档已更新
+- 模块接口、状态、失败行为已写清楚
 
 ### 9.2 自动测试检查
 
-- [ ] 单元测试已新增
-- [ ] 集成测试已新增
-- [ ] 旧测试未回归
-- [ ] `cargo test --workspace` 全绿
+- 单元测试已新增
+- 集成测试已新增
+- 旧测试未回归
+- `cargo test --workspace` 全绿
 
 ### 9.3 手工验收检查
 
-- [ ] 有一条最小 happy path
-- [ ] 有一条失败 path
-- [ ] 有一条恢复/重试 path
+- 有一条最小 happy path
+- 有一条失败 path
+- 有一条恢复/重试 path
 
 ### 9.4 可观测性检查
 
-- [ ] 日志可读
-- [ ] 状态可查
-- [ ] 错误摘要能看懂
+- 日志可读
+- 状态可查
+- 错误摘要能看懂
 
 ### 9.5 合并前检查
 
-- [ ] 与其他模块无明显接口冲突
-- [ ] 回滚方式已写明
-- [ ] 变更已同步到主计划文档
+- 与其他模块无明显接口冲突
+- 回滚方式已写明
+- 变更已同步到主计划文档
 
 ---
 
