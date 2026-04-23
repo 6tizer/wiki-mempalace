@@ -45,8 +45,8 @@
 ### 当前结论
 
 - **P0 已收口**（J1/J2/J3/J4 已完成）
-- **P1 已启动**（J5 Gap 工作流、J6 Fixer 工作流已完成）
-- 下一步重心：启动 J7（消费链产品化）、J8（查询融合增强）
+- **P1 已启动**（J5 Gap 工作流、J6 Fixer 工作流、J7 消费链产品化已完成）
+- 下一步重心：启动 J8（查询融合增强）
 
 ---
 
@@ -167,18 +167,26 @@
 | PR                      | ✅   | PR #7，Codex 补审后合并至 main                                                                             |
 
 
-### J7. 消费链产品化 — 完成度 20%
+### J7. 消费链产品化 — 完成度 95%
 
 
 | 交付物                         | 状态  | 证据                                                                        |
 | --------------------------- | --- | ------------------------------------------------------------------------- |
-| `query --write-page`        | ✅   | `Query` 子命令含 `--write-page` + `--entry-type`                              |
-| `crystallize`               | ✅   | `Crystallize` 子命令含 `--entry-type` + `--finding`                           |
+| `query --write-page`        | ✅   | 改用 `PageContract` 生成 page，默认 `EntryType::Qa`，`--entry-type` 可覆盖             |
+| `crystallize`               | ✅   | 改用 `finalize_consumed_page` 标准化，默认 `EntryType::Synthesis`                     |
+| `ingest-llm`                | ✅   | 改用 `finalize_consumed_page`，固定 `EntryType::Summary`                           |
+| `gap --write-page`          | ✅   | 改用 `finalize_consumed_page`，固定 `EntryType::LintReport`                         |
 | `EntryType` / `EntryStatus` | ✅   | `schema.rs`：Concept/Principle/…/Index；Draft/InReview/Approved/NeedsUpdate |
-| 统一消费入口                      | ❌   | query-write-page 和 crystallize 仍为独立路径，无统一入口                               |
-| 统一 page contract            | ❌   | 无 `PageContract` 类型或统一产物契约                                                |
-| qa / synthesis 命令           | ❌   | 无独立 qa / synthesis 子命令                                                    |
-| frontmatter 统一审计            | ⚠️  | 有 vault-standards.md 但代码中各入口的 frontmatter 生成逻辑分散                          |
+| 统一 page contract            | ✅   | `wiki-core/src/page_contract.rs`：`PageContract` + Builder + `render_markdown` + `into_page` |
+| 统一标准化函数                    | ✅   | `wiki-kernel/src/page_contract.rs`：`finalize_consumed_page`（entry_type/status/骨架补充/段落映射） |
+| `EntryType.section_template()` | ✅   | 7 种 entry_type 的固定段落模板（Concept 4段/Summary 5段/Qa 2段/Synthesis 4段/LintReport 4段 等） |
+| 段落内容映射（旧→标准）                | ✅   | `remap_sections`：crystallize 旧段落→Synthesis 标准段、gap 旧段落→LintReport 标准段 |
+| qa 命令                       | ✅   | `Cmd::Qa` 子命令：`wiki-cli qa <问题> <回答> [--entry-type]`                           |
+| synthesis 命令                | ✅   | `Cmd::Synthesis` 子命令：`wiki-cli synthesis <主题> [--body]`（body 省略从 stdin 读取全文） |
+| 非模板段落保留                     | ✅   | `render_markdown` 自动追加用户传入但不在 template 中的额外段落                                   |
+| frontmatter 统一审计            | ⚠️  | `Confidence`/`tags` 字段已设计但未持久化（WikiPage schema 缺字段），CLI 参数暂未暴露            |
+| PR                          | ✅   | PR #8，含 Codex 审查修复（4 个 P1/P2 issue），待合并                                      |
+| 测试                          | ✅   | 新增 22 个测试（6 finalize + 3 query_to_page + 8 qa/synthesis + 2 render + 3 remap），全量 workspace 0 失败 |
 
 
 ### J8. 查询融合增强 — 完成度 10%
@@ -206,7 +214,7 @@
 | J4 恢复验证      | **100%** | P0  | ✅ 已完成               |
 | J5 Gap 工作流   | **100%** | P1  | ✅ 已完成               |
 | J6 Fixer 工作流 | **100%** | P1  | ✅ 已完成（PR #7 合并）      |
-| J7 消费链产品化    | **20%**  | P1  | ⚠️ 零散能力在，统一契约缺      |
+| J7 消费链产品化    | **95%**  | P1  | ✅ PR #8 待合并，统一契约+qa/synthesis完成，confidence/tags待持久化 |
 | J8 查询融合增强    | **10%**  | P1  | ⚠️ 桥接基础件在，query 未接入 |
 
 
