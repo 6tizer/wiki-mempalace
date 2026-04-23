@@ -70,6 +70,13 @@ pub struct OutboxConsumerProgress {
     pub backlog_events: i64,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AutomationJobFailureSummary {
+    pub job_name: String,
+    pub consecutive_failures: usize,
+    pub latest_failure: Option<AutomationRunRecord>,
+}
+
 pub trait WikiRepository {
     fn load_snapshot(&self) -> Result<StorageSnapshot, StorageError>;
     fn save_snapshot(&self, snapshot: &StorageSnapshot) -> Result<(), StorageError>;
@@ -173,6 +180,84 @@ CREATE INDEX IF NOT EXISTS wiki_automation_run_job_status_id_idx
         job_name: &str,
     ) -> Result<Option<AutomationRunRecord>, StorageError> {
         self.query_latest_automation_run(job_name, Some(AutomationRunStatus::Succeeded))
+    }
+
+    pub fn list_recent_failed_automation_runs(
+        &self,
+        limit: usize,
+    ) -> Result<Vec<AutomationRunRecord>, StorageError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, job_name, started_at, finished_at, status, duration_ms, error_summary, heartbeat_at
+             FROM wiki_automation_run
+             WHERE status = ?1
+             ORDER BY id DESC
+             LIMIT ?2",
+        )?;
+        let rows = stmt.query_map(
+            params![AutomationRunStatus::Failed.as_str(), limit as i64],
+            decode_automation_run_row,
+        )?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row?);
+        }
+        Ok(out)
+    }
+
+    pub fn count_consecutive_automation_run_failures(
+        &self,
+        job_name: &str,
+    ) -> Result<usize, StorageError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT status
+             FROM wiki_automation_run
+             WHERE job_name = ?1
+             ORDER BY id DESC
+             LIMIT 64",
+        )?;
+        let mut rows = stmt.query(params![job_name])?;
+        let mut count = 0usize;
+        while let Some(row) = rows.next()? {
+            let status_raw: String = row.get(0)?;
+            let status = AutomationRunStatus::parse(&status_raw)?;
+            if status == AutomationRunStatus::Failed {
+                count += 1;
+            } else {
+                break;
+            }
+        }
+        Ok(count)
+    }
+
+    pub fn list_automation_job_failure_summaries(
+        &self,
+    ) -> Result<Vec<AutomationJobFailureSummary>, StorageError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT DISTINCT job_name
+             FROM wiki_automation_run
+             ORDER BY job_name ASC",
+        )?;
+        let mut rows = stmt.query([])?;
+        let mut out = Vec::new();
+        while let Some(row) = rows.next()? {
+            let job_name: String = row.get(0)?;
+            let consecutive_failures = self.count_consecutive_automation_run_failures(&job_name)?;
+            if consecutive_failures == 0 {
+                continue;
+            }
+            out.push(AutomationJobFailureSummary {
+                latest_failure: self
+                    .query_latest_automation_run(&job_name, Some(AutomationRunStatus::Failed))?,
+                job_name,
+                consecutive_failures,
+            });
+        }
+        out.sort_by(|a, b| {
+            b.consecutive_failures
+                .cmp(&a.consecutive_failures)
+                .then_with(|| a.job_name.cmp(&b.job_name))
+        });
+        Ok(out)
     }
 
     pub fn get_outbox_stats(&self) -> Result<OutboxStats, StorageError> {
@@ -781,5 +866,92 @@ mod tests {
         assert_eq!(progress_after_ack.acked_up_to_id, Some(2));
         assert!(progress_after_ack.acked_at.is_some());
         assert_eq!(progress_after_ack.backlog_events, 1);
+    }
+
+    #[test]
+    fn recent_failed_runs_and_consecutive_failures_are_reported() {
+        let dir = tempdir().unwrap();
+        let db = dir.path().join("wiki.db");
+        let repo = SqliteRepository::open(&db).unwrap();
+
+        let lint_ok = repo
+            .start_automation_run_at(
+                "lint",
+                OffsetDateTime::from_unix_timestamp(1_700_000_000).unwrap(),
+            )
+            .unwrap();
+        repo.mark_automation_run_succeeded_at(
+            lint_ok,
+            OffsetDateTime::from_unix_timestamp(1_700_000_030).unwrap(),
+        )
+        .unwrap();
+
+        let lint_fail_1 = repo
+            .start_automation_run_at(
+                "lint",
+                OffsetDateTime::from_unix_timestamp(1_700_000_100).unwrap(),
+            )
+            .unwrap();
+        repo.mark_automation_run_failed_at(
+            lint_fail_1,
+            OffsetDateTime::from_unix_timestamp(1_700_000_120).unwrap(),
+            "lint timeout",
+        )
+        .unwrap();
+
+        let lint_fail_2 = repo
+            .start_automation_run_at(
+                "lint",
+                OffsetDateTime::from_unix_timestamp(1_700_000_200).unwrap(),
+            )
+            .unwrap();
+        repo.mark_automation_run_failed_at(
+            lint_fail_2,
+            OffsetDateTime::from_unix_timestamp(1_700_000_220).unwrap(),
+            "lint timeout again",
+        )
+        .unwrap();
+
+        let maintenance_fail = repo
+            .start_automation_run_at(
+                "maintenance",
+                OffsetDateTime::from_unix_timestamp(1_700_000_300).unwrap(),
+            )
+            .unwrap();
+        repo.mark_automation_run_failed_at(
+            maintenance_fail,
+            OffsetDateTime::from_unix_timestamp(1_700_000_330).unwrap(),
+            "db locked",
+        )
+        .unwrap();
+
+        let failed = repo.list_recent_failed_automation_runs(3).unwrap();
+        assert_eq!(failed.len(), 3);
+        assert_eq!(failed[0].job_name, "maintenance");
+        assert_eq!(failed[1].job_name, "lint");
+        assert_eq!(failed[2].job_name, "lint");
+
+        assert_eq!(
+            repo.count_consecutive_automation_run_failures("lint")
+                .unwrap(),
+            2
+        );
+        assert_eq!(
+            repo.count_consecutive_automation_run_failures("maintenance")
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            repo.count_consecutive_automation_run_failures("batch-ingest")
+                .unwrap(),
+            0
+        );
+
+        let summaries = repo.list_automation_job_failure_summaries().unwrap();
+        assert_eq!(summaries.len(), 2);
+        assert_eq!(summaries[0].job_name, "lint");
+        assert_eq!(summaries[0].consecutive_failures, 2);
+        assert_eq!(summaries[1].job_name, "maintenance");
+        assert_eq!(summaries[1].consecutive_failures, 1);
     }
 }

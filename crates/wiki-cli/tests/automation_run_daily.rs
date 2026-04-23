@@ -1,6 +1,7 @@
 use assert_cmd::Command;
 use predicates::prelude::*;
-use time::OffsetDateTime;
+use rusqlite::params;
+use time::{format_description::well_known::Rfc3339, OffsetDateTime};
 use wiki_core::WikiEvent;
 use wiki_storage::{SqliteRepository, WikiRepository};
 
@@ -17,6 +18,33 @@ fn append_outbox_query_events(repo: &SqliteRepository, count: i64) {
         })
         .unwrap();
     }
+}
+
+fn seed_automation_run(
+    db_path: &std::path::Path,
+    job_name: &str,
+    started_at: OffsetDateTime,
+    finished_at: Option<OffsetDateTime>,
+    status: &str,
+    duration_ms: Option<i64>,
+    error_summary: Option<&str>,
+    heartbeat_at: OffsetDateTime,
+) {
+    let conn = rusqlite::Connection::open(db_path).unwrap();
+    conn.execute(
+        "INSERT INTO wiki_automation_run(job_name, started_at, finished_at, status, duration_ms, error_summary, heartbeat_at)
+         VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        params![
+            job_name,
+            started_at.format(&Rfc3339).unwrap(),
+            finished_at.map(|value| value.format(&Rfc3339).unwrap()),
+            status,
+            duration_ms,
+            error_summary,
+            heartbeat_at.format(&Rfc3339).unwrap(),
+        ],
+    )
+    .unwrap();
 }
 
 #[test]
@@ -42,6 +70,21 @@ fn automation_run_daily_dry_run_prints_fixed_plan() {
 }
 
 #[test]
+fn automation_list_jobs_prints_registry() {
+    wiki_cli()
+        .arg("automation")
+        .arg("list-jobs")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("automation jobs:"))
+        .stdout(predicate::str::contains("batch-ingest daily=yes"))
+        .stdout(predicate::str::contains("lint daily=yes"))
+        .stdout(predicate::str::contains("maintenance daily=yes"))
+        .stdout(predicate::str::contains("consume-to-mempalace daily=yes"))
+        .stdout(predicate::str::contains("llm-smoke daily=no"));
+}
+
+#[test]
 fn automation_status_prints_never_run_for_fresh_db() {
     let db = tempfile::NamedTempFile::new().unwrap();
     let db_path = db.path().to_owned();
@@ -57,7 +100,8 @@ fn automation_status_prints_never_run_for_fresh_db() {
         .stdout(predicate::str::contains("batch-ingest: never-run"))
         .stdout(predicate::str::contains("lint: never-run"))
         .stdout(predicate::str::contains("maintenance: never-run"))
-        .stdout(predicate::str::contains("consume-to-mempalace: never-run"));
+        .stdout(predicate::str::contains("consume-to-mempalace: never-run"))
+        .stdout(predicate::str::contains("llm-smoke: never-run"));
 }
 
 #[test]
@@ -83,6 +127,209 @@ fn automation_status_reads_latest_run_state() {
         .stdout(predicate::str::contains("lint: status=succeeded"))
         .stdout(predicate::str::contains("maintenance: status=failed"))
         .stdout(predicate::str::contains("error_summary=boom"));
+}
+
+#[test]
+fn automation_run_lint_executes_only_target_job() {
+    let db = tempfile::NamedTempFile::new().unwrap();
+    let db_path = db.path().to_owned();
+
+    wiki_cli()
+        .arg("--db")
+        .arg(&db_path)
+        .arg("automation")
+        .arg("run")
+        .arg("lint")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("automation: running lint"))
+        .stdout(predicate::str::contains("daily=yes"))
+        .stdout(predicate::str::contains("status=succeeded"))
+        .stdout(predicate::str::contains("duration_ms="));
+
+    let repo = SqliteRepository::open(&db_path).unwrap();
+    assert!(repo.get_latest_automation_run("lint").unwrap().is_some());
+    assert!(repo
+        .get_latest_automation_run("maintenance")
+        .unwrap()
+        .is_none());
+    assert!(repo
+        .get_latest_automation_run("consume-to-mempalace")
+        .unwrap()
+        .is_none());
+    assert!(repo
+        .get_latest_automation_run("llm-smoke")
+        .unwrap()
+        .is_none());
+}
+
+#[test]
+fn automation_run_maintenance_executes_only_target_job() {
+    let db = tempfile::NamedTempFile::new().unwrap();
+    let db_path = db.path().to_owned();
+
+    wiki_cli()
+        .arg("--db")
+        .arg(&db_path)
+        .arg("automation")
+        .arg("run")
+        .arg("maintenance")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("automation: running maintenance"))
+        .stdout(predicate::str::contains("status=succeeded"))
+        .stdout(predicate::str::contains("duration_ms="));
+
+    let repo = SqliteRepository::open(&db_path).unwrap();
+    assert!(repo
+        .get_latest_automation_run("maintenance")
+        .unwrap()
+        .is_some());
+    assert!(repo.get_latest_automation_run("lint").unwrap().is_none());
+    assert!(repo
+        .get_latest_automation_run("consume-to-mempalace")
+        .unwrap()
+        .is_none());
+}
+
+#[test]
+fn automation_run_unknown_job_fails() {
+    let db = tempfile::NamedTempFile::new().unwrap();
+    let db_path = db.path().to_owned();
+
+    wiki_cli()
+        .arg("--db")
+        .arg(&db_path)
+        .arg("automation")
+        .arg("run")
+        .arg("not-a-job")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("invalid value"))
+        .stderr(predicate::str::contains("not-a-job"));
+}
+
+#[test]
+fn automation_last_failures_lists_recent_failures() {
+    let db = tempfile::NamedTempFile::new().unwrap();
+    let db_path = db.path().to_owned();
+    let repo = SqliteRepository::open(&db_path).unwrap();
+
+    let lint_run = repo.start_automation_run("lint").unwrap();
+    repo.mark_automation_run_failed(lint_run, "lint boom")
+        .unwrap();
+    let maintenance_run = repo.start_automation_run("maintenance").unwrap();
+    repo.mark_automation_run_failed(maintenance_run, "maintenance boom")
+        .unwrap();
+
+    wiki_cli()
+        .arg("--db")
+        .arg(&db_path)
+        .arg("automation")
+        .arg("last-failures")
+        .arg("--limit")
+        .arg("2")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("automation last-failures:"))
+        .stdout(predicate::str::contains("job=maintenance"))
+        .stdout(predicate::str::contains("job=lint"))
+        .stdout(predicate::str::contains("error_summary=maintenance boom"))
+        .stdout(predicate::str::contains("error_summary=lint boom"));
+}
+
+#[test]
+fn automation_health_red_on_stale_heartbeat_and_writes_summary() {
+    let db = tempfile::NamedTempFile::new().unwrap();
+    let db_path = db.path().to_owned();
+    let _repo = SqliteRepository::open(&db_path).unwrap();
+    let summary = tempfile::NamedTempFile::new().unwrap();
+    let summary_path = summary.path().to_owned();
+
+    let now = OffsetDateTime::now_utc();
+    seed_automation_run(
+        &db_path,
+        "batch-ingest",
+        now - time::Duration::hours(37),
+        None,
+        "running",
+        None,
+        None,
+        now - time::Duration::hours(36),
+    );
+
+    wiki_cli()
+        .arg("--db")
+        .arg(&db_path)
+        .arg("automation")
+        .arg("health")
+        .arg("--summary-file")
+        .arg(&summary_path)
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains("automation health: status=red"))
+        .stdout(predicate::str::contains("code=stale-heartbeat"))
+        .stdout(predicate::str::contains("summary_file="))
+        .stderr(predicate::str::contains("ALERT RED"));
+
+    let summary_body = std::fs::read_to_string(&summary_path).unwrap();
+    assert!(summary_body.contains("automation health: status=red"));
+    assert!(summary_body.contains("code=stale-heartbeat"));
+}
+
+#[test]
+fn automation_health_red_on_consecutive_failures() {
+    let db = tempfile::NamedTempFile::new().unwrap();
+    let db_path = db.path().to_owned();
+    let _repo = SqliteRepository::open(&db_path).unwrap();
+
+    let now = OffsetDateTime::now_utc();
+    for idx in 0..3 {
+        let started = now - time::Duration::hours(3 - idx);
+        seed_automation_run(
+            &db_path,
+            "lint",
+            started,
+            Some(started + time::Duration::minutes(5)),
+            "failed",
+            Some(300_000),
+            Some("lint timeout"),
+            started + time::Duration::minutes(5),
+        );
+    }
+
+    wiki_cli()
+        .arg("--db")
+        .arg(&db_path)
+        .arg("automation")
+        .arg("health")
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains("code=consecutive-failures"))
+        .stdout(predicate::str::contains("consecutive_failures=3"))
+        .stderr(predicate::str::contains("ALERT RED"));
+}
+
+#[test]
+fn automation_health_yellow_on_backlog_threshold() {
+    let db = tempfile::NamedTempFile::new().unwrap();
+    let db_path = db.path().to_owned();
+    let repo = SqliteRepository::open(&db_path).unwrap();
+
+    append_outbox_query_events(&repo, 30);
+    repo.mark_outbox_processed(4, "mempalace").unwrap();
+
+    wiki_cli()
+        .arg("--db")
+        .arg(&db_path)
+        .arg("automation")
+        .arg("health")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("automation health: status=yellow"))
+        .stdout(predicate::str::contains("code=consumer-backlog"))
+        .stdout(predicate::str::contains("backlog_events=26"))
+        .stderr(predicate::str::contains("ALERT YELLOW"));
 }
 
 #[test]
