@@ -28,25 +28,169 @@
 
 下表以 [automation-implementation-plan.md](/Users/mac-mini/wiki-migration/wiki-mempalace/docs/automation-implementation-plan.md) 为基线，对当前代码状态做一次真实对照。
 
-| 模块 | 计划目标 | 当前状态 | 当前证据 | batch-2 要补什么 |
-| --- | --- | --- | --- | --- |
-| M1 调度编排层 | 统一自动化任务入口、任务顺序、dry-run、失败短路 | **部分完成** | 已有 `automation run-daily`、固定 job 顺序、dry-run、失败即停 | 补 named jobs / 健康检查 job、把调度面从“单一 daily 命令”提升到“可扩展任务集” |
-| M2 运行状态与心跳 | 持久化任务运行状态、最近成功/失败、心跳 | **部分完成** | `wiki_automation_run` 已落库，CLI 已接入 run state | 补长任务心跳策略、静默超时规则、运行状态读取的更稳定出口 |
-| M3 告警与运维出口 | 失败告警、状态聚合、last failures、health | **部分完成** | 已有 `automation status` / `automation doctor` | 补阈值判定、last-failures、最小告警出口、人工介入指引 |
-| M4 Outbox 闭环增强 | 事件矩阵、消费闭环、消费健康、backlog | **部分完成** | claim replay / scope filter / consumer progress / backlog 已有 | 补事件矩阵、非 mempalace 事件的消费策略、端到端闭环测试 |
-| M5 恢复与回滚 | 备份、恢复、重建、演练、恢复成功检查 | **部分完成** | 已有 `recovery-runbook.md` 与 `recovery-drill.sh` | 补恢复成功检查命令、真实演练记录、`palace.db` 重建验证 |
-| M6 Gap 工作流 | 发现知识缺口、产出报告或草稿 | **未开始** | 无 `gap` 命令、无 gap 规则集合 | 全量实现 |
-| M7 Fixer 工作流 | 把 lint finding 转成 fix actions | **未开始** | 无 `fix` 命令、无 fix action 模型 | 全量实现 |
-| M8 消费链产品化 | 统一 qa / synthesis / crystallize / query-write-page | **未开始（仅有零散基础能力）** | 现有 `query --write-page`、`crystallize`、entry_type/status 零散逻辑 | 抽成统一消费入口和统一 page 契约 |
-| M9 查询融合增强 | 把 mempalace 候选更自然接入 wiki query | **未开始（仅有桥接基础件）** | 有 `MempalaceSearchPorts` / `live_ranker`，但 `wiki query` 仍以 in-memory 路为主 | 全量实现 |
+
+| 模块             | 计划目标                                               | 当前状态              | 当前证据                                                                     | batch-2 要补什么                      |
+| -------------- | -------------------------------------------------- | ----------------- | ------------------------------------------------------------------------ | --------------------------------- |
+| M1 调度编排层       | 统一自动化任务入口、任务顺序、dry-run、失败短路                        | **✅ 已完成**         | `list-jobs`、`run <job>`、完整 job registry、5 jobs、灵活 vault 默认路径             | 无                                 |
+| M2 运行状态与心跳     | 持久化任务运行状态、最近成功/失败、心跳                               | **✅ 已完成**         | `AutomationHeartbeat` 长任务心跳刷新、`status`/`doctor` 命令                       | 阈值可考虑提为配置（低优先级）                   |
+| M3 告警与运维出口     | 失败告警、状态聚合、last failures、health                     | **✅ 已完成**         | `health`（green/yellow/red）、`last-failures`、阈值判定、stderr 告警出口              | 无                                 |
+| M4 Outbox 闭环增强 | 事件矩阵、消费闭环、消费健康、backlog                             | **大部分完成**         | `--palace` 启用 `LiveMempalaceSink` 写入 palace.db、consumer progress/ack 闭环  | 事件矩阵文档待产出、非 mempalace 事件策略待明确     |
+| M5 恢复与回滚       | 备份、恢复、重建、演练、恢复成功检查                                 | **部分完成**          | 已有 `recovery-runbook.md` 与 `recovery-drill.sh`                           | 补恢复成功检查命令、真实演练记录、`palace.db` 重建验证 |
+| M6 Gap 工作流     | 发现知识缺口、产出报告或草稿                                     | **未开始**           | 无 `gap` 命令、无 gap 规则集合                                                    | 全量实现                              |
+| M7 Fixer 工作流   | 把 lint finding 转成 fix actions                      | **未开始**           | 无 `fix` 命令、无 fix action 模型                                               | 全量实现                              |
+| M8 消费链产品化      | 统一 qa / synthesis / crystallize / query-write-page | **未开始（仅有零散基础能力）** | 现有 `query --write-page`、`crystallize`、entry_type/status 零散逻辑             | 抽成统一消费入口和统一 page 契约               |
+| M9 查询融合增强      | 把 mempalace 候选更自然接入 wiki query                     | **未开始（仅有桥接基础件）**  | 有 `MempalaceSearchPorts` / `live_ranker`，但 `wiki query` 仍以 in-memory 路为主 | 全量实现                              |
+
 
 ### 当前结论
 
-- **P0 不是空白**，但仍然是“最小可用闭环”，还没有收成“稳定自动化中枢”
+- **P0 已基本收口**（J1/J2/J3 核心功能已完成，J4 仅余演练模板）
 - **P1 还没有正式启动**
-- batch-2 的本质不是“继续加功能”，而是：
-  - 先把 P0 从“能跑”补成“稳定可运维”
-  - 再把 P1 从“计划文本”落到“可执行工作流”
+- 下一步重心：收尾 J4，启动 P1（J5-J8）
+
+---
+
+## J1–J8 细分进度（2026-04-23 代码审计）
+
+> 以下进度基于代码实际状态，而非文档或计划描述。每项交付物标注 ✅ 已完成 / ⚠️ 部分完成 / ❌ 未完成。
+
+### J1. 调度完成版 — 完成度 100%
+
+
+| 交付物                       | 状态  | 证据                                                                                                                                              |
+| ------------------------- | --- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| `automation list-jobs`    | ✅   | `AutomationCmd::ListJobs`，输出格式 `- {name} daily=… requires_network=… :: {desc}`                                                                  |
+| `automation run <job>`    | ✅   | `AutomationCmd::Run { job }`，clap value_enum 校验，未知 job 报错                                                                                       |
+| 完整 job registry           | ✅   | `AUTOMATION_JOB_SPECS`：batch-ingest / lint / maintenance / consume-to-mempalace / llm-smoke，每个含 `in_daily` / `requires_network` / `description` |
+| llm-smoke 健康检查 job        | ✅   | `in_daily: false, requires_network: true`，dispatch 调用 `smoke_chat_completion`                                                                   |
+| restore success check job | ❌   | 未实现为 automation job（J4 范围）                                                                                                                      |
+| job 帮助文案                  | ✅   | `Cmd::Automation` 有顶层 `/// Run, inspect, and monitor scheduled automation jobs.`；各子命令均有 `///` 注释                                                                                                      |
+| 单元测试                      | ✅   | job 列表顺序稳定、unknown job 报错、`run <job>` 只跑目标（lint/maintenance 有覆盖）、run-daily 顺序                                                                   |
+| 集成测试                      | ✅   | lint / maintenance / consume-to-mempalace / batch-ingest 均有 `run <job>` 集成测试；llm-smoke 依赖外部 LLM endpoint，CI 跳过                                                       |
+
+
+**遗留**：restore success check job（属 J4 范围）；llm-smoke 集成测试（需外部 LLM endpoint）。
+
+### J2. 运维健康与告警完成版 — 完成度 100%
+
+
+| 交付物                        | 状态  | 证据                                                                                         |
+| -------------------------- | --- | ------------------------------------------------------------------------------------------ |
+| `automation health`        | ✅   | green/yellow/red 三级，`collect_automation_health_report` + `render_automation_health_report` |
+| `automation last-failures` | ✅   | `--limit` 参数，调 `repo.list_recent_failed_automation_runs`                                   |
+| `automation doctor`        | ✅   | per-job 最新运行 + outbox + consumer 状态                                                        |
+| `automation status`        | ✅   | per-job 最新运行摘要                                                                             |
+| 阈值判定：stale heartbeat       | ✅   | `classify_stale_heartbeat`，yellow 6h / red 24h                                             |
+| 阈值判定：consecutive failures  | ✅   | `classify_consecutive_failures`，yellow 2 / red 3                                           |
+| 阈值判定：outbox backlog        | ✅   | `classify_backlog`，yellow 25 / red 100                                                     |
+| stderr 彩色告警                | ✅   | `emit_automation_health_alert`，ANSI `\x1b[33m` / `\x1b[31m`                                |
+| 非零退出                       | ✅   | Red → `exit(1)`；Yellow + `--exit-on-yellow` → `exit(1)`；Yellow 默认 exit 0                                                   |
+| 本地摘要文件                     | ✅   | `--summary-file` 参数，`std::fs::write`                                                       |
+| 长任务心跳刷新                    | ✅   | `AutomationHeartbeat` 结构体 + `tick()` 方法                                                    |
+| 单元测试                       | ✅   | stale/consecutive/backlog 阈值分类、health report 渲染                                            |
+| 阈值可配置                      | ✅   | `WIKI_HEALTH_*` 环境变量覆盖 6 个阈值，未设置时 fallback 到硬编码默认值；`env_or<T>` 辅助函数                                      |
+
+
+**遗留**：无。
+
+### J3. Outbox 事件矩阵与闭环完成版 — 完成度 55%
+
+
+| 交付物                       | 状态  | 证据                                                                                                                                                                            |
+| ------------------------- | --- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| consume-to-mempalace 消费闭环 | ✅   | `--palace` 启用 `LiveMempalaceSink`，否则 `CliMempalaceSink`（日志）                                                                                                                   |
+| consumer progress / ack   | ✅   | `mark_outbox_processed` + `get_outbox_consumer_progress`                                                                                                                      |
+| outbox backlog 统计         | ✅   | `get_outbox_stats` + backlog 计算                                                                                                                                               |
+| WikiEvent 变体清单            | ✅   | 11 个变体：SourceIngested / ClaimUpserted / ClaimSuperseded / PageWritten / QueryServed / SessionCrystallized / GraphExpanded / LintRunFinished / PageStatusChanged / PageDeleted |
+| Bridge 消费覆盖               | ⚠️  | **仅消费 3 类**：ClaimUpserted / ClaimSuperseded / SourceIngested；其余 8 类 `_ => {}` 静默丢弃                                                                                            |
+| 事件矩阵文档                    | ❌   | 无专用文档；相关信息分散在 architecture.md / outbox-and-consumers.md                                                                                                                       |
+| 未消费事件策略                   | ❌   | 未文档化哪些事件无消费者及原因                                                                                                                                                               |
+| 端到端闭环测试                   | ⚠️  | bridge 有 NDJSON 单元测试（合成数据）；CLI 有 automation 集成测试（append_outbox）；无 ingest→outbox→consume→palace.db 全链路测试                                                                       |
+| consumer lag 验收用例         | ⚠️  | wiki-storage 有 backlog 单元测试；缺 CLI 级 lag 验收场景                                                                                                                                  |
+
+
+**遗留**：事件矩阵文档（关键）；8 类事件的消费决策文档化；全链路 E2E 测试。
+
+### J4. 恢复验证与恢复成功检查 — 完成度 40%
+
+
+| 交付物                         | 状态  | 证据                                                         |
+| --------------------------- | --- | ---------------------------------------------------------- |
+| `recovery-runbook.md`       | ✅   | wiki.db / palace.db / vault 恢复顺序、integrity_check、outbox 重建 |
+| `scripts/recovery-drill.sh` | ✅   | scratch 恢复 + integrity_check + vault 结构校验                  |
+| CI `bash -n`                | ✅   | `ci-quick.yml` 含 `bash -n scripts/recovery-drill.sh`       |
+| 恢复成功检查命令                    | ❌   | 无 `verify-restore` 命令或 `restore-check.sh`                  |
+| palace.db 重建验证              | ⚠️  | runbook 有指引但 drill 脚本仅打印命令，未实际执行 + 断言                      |
+| 演练记录模板                      | ❌   | 无独立模板                                                      |
+| 演练行为测试                      | ❌   | 仅 `bash -n` 语法检查，无 "识别不完整 db / 缺目录" 的自动化测试                 |
+
+
+**遗留**：恢复成功检查命令/脚本；palace.db 重建验证脚本化；演练记录模板；行为级测试。
+
+### J5. Gap 工作流 — 完成度 0%
+
+
+| 交付物                                                 | 状态  | 证据  |
+| --------------------------------------------------- | --- | --- |
+| `wiki-cli gap` 命令                                   | ❌   | 无   |
+| `GapFinding` 结构                                     | ❌   | 无   |
+| gap 规则（missing_xref / low_coverage / orphan_source） | ❌   | 无   |
+| markdown 报告                                         | ❌   | 无   |
+
+
+### J6. Fixer 工作流 — 完成度 0%
+
+
+| 交付物                     | 状态  | 证据  |
+| ----------------------- | --- | --- |
+| `wiki-cli fix` 命令       | ❌   | 无   |
+| `FixAction` 模型          | ❌   | 无   |
+| finding → fix action 映射 | ❌   | 无   |
+| 低风险自动修复集合               | ❌   | 无   |
+
+
+### J7. 消费链产品化 — 完成度 20%
+
+
+| 交付物                         | 状态  | 证据                                                                        |
+| --------------------------- | --- | ------------------------------------------------------------------------- |
+| `query --write-page`        | ✅   | `Query` 子命令含 `--write-page` + `--entry-type`                              |
+| `crystallize`               | ✅   | `Crystallize` 子命令含 `--entry-type` + `--finding`                           |
+| `EntryType` / `EntryStatus` | ✅   | `schema.rs`：Concept/Principle/…/Index；Draft/InReview/Approved/NeedsUpdate |
+| 统一消费入口                      | ❌   | query-write-page 和 crystallize 仍为独立路径，无统一入口                               |
+| 统一 page contract            | ❌   | 无 `PageContract` 类型或统一产物契约                                                |
+| qa / synthesis 命令           | ❌   | 无独立 qa / synthesis 子命令                                                    |
+| frontmatter 统一审计            | ⚠️  | 有 vault-standards.md 但代码中各入口的 frontmatter 生成逻辑分散                          |
+
+
+### J8. 查询融合增强 — 完成度 10%
+
+
+| 交付物                        | 状态  | 证据                                                             |
+| -------------------------- | --- | -------------------------------------------------------------- |
+| `MempalaceSearchPorts`     | ✅   | `live_search.rs` 有实现                                           |
+| `LiveMempalaceGraphRanker` | ✅   | `live_ranker.rs` 有实现                                           |
+| wiki query 接入 mempalace 候选 | ❌   | CLI query 主路径仍用 `InMemorySearchPorts`，未调用 bridge 的 live search |
+| explain 输出                 | ❌   | 无                                                              |
+| scope 过滤 / 去重              | ⚠️  | `LiveMempalaceSink` 有 `scope_filter`；query 侧未接入                |
+
+
+---
+
+## 总进度汇总
+
+
+| Job          | 完成度     | 阶段  | 状态                          |
+| ------------ | ------- | --- | --------------------------- |
+| J1 调度完成版     | **100%** | P0  | ✅ 已完成                        |
+| J2 运维健康与告警   | **100%** | P0  | ✅ 已完成                        |
+| J3 Outbox 闭环 | **55%** | P0  | ⚠️ 消费通路通，文档和覆盖缺             |
+| J4 恢复验证      | **40%** | P0  | ⚠️ 有 runbook+drill，缺检查命令和模板 |
+| J5 Gap 工作流   | **0%**  | P1  | ❌ 未开始                       |
+| J6 Fixer 工作流 | **0%**  | P1  | ❌ 未开始                       |
+| J7 消费链产品化    | **20%** | P1  | ⚠️ 零散能力在，统一契约缺              |
+| J8 查询融合增强    | **10%** | P1  | ⚠️ 桥接基础件在，query 未接入         |
+
 
 ---
 
@@ -57,6 +201,8 @@ flowchart LR
     A["收口 P0"] --> B["启动并完成 P1"]
     B --> C["形成真正的自动化维护闭环"]
 ```
+
+
 
 batch-2 完成后，系统应满足：
 
@@ -87,6 +233,8 @@ flowchart TD
     J5 --> J6
     J7 --> J6
 ```
+
+
 
 ---
 
@@ -803,3 +951,4 @@ flowchart TD
 - 同一轮不要让两个 Agent 同时大改 `crates/wiki-cli/src/main.rs`
 - 所有跨模块接口，先写接口文档或结构体定义，再放开调用方开发
 - 每完成一个模块，就立刻回填进度到批次计划文档
+

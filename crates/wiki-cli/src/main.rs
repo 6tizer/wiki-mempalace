@@ -12,7 +12,8 @@ use wiki_kernel::{
     write_projection, InMemorySearchPorts, InMemoryStore, LlmWikiEngine, NoopWikiHook, SearchPorts,
 };
 use wiki_mempalace_bridge::{
-    consume_outbox_ndjson_with_resolver, MempalaceError, MempalaceWikiSink, OutboxResolver,
+    consume_outbox_ndjson_with_resolver, LiveMempalaceSink, MempalaceError, MempalaceWikiSink,
+    OutboxResolver,
 };
 use wiki_storage::{
     AutomationJobFailureSummary, AutomationRunRecord, AutomationRunStatus, OutboxConsumerProgress,
@@ -51,6 +52,9 @@ struct Cli {
     /// 每行一个 `entity:` / `claim:` / `page:` doc id，与内核图路按轮次合并后作为 RRF 第三路。
     #[arg(long)]
     graph_extras_file: Option<PathBuf>,
+    /// palace.db 路径（启用后 consume-to-mempalace 写入真实 palace 数据库）。
+    #[arg(long)]
+    palace: Option<PathBuf>,
     #[command(subcommand)]
     cmd: Cmd,
 }
@@ -159,8 +163,6 @@ enum Cmd {
     Mcp {
         #[arg(long, default_value_t = false)]
         once: bool,
-        #[arg(long)]
-        palace: Option<String>,
     },
     /// Validate a DomainSchema JSON file and print summary.
     SchemaValidate {
@@ -171,9 +173,9 @@ enum Cmd {
     Maintenance,
     /// 批量编译 vault 中 compiled_to_wiki: false 的 source 文件（调用 LLM 抽取后写入引擎）
     BatchIngest {
-        /// vault 根目录（含 sources/）
-        #[arg(long, default_value = "/Users/mac-mini/Documents/wiki")]
-        vault: PathBuf,
+        /// vault 根目录（含 sources/）；默认取 $WIKI_VAULT_DIR 或 ~/Documents/wiki
+        #[arg(long)]
+        vault: Option<PathBuf>,
         /// 限制处理条数（用于测试）
         #[arg(long)]
         limit: Option<usize>,
@@ -184,6 +186,7 @@ enum Cmd {
         #[arg(long, default_value_t = 1)]
         delay_secs: u64,
     },
+    /// Run, inspect, and monitor scheduled automation jobs.
     Automation {
         #[command(subcommand)]
         cmd: AutomationCmd,
@@ -226,6 +229,9 @@ enum AutomationCmd {
         /// Optional local summary file path for operators / cron hooks.
         #[arg(long)]
         summary_file: Option<PathBuf>,
+        /// Exit with code 1 on Yellow or Red (useful for CI / cron alerting).
+        #[arg(long, default_value_t = false)]
+        exit_on_yellow: bool,
     },
 }
 
@@ -318,14 +324,21 @@ struct AutomationHealthReport {
     failures: Vec<AutomationJobFailureSummary>,
 }
 
+fn env_or<T: std::str::FromStr>(key: &str, default: T) -> T {
+    std::env::var(key)
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(default)
+}
+
 fn automation_health_thresholds() -> AutomationHealthThresholds {
     AutomationHealthThresholds {
-        stale_heartbeat_yellow: Duration::hours(6),
-        stale_heartbeat_red: Duration::hours(24),
-        consecutive_failures_yellow: 2,
-        consecutive_failures_red: 3,
-        backlog_yellow: 25,
-        backlog_red: 100,
+        stale_heartbeat_yellow: Duration::hours(env_or("WIKI_HEALTH_STALE_YELLOW_HOURS", 6)),
+        stale_heartbeat_red: Duration::hours(env_or("WIKI_HEALTH_STALE_RED_HOURS", 24)),
+        consecutive_failures_yellow: env_or("WIKI_HEALTH_FAIL_YELLOW", 2),
+        consecutive_failures_red: env_or("WIKI_HEALTH_FAIL_RED", 3),
+        backlog_yellow: env_or("WIKI_HEALTH_BACKLOG_YELLOW", 25),
+        backlog_red: env_or("WIKI_HEALTH_BACKLOG_RED", 100),
     }
 }
 
@@ -744,18 +757,42 @@ fn emit_automation_health_alert(level: AutomationHealthLevel) {
     }
 }
 
+struct AutomationHeartbeat<'a> {
+    repo: &'a SqliteRepository,
+    run_id: Option<i64>,
+}
+
+impl AutomationHeartbeat<'_> {
+    fn noop(repo: &SqliteRepository) -> AutomationHeartbeat<'_> {
+        AutomationHeartbeat {
+            repo,
+            run_id: None,
+        }
+    }
+
+    fn tick(&self) {
+        if let Some(id) = self.run_id {
+            let _ = self.repo.refresh_automation_heartbeat(id);
+        }
+    }
+}
+
 fn run_automation_job<F>(
     repo: &SqliteRepository,
     job: AutomationJob,
     run: F,
 ) -> Result<(), Box<dyn std::error::Error>>
 where
-    F: FnOnce() -> Result<(), Box<dyn std::error::Error>>,
+    F: FnOnce(&AutomationHeartbeat<'_>) -> Result<(), Box<dyn std::error::Error>>,
 {
     let job_name = automation_job_name(job);
     let run_id = repo.start_automation_run(job_name)?;
     repo.refresh_automation_heartbeat(run_id)?;
-    match run() {
+    let hb = AutomationHeartbeat {
+        repo,
+        run_id: Some(run_id),
+    };
+    match run(&hb) {
         Ok(()) => {
             repo.mark_automation_run_succeeded(run_id)?;
             Ok(())
@@ -1169,7 +1206,7 @@ fn run_with_engine(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             consumer_tag,
         } => {
             let (consumed, start_id, acked) =
-                run_consume_to_mempalace_job(&eng, &repo, &consumer_tag, last_id)?;
+                run_consume_to_mempalace_job(&eng, &repo, &consumer_tag, last_id, cli.palace.as_deref())?;
             println!(
                 "consumed={consumed} start_id={start_id} acked={acked} consumer_tag={consumer_tag}"
             );
@@ -1179,7 +1216,7 @@ fn run_with_engine(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             let out = llm::smoke_chat_completion(&cfg, &prompt)?;
             println!("{out}");
         }
-        Cmd::Mcp { once, palace } => {
+        Cmd::Mcp { once } => {
             mcp::run_mcp(
                 &cli.db,
                 schema,
@@ -1188,7 +1225,10 @@ fn run_with_engine(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                 &cli.llm_config,
                 cli.vectors,
                 wiki_root.as_deref(),
-                palace.as_deref(),
+                cli.palace
+                    .as_ref()
+                    .map(|p| p.to_string_lossy().into_owned())
+                    .as_deref(),
             )?;
         }
         Cmd::Maintenance => {
@@ -1200,11 +1240,12 @@ fn run_with_engine(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             dry_run,
             delay_secs,
         } => {
+            let vault_dir = vault.clone().unwrap_or_else(default_vault_path);
             batch_ingest_cmd(
                 &mut eng,
                 &repo,
                 &cli,
-                &vault,
+                &vault_dir,
                 limit,
                 dry_run,
                 delay_secs,
@@ -1274,6 +1315,7 @@ fn run_with_engine(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                 AutomationCmd::Health {
                     consumer_tag,
                     summary_file,
+                    exit_on_yellow,
                 },
         } => {
             let report = collect_automation_health_report(
@@ -1289,7 +1331,12 @@ fn run_with_engine(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                 println!("summary_file={}", path.display());
             }
             emit_automation_health_alert(report.level);
-            if report.level == AutomationHealthLevel::Red {
+            let should_exit = match report.level {
+                AutomationHealthLevel::Red => true,
+                AutomationHealthLevel::Yellow => exit_on_yellow,
+                AutomationHealthLevel::Green => false,
+            };
+            if should_exit {
                 std::process::exit(1);
             }
         }
@@ -1642,6 +1689,38 @@ mod tests {
         assert!(rendered.contains("job=lint consecutive_failures=3"));
         assert!(rendered.contains("manual_action=investigate_and_fix_before_next_daily_run"));
     }
+
+    #[test]
+    fn env_vars_override_health_thresholds() {
+        // Use unique env-var values that differ from every default so the test
+        // is unambiguous even if run in parallel with other tests.
+        std::env::set_var("WIKI_HEALTH_BACKLOG_YELLOW", "7");
+        std::env::set_var("WIKI_HEALTH_BACKLOG_RED", "14");
+        std::env::set_var("WIKI_HEALTH_FAIL_YELLOW", "5");
+        std::env::set_var("WIKI_HEALTH_FAIL_RED", "10");
+        std::env::set_var("WIKI_HEALTH_STALE_YELLOW_HOURS", "3");
+        std::env::set_var("WIKI_HEALTH_STALE_RED_HOURS", "9");
+
+        let t = automation_health_thresholds();
+        assert_eq!(t.backlog_yellow, 7);
+        assert_eq!(t.backlog_red, 14);
+        assert_eq!(t.consecutive_failures_yellow, 5);
+        assert_eq!(t.consecutive_failures_red, 10);
+        assert_eq!(t.stale_heartbeat_yellow, Duration::hours(3));
+        assert_eq!(t.stale_heartbeat_red, Duration::hours(9));
+
+        // Restore defaults so other tests in the same process are not affected.
+        for key in &[
+            "WIKI_HEALTH_BACKLOG_YELLOW",
+            "WIKI_HEALTH_BACKLOG_RED",
+            "WIKI_HEALTH_FAIL_YELLOW",
+            "WIKI_HEALTH_FAIL_RED",
+            "WIKI_HEALTH_STALE_YELLOW_HOURS",
+            "WIKI_HEALTH_STALE_RED_HOURS",
+        ] {
+            std::env::remove_var(key);
+        }
+    }
 }
 
 fn maybe_sync_projection(
@@ -1723,6 +1802,7 @@ fn run_consume_to_mempalace_job(
     repo: &SqliteRepository,
     consumer_tag: &str,
     last_id: i64,
+    palace_path: Option<&std::path::Path>,
 ) -> Result<(usize, i64, usize), Box<dyn std::error::Error>> {
     let progress = repo.get_outbox_consumer_progress(consumer_tag)?;
     let start_id = effective_consume_start_id(&progress, last_id);
@@ -1737,7 +1817,12 @@ fn run_consume_to_mempalace_job(
     }
 
     let resolver = EngineResolver { store: &eng.store };
-    let n = consume_outbox_ndjson_with_resolver(&CliMempalaceSink, &resolver, &ndjson)?;
+    let n = if let Some(pp) = palace_path {
+        let live = LiveMempalaceSink::open(pp, "wiki")?;
+        consume_outbox_ndjson_with_resolver(&live, &resolver, &ndjson)?
+    } else {
+        consume_outbox_ndjson_with_resolver(&CliMempalaceSink, &resolver, &ndjson)?
+    };
     let acked = repo.mark_outbox_processed(stats.head_id, consumer_tag)?;
     Ok((n, start_id, acked))
 }
@@ -1757,7 +1842,7 @@ fn dispatch_automation_job(
             let vault = cli
                 .wiki_dir
                 .clone()
-                .unwrap_or_else(|| PathBuf::from("/Users/mac-mini/Documents/wiki"));
+                .unwrap_or_else(default_vault_path);
             batch_ingest_cmd(
                 eng, repo, cli, &vault, None, false, 1, sync_wiki, wiki_root, schema,
             )
@@ -1765,7 +1850,7 @@ fn dispatch_automation_job(
         AutomationJob::Lint => run_lint_job(eng, repo, viewer, sync_wiki, wiki_root),
         AutomationJob::Maintenance => run_maintenance_job(eng, repo, viewer, sync_wiki, wiki_root),
         AutomationJob::ConsumeToMempalace => {
-            run_consume_to_mempalace_job(eng, repo, DEFAULT_MEMPALACE_CONSUMER_TAG, 0).map(|_| ())
+            run_consume_to_mempalace_job(eng, repo, DEFAULT_MEMPALACE_CONSUMER_TAG, 0, cli.palace.as_deref()).map(|_| ())
         }
         AutomationJob::LlmSmoke => {
             let cfg = llm::load_llm_config(&cli.llm_config)?;
@@ -1795,7 +1880,7 @@ fn run_single_automation_job<W: Write>(
         if spec.requires_network { "yes" } else { "no" },
         if spec.in_daily { "yes" } else { "no" }
     )?;
-    run_automation_job(repo, job, || {
+    run_automation_job(repo, job, |_hb| {
         dispatch_automation_job(job, cli, eng, repo, viewer, sync_wiki, wiki_root, schema)
     })?;
     let latest = latest_automation_run_or_error(repo, job)?;
@@ -1820,7 +1905,7 @@ fn run_daily_automation(
     let jobs = automation_run_daily_jobs();
     let mut stdout = std::io::stdout().lock();
     run_automation_plan(&jobs, false, &mut stdout, |job| {
-        run_automation_job(repo, job, || {
+        run_automation_job(repo, job, |_hb| {
             dispatch_automation_job(job, cli, eng, repo, viewer, sync_wiki, wiki_root, schema)
         })
     })
@@ -2262,6 +2347,14 @@ fn write_batch_summary(
 }
 
 /// batch-ingest 子命令入口
+fn default_vault_path() -> PathBuf {
+    if let Ok(v) = std::env::var("WIKI_VAULT_DIR") {
+        return PathBuf::from(v);
+    }
+    let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
+    PathBuf::from(home).join("Documents").join("wiki")
+}
+
 fn batch_ingest_cmd(
     eng: &mut LlmWikiEngine<NoopWikiHook>,
     repo: &SqliteRepository,
@@ -2293,6 +2386,11 @@ fn batch_ingest_cmd(
                 s.body.len()
             );
         }
+        return Ok(());
+    }
+
+    if sources.is_empty() {
+        eprintln!("  → nothing to compile, done.");
         return Ok(());
     }
 
