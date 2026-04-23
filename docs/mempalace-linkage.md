@@ -57,7 +57,8 @@ cargo run -p wiki-cli -- --db wiki.db ack-outbox --up-to-id 999 --consumer-tag m
 
 1. `wiki-cli` ingest → `wiki-kernel` 写入 sources / claims / pages → flush outbox
 2. bridge live sink（或外部 consumer）按 outbox 顺序处理 `ClaimUpserted` /
-  `ClaimSuperseded` / `SourceIngested`
+  `ClaimSuperseded` / `SourceIngested`；其中 `ClaimUpserted` 先还原完整 claim 并走
+  `on_claim_upserted`，只有无 resolver 或悬挂事件时才兼容回退到 `on_claim_event`
 3. 在 mempalace 侧写 `drawers` / `kg_facts`，必要时执行 `kg_invalidate`
 4. 读侧查询继续由各自系统负责，`MempalaceSearchPorts` 把 mempalace 的候选注入 RRF
 
