@@ -40,9 +40,16 @@ cargo run -p wiki-cli -- --db wiki.db export-outbox-ndjson-from --last-id 0 > ev
 cargo run -p wiki-cli -- --db wiki.db ack-outbox --up-to-id 999 --consumer-tag my-consumer
 ```
 
-事件格式：每行一个 JSON 对象，`type` 字段区分类型（`source_ingested` /
-`claim_upserted` / `claim_superseded` / `page_written` / `query_served` /
-`session_crystallized` / `graph_expanded` / `lint_run_finished`）。
+事件格式：每行一个 JSON 对象，`type` 字段区分类型。完整事件集合、生产者与消费策略见
+[docs/outbox-event-matrix.md](outbox-event-matrix.md)。
+
+当前 mempalace 正式消费的只有 3 类事件：
+
+- `source_ingested`
+- `claim_upserted`
+- `claim_superseded`
+
+其余事件会继续保留在 outbox 中，bridge 只做 `ignored` 统计，不派发到 mempalace。
 
 ## 4) 字段映射建议（Claim → kg_facts）
 
@@ -59,8 +66,9 @@ cargo run -p wiki-cli -- --db wiki.db ack-outbox --up-to-id 999 --consumer-tag m
 2. bridge live sink（或外部 consumer）按 outbox 顺序处理 `ClaimUpserted` /
   `ClaimSuperseded` / `SourceIngested`；其中 `ClaimUpserted` 先还原完整 claim 并走
   `on_claim_upserted`，只有无 resolver 或悬挂事件时才兼容回退到 `on_claim_event`
-3. 在 mempalace 侧写 `drawers` / `kg_facts`，必要时执行 `kg_invalidate`
-4. 读侧查询继续由各自系统负责，`MempalaceSearchPorts` 把 mempalace 的候选注入 RRF
+3. 非 mempalace 消费事件继续保留在 outbox，中间层只把它们计为 `ignored`
+4. 在 mempalace 侧写 `drawers` / `kg_facts`，必要时执行 `kg_invalidate`
+5. 读侧查询继续由各自系统负责，`MempalaceSearchPorts` 把 mempalace 的候选注入 RRF
 
 ## 6) 未来收敛方向（Phase 6）
 

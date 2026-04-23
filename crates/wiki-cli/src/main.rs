@@ -12,8 +12,8 @@ use wiki_kernel::{
     write_projection, InMemorySearchPorts, InMemoryStore, LlmWikiEngine, NoopWikiHook, SearchPorts,
 };
 use wiki_mempalace_bridge::{
-    consume_outbox_ndjson_with_resolver, LiveMempalaceSink, MempalaceError, MempalaceWikiSink,
-    OutboxResolver,
+    consume_outbox_ndjson_with_resolver_and_stats, LiveMempalaceSink, MempalaceError,
+    MempalaceWikiSink, OutboxDispatchStats, OutboxResolver,
 };
 use wiki_storage::{
     AutomationJobFailureSummary, AutomationRunRecord, AutomationRunStatus, OutboxConsumerProgress,
@@ -1198,7 +1198,7 @@ fn run_with_engine(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             last_id,
             consumer_tag,
         } => {
-            let (consumed, start_id, acked) = run_consume_to_mempalace_job(
+            let (dispatch, start_id, acked) = run_consume_to_mempalace_job(
                 &eng,
                 &repo,
                 &consumer_tag,
@@ -1206,7 +1206,12 @@ fn run_with_engine(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                 cli.palace.as_deref(),
             )?;
             println!(
-                "consumed={consumed} start_id={start_id} acked={acked} consumer_tag={consumer_tag}"
+                "seen={} dispatched={} ignored={} filtered={} unresolved={} start_id={start_id} acked={acked} consumer_tag={consumer_tag}",
+                dispatch.lines_seen,
+                dispatch.dispatched,
+                dispatch.ignored,
+                dispatch.filtered,
+                dispatch.unresolved,
             );
         }
         Cmd::LlmSmoke { config, prompt } => {
@@ -1806,28 +1811,28 @@ fn run_consume_to_mempalace_job(
     consumer_tag: &str,
     last_id: i64,
     palace_path: Option<&std::path::Path>,
-) -> Result<(usize, i64, usize), Box<dyn std::error::Error>> {
+) -> Result<(OutboxDispatchStats, i64, usize), Box<dyn std::error::Error>> {
     let progress = repo.get_outbox_consumer_progress(consumer_tag)?;
     let start_id = effective_consume_start_id(&progress, last_id);
     let stats = repo.get_outbox_stats()?;
     if start_id >= stats.head_id {
-        return Ok((0, start_id, 0));
+        return Ok((OutboxDispatchStats::default(), start_id, 0));
     }
 
     let ndjson = repo.export_outbox_ndjson_from_id(start_id)?;
     if ndjson.is_empty() {
-        return Ok((0, start_id, 0));
+        return Ok((OutboxDispatchStats::default(), start_id, 0));
     }
 
     let resolver = EngineResolver { store: &eng.store };
-    let n = if let Some(pp) = palace_path {
+    let dispatch = if let Some(pp) = palace_path {
         let live = LiveMempalaceSink::open(pp, "wiki")?;
-        consume_outbox_ndjson_with_resolver(&live, &resolver, &ndjson)?
+        consume_outbox_ndjson_with_resolver_and_stats(&live, &resolver, &ndjson)?
     } else {
-        consume_outbox_ndjson_with_resolver(&CliMempalaceSink, &resolver, &ndjson)?
+        consume_outbox_ndjson_with_resolver_and_stats(&CliMempalaceSink, &resolver, &ndjson)?
     };
     let acked = repo.mark_outbox_processed(stats.head_id, consumer_tag)?;
-    Ok((n, start_id, acked))
+    Ok((dispatch, start_id, acked))
 }
 
 fn dispatch_automation_job(

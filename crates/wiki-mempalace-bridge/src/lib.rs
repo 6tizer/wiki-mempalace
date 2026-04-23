@@ -26,6 +26,7 @@ pub use live_tools::LiveMempalaceTools;
 mod tools;
 pub use tools::{make_tools, MempalaceTools, NoopMempalaceTools};
 
+use std::collections::BTreeMap;
 use wiki_core::WikiEvent;
 use wiki_core::{Claim, ClaimId, Scope, SourceId};
 
@@ -97,6 +98,71 @@ impl MempalaceGraphRanker for NoopMempalaceGraphRanker {
     }
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct OutboxEventDispatchStats {
+    pub seen: usize,
+    pub dispatched: usize,
+    pub filtered: usize,
+    pub ignored: usize,
+    pub unresolved: usize,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct OutboxDispatchStats {
+    pub lines_seen: usize,
+    pub dispatched: usize,
+    pub filtered: usize,
+    pub ignored: usize,
+    pub unresolved: usize,
+    pub by_event: BTreeMap<String, OutboxEventDispatchStats>,
+}
+
+impl OutboxDispatchStats {
+    fn event_mut(&mut self, event_name: &str) -> &mut OutboxEventDispatchStats {
+        self.by_event.entry(event_name.to_string()).or_default()
+    }
+
+    fn record_seen(&mut self, event_name: &str) {
+        self.lines_seen += 1;
+        self.event_mut(event_name).seen += 1;
+    }
+
+    fn record_dispatched(&mut self, event_name: &str) {
+        self.dispatched += 1;
+        self.event_mut(event_name).dispatched += 1;
+    }
+
+    fn record_filtered(&mut self, event_name: &str) {
+        self.filtered += 1;
+        self.event_mut(event_name).filtered += 1;
+    }
+
+    fn record_ignored(&mut self, event_name: &str) {
+        self.ignored += 1;
+        self.event_mut(event_name).ignored += 1;
+    }
+
+    fn record_unresolved(&mut self, event_name: &str) {
+        self.unresolved += 1;
+        self.event_mut(event_name).unresolved += 1;
+    }
+}
+
+fn wiki_event_name(event: &WikiEvent) -> &'static str {
+    match event {
+        WikiEvent::SourceIngested { .. } => "SourceIngested",
+        WikiEvent::ClaimUpserted { .. } => "ClaimUpserted",
+        WikiEvent::ClaimSuperseded { .. } => "ClaimSuperseded",
+        WikiEvent::PageWritten { .. } => "PageWritten",
+        WikiEvent::QueryServed { .. } => "QueryServed",
+        WikiEvent::SessionCrystallized { .. } => "SessionCrystallized",
+        WikiEvent::GraphExpanded { .. } => "GraphExpanded",
+        WikiEvent::LintRunFinished { .. } => "LintRunFinished",
+        WikiEvent::PageStatusChanged { .. } => "PageStatusChanged",
+        WikiEvent::PageDeleted { .. } => "PageDeleted",
+    }
+}
+
 /// 从 id 反解回 `Claim` / 源 scope 的 resolver；由外部（通常是 wiki-storage 快照）注入。
 ///
 /// `consume_outbox_ndjson_with_resolver` 会用它把"仅带 id"的 outbox 事件还原成完整载荷，
@@ -119,6 +185,13 @@ pub fn consume_outbox_ndjson<S: MempalaceWikiSink>(
     sink: &S,
     ndjson: &str,
 ) -> Result<usize, MempalaceError> {
+    Ok(consume_outbox_ndjson_with_stats(sink, ndjson)?.dispatched)
+}
+
+pub fn consume_outbox_ndjson_with_stats<S: MempalaceWikiSink>(
+    sink: &S,
+    ndjson: &str,
+) -> Result<OutboxDispatchStats, MempalaceError> {
     consume_outbox_ndjson_impl::<S, NoResolver>(sink, ndjson, None)
 }
 
@@ -139,6 +212,18 @@ where
     S: MempalaceWikiSink,
     R: OutboxResolver,
 {
+    Ok(consume_outbox_ndjson_with_resolver_and_stats(sink, resolver, ndjson)?.dispatched)
+}
+
+pub fn consume_outbox_ndjson_with_resolver_and_stats<S, R>(
+    sink: &S,
+    resolver: &R,
+    ndjson: &str,
+) -> Result<OutboxDispatchStats, MempalaceError>
+where
+    S: MempalaceWikiSink,
+    R: OutboxResolver,
+{
     consume_outbox_ndjson_impl(sink, ndjson, Some(resolver))
 }
 
@@ -146,33 +231,38 @@ fn consume_outbox_ndjson_impl<S, R>(
     sink: &S,
     ndjson: &str,
     resolver: Option<&R>,
-) -> Result<usize, MempalaceError>
+) -> Result<OutboxDispatchStats, MempalaceError>
 where
     S: MempalaceWikiSink,
     R: OutboxResolver,
 {
-    let mut count = 0usize;
+    let mut stats = OutboxDispatchStats::default();
     for line in ndjson.lines().map(str::trim).filter(|l| !l.is_empty()) {
         let event: WikiEvent = serde_json::from_str(line)
             .map_err(|e| MempalaceError::Backend(format!("invalid event json: {e}")))?;
+        let event_name = wiki_event_name(&event);
+        stats.record_seen(event_name);
         match event {
             WikiEvent::ClaimUpserted { claim_id, .. } => match resolver {
                 Some(r) => match r.claim(claim_id) {
                     Some(claim) => {
                         if sink.scope_filter(&claim.scope) {
                             sink.on_claim_upserted(&claim)?;
-                            count += 1;
+                            stats.record_dispatched(event_name);
+                        } else {
+                            stats.record_filtered(event_name);
                         }
                     }
                     None => {
                         // 悬挂事件：claim 已被 GC 或 snapshot 落后；保持旧行为调用 on_claim_event
                         // 但不 count，避免 "consumed=N" 统计失真。
                         sink.on_claim_event(claim_id)?;
+                        stats.record_unresolved(event_name);
                     }
                 },
                 None => {
                     sink.on_claim_event(claim_id)?;
-                    count += 1;
+                    stats.record_dispatched(event_name);
                 }
             },
             WikiEvent::ClaimSuperseded { old, new, .. } => {
@@ -182,7 +272,9 @@ where
                 };
                 if allow {
                     sink.on_claim_superseded(old, new)?;
-                    count += 1;
+                    stats.record_dispatched(event_name);
+                } else {
+                    stats.record_filtered(event_name);
                 }
             }
             WikiEvent::SourceIngested { source_id, .. } => {
@@ -192,13 +284,15 @@ where
                 };
                 if allow {
                     sink.on_source_ingested(source_id)?;
-                    count += 1;
+                    stats.record_dispatched(event_name);
+                } else {
+                    stats.record_filtered(event_name);
                 }
             }
-            _ => {}
+            _ => stats.record_ignored(event_name),
         }
     }
-    Ok(count)
+    Ok(stats)
 }
 
 /// 用于 `consume_outbox_ndjson` 的占位 resolver（永远返回 None）。
@@ -217,6 +311,7 @@ mod tests {
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
+    use std::{fs, path::PathBuf};
     use wiki_core::WikiEvent;
 
     #[derive(Clone, Default)]
@@ -284,6 +379,14 @@ mod tests {
         assert_eq!(n, 2);
         assert_eq!(sink.upserted.load(Ordering::SeqCst), 1);
         assert_eq!(sink.superseded.load(Ordering::SeqCst), 1);
+
+        let stats = consume_outbox_ndjson_with_stats(&sink, &lines).unwrap();
+        assert_eq!(stats.lines_seen, 2);
+        assert_eq!(stats.dispatched, 2);
+        assert_eq!(stats.ignored, 0);
+        assert_eq!(stats.unresolved, 0);
+        assert_eq!(stats.by_event["ClaimUpserted"].dispatched, 1);
+        assert_eq!(stats.by_event["ClaimSuperseded"].dispatched, 1);
     }
 
     #[derive(Default)]
@@ -382,6 +485,16 @@ mod tests {
         assert_eq!(n, 1, "仅 bob 的 claim 应被派发");
         let got = sink.upserted_ids.lock().unwrap().clone();
         assert_eq!(got, vec![b]);
+
+        let stats =
+            consume_outbox_ndjson_with_resolver_and_stats(&sink, &resolver, &lines).unwrap();
+        assert_eq!(stats.lines_seen, 2);
+        assert_eq!(stats.dispatched, 1);
+        assert_eq!(stats.filtered, 1);
+        assert_eq!(stats.unresolved, 0);
+        assert_eq!(stats.by_event["ClaimUpserted"].seen, 2);
+        assert_eq!(stats.by_event["ClaimUpserted"].dispatched, 1);
+        assert_eq!(stats.by_event["ClaimUpserted"].filtered, 1);
     }
 
     #[test]
@@ -401,5 +514,83 @@ mod tests {
         let n = consume_outbox_ndjson(&sink, &line).unwrap();
         assert_eq!(n, 1);
         assert_eq!(sink.sources.load(Ordering::SeqCst), 1);
+
+        let stats = consume_outbox_ndjson_with_stats(&sink, &line).unwrap();
+        assert_eq!(stats.lines_seen, 1);
+        assert_eq!(stats.dispatched, 1);
+        assert_eq!(stats.by_event["SourceIngested"].dispatched, 1);
+    }
+
+    #[test]
+    fn stats_mark_unresolved_and_ignored_events() {
+        let sink = CountingSink::default();
+        let missing_claim = ClaimId(uuid::Uuid::new_v4());
+        let lines = [
+            serde_json::to_string(&WikiEvent::ClaimUpserted {
+                claim_id: missing_claim,
+                at: time::OffsetDateTime::now_utc(),
+            })
+            .unwrap(),
+            serde_json::to_string(&WikiEvent::QueryServed {
+                query_fingerprint: "q".into(),
+                top_doc_ids: vec!["claim:1".into()],
+                at: time::OffsetDateTime::now_utc(),
+            })
+            .unwrap(),
+            serde_json::to_string(&WikiEvent::LintRunFinished {
+                findings: 2,
+                at: time::OffsetDateTime::now_utc(),
+            })
+            .unwrap(),
+        ]
+        .join("\n");
+
+        let resolver = InMemResolver::default();
+        let stats =
+            consume_outbox_ndjson_with_resolver_and_stats(&sink, &resolver, &lines).unwrap();
+        assert_eq!(stats.lines_seen, 3);
+        assert_eq!(stats.dispatched, 0);
+        assert_eq!(stats.unresolved, 1);
+        assert_eq!(stats.ignored, 2);
+        assert_eq!(sink.upserted.load(Ordering::SeqCst), 1);
+        assert_eq!(stats.by_event["ClaimUpserted"].unresolved, 1);
+        assert_eq!(stats.by_event["QueryServed"].ignored, 1);
+        assert_eq!(stats.by_event["LintRunFinished"].ignored, 1);
+    }
+
+    #[test]
+    fn event_matrix_doc_stays_in_sync_with_wiki_event_variants() {
+        let workspace_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let event_source =
+            fs::read_to_string(workspace_root.join("crates/wiki-core/src/events.rs")).unwrap();
+        let documented =
+            fs::read_to_string(workspace_root.join("docs/outbox-event-matrix.md")).unwrap();
+
+        let actual_events: Vec<String> = event_source
+            .lines()
+            .map(str::trim)
+            .filter(|line| line.ends_with('{') && !line.starts_with("pub enum"))
+            .map(|line| line.trim_end_matches('{').trim().to_string())
+            .filter(|line| !line.is_empty())
+            .collect();
+
+        let documented_events: Vec<String> = documented
+            .lines()
+            .filter_map(|line| {
+                let trimmed = line.trim();
+                if !trimmed.starts_with("| `") {
+                    return None;
+                }
+                trimmed.split('`').nth(1).map(|s| s.to_string())
+            })
+            .collect();
+
+        assert_eq!(documented_events, actual_events);
+        assert!(documented.contains("| `PageWritten` |"));
+        assert!(
+            documented.contains("| `PageWritten` | defined-not-emitted |")
+                || documented.contains("`PageWritten`")
+        );
+        assert!(documented.contains("| `GraphExpanded` |"));
     }
 }

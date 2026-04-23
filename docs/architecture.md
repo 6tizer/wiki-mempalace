@@ -90,7 +90,8 @@ bridge::consume_outbox_ndjson
     逐行反序列化 WikiEvent，按事件类型分发：
       ├─ ClaimUpserted   → sink.on_claim_upserted（无 resolver/悬挂事件时才回退 on_claim_event）
       ├─ ClaimSuperseded → sink.on_claim_superseded
-      └─ SourceIngested  → sink.on_source_ingested
+      ├─ SourceIngested  → sink.on_source_ingested
+      └─ 其他 WikiEvent  → retained in outbox + bridge 统计为 ignored
                 │
                 ▼
 LiveMempalaceSink (live feature)
@@ -173,6 +174,11 @@ WikiPage::new → engine.file_page → store.pages → write_projection
 
 
 映射细节见 [docs/mempalace-linkage.md](mempalace-linkage.md)。
+
+完整 outbox 事件矩阵、生产者和当前消费策略见
+[docs/outbox-event-matrix.md](outbox-event-matrix.md)。当前 mempalace 只正式消费
+`SourceIngested`、`ClaimUpserted`、`ClaimSuperseded`，其他事件仍写入 outbox，但 bridge
+不会派发到 mempalace。
 
 ---
 
