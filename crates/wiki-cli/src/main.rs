@@ -1400,6 +1400,83 @@ fn run_with_engine(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             } else {
                 None
             };
+
+            println!("\n查询: \"{}\"", query);
+
+            // wiki 各路结果
+            let wiki_ports = InMemorySearchPorts::new(&eng.store, Some(viewer.clone()));
+            let wiki_bm25 = SearchPorts::bm25_ranked_ids(&wiki_ports, &query, per_stream_limit);
+            let wiki_vector = vec_override.clone().unwrap_or_else(|| {
+                SearchPorts::vector_ranked_ids(&wiki_ports, &query, per_stream_limit)
+            });
+            let wiki_graph = graph_override.clone().unwrap_or_else(|| {
+                SearchPorts::graph_ranked_ids(&wiki_ports, &query, per_stream_limit)
+            });
+
+            // mempalace 各路结果
+            let mut mp_bm25: Vec<String> = Vec::new();
+            let mut mp_vector: Vec<String> = Vec::new();
+            let mut mp_graph: Vec<String> = Vec::new();
+            let mut has_mp = false;
+            if let Some(ref pdb) = palace_db {
+                match MempalaceSearchPorts::open(Path::new(pdb), Some(palace_bank.to_string())) {
+                    Ok(mp_ports) => {
+                        mp_bm25 = SearchPorts::bm25_ranked_ids(&mp_ports, &query, per_stream_limit);
+                        mp_vector =
+                            SearchPorts::vector_ranked_ids(&mp_ports, &query, per_stream_limit);
+                        mp_graph =
+                            SearchPorts::graph_ranked_ids(&mp_ports, &query, per_stream_limit);
+                        has_mp = true;
+                    }
+                    Err(e) => {
+                        eprintln!(
+                            "警告：无法打开 mempalace DB ({}): {}，跳过 mempalace 各路展示",
+                            pdb, e
+                        );
+                    }
+                }
+            }
+
+            let print_stream = |name: &str, ids: &[String]| {
+                println!("{} ({}):", name, ids.len());
+                for (i, id) in ids.iter().enumerate() {
+                    println!("  #{} {}", i + 1, id);
+                }
+            };
+
+            println!("\n=== BM25 路 ===");
+            print_stream("wiki", &wiki_bm25);
+            if has_mp {
+                print_stream("mempalace", &mp_bm25);
+            }
+
+            println!("\n=== Vector 路 ===");
+            if vec_override.is_some() {
+                println!("wiki (override) ({}):", wiki_vector.len());
+                for (i, id) in wiki_vector.iter().enumerate() {
+                    println!("  #{} {}", i + 1, id);
+                }
+            } else {
+                print_stream("wiki", &wiki_vector);
+            }
+            if has_mp {
+                print_stream("mempalace", &mp_vector);
+            }
+
+            println!("\n=== Graph 路 ===");
+            if graph_override.is_some() {
+                println!("wiki (override) ({}):", wiki_graph.len());
+                for (i, id) in wiki_graph.iter().enumerate() {
+                    println!("  #{} {}", i + 1, id);
+                }
+            } else {
+                print_stream("wiki", &wiki_graph);
+            }
+            if has_mp {
+                print_stream("mempalace", &mp_graph);
+            }
+
+            println!("\n=== RRF 融合结果 ===");
             let ranked = run_fusion_query(
                 palace_db.as_deref(),
                 &palace_bank,
@@ -1410,8 +1487,8 @@ fn run_with_engine(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                 vec_override,
                 graph_override,
             );
-            for (id, score) in ranked.into_iter().take(20) {
-                println!("{score:.6}\t{id}");
+            for (i, (id, score)) in ranked.into_iter().take(20).enumerate() {
+                println!("#{}: {:.6}  {}", i + 1, score, id);
             }
         }
         Cmd::Lint => {
