@@ -4,10 +4,10 @@ use std::path::{Path, PathBuf};
 use time::{format_description::well_known::Rfc3339, Duration, OffsetDateTime};
 use walkdir::WalkDir;
 use wiki_core::{
-    document_visible_to_viewer, parse_memory_tier, ClaimId, CompositeSearchPorts, Confidence, DomainSchema, Entity,
-    EntityId, EntityKind, EntryStatus, EntryType, FixAction, FixActionType, FixPatch, GapFinding,
-    GapSeverity, LlmIngestPlanV1, MemoryTier, PageContract, PageId, QueryContext, RelationKind,
-    Scope, SessionCrystallizationInput, SourceId, TypedEdge, WikiPage,
+    document_visible_to_viewer, parse_memory_tier, ClaimId, CompositeSearchPorts, Confidence,
+    DomainSchema, Entity, EntityId, EntityKind, EntryStatus, EntryType, FixAction, FixActionType,
+    FixPatch, GapFinding, GapSeverity, LlmIngestPlanV1, MemoryTier, PageContract, PageId,
+    QueryContext, RelationKind, Scope, SessionCrystallizationInput, SourceId, TypedEdge, WikiPage,
 };
 use wiki_kernel::{
     finalize_consumed_page, format_claim_doc_id, initial_status_for, map_findings_to_fixes,
@@ -3171,7 +3171,6 @@ fn read_graph_extras_lines(path: &PathBuf) -> Result<Vec<String>, Box<dyn std::e
         .map(|l| l.to_string())
         .collect())
 }
-
 
 fn timestamp_slug() -> String {
     let now = OffsetDateTime::now_utc();

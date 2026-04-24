@@ -507,13 +507,7 @@ impl<H: WikiHook> LlmWikiEngine<H> {
         graph_rank_override: Option<Vec<String>>,
     ) -> Vec<(String, f64)> {
         let ports = crate::InMemorySearchPorts::new(&self.store, ctx.viewer_scope.clone());
-        self.query_ranked_with_ports(
-            ctx,
-            now,
-            &ports,
-            vector_rank_override,
-            graph_rank_override,
-        )
+        self.query_ranked_with_ports(ctx, now, &ports, vector_rank_override, graph_rank_override)
     }
 
     /// 使用自定义 SearchPorts 做三路召回。
@@ -1886,9 +1880,10 @@ mod tests {
         assert_eq!(ranked[0].0, "doc:a");
         assert_eq!(ranked[1].0, "doc:b");
         // 应产生 QueryServed 事件
-        let has_event = eng.outbox.iter().any(|ev| {
-            matches!(ev, wiki_core::WikiEvent::QueryServed { .. })
-        });
+        let has_event = eng
+            .outbox
+            .iter()
+            .any(|ev| matches!(ev, wiki_core::WikiEvent::QueryServed { .. }));
         assert!(has_event, "应发出 QueryServed 事件");
     }
 
