@@ -307,7 +307,7 @@ mod tests {
     }
 
     #[test]
-    fn 归一化_url_保留微信__biz_大小写() {
+    fn 归一化_url_保留微信_biz_大小写() {
         let input = "https://mp.weixin.qq.com/s?__biz=MzU&mid=1";
         assert_eq!(normalize_url(input), input);
     }

@@ -233,10 +233,8 @@ fn slugify(title: &str) -> String {
     let mut out = String::with_capacity(title.len());
     let mut last_sep = true;
     for c in title.chars() {
-        if c.is_ascii_alphanumeric() || (!c.is_ascii() && !c.is_control()) {
-            out.push(c);
-            last_sep = false;
-        } else if matches!(c, '-' | '_') {
+        if c.is_ascii_alphanumeric() || (!c.is_ascii() && !c.is_control()) || matches!(c, '-' | '_')
+        {
             out.push(c);
             last_sep = false;
         } else {
@@ -384,7 +382,7 @@ fn render_page(
     // 标签：从 `标签` 字段解析（逗号分隔）
     if let Some(tags) = get_property(p, "标签") {
         let parts: Vec<&str> = tags
-            .split(|c| c == ',' || c == '，')
+            .split([',', '，'])
             .map(|s| s.trim())
             .filter(|s| !s.is_empty())
             .collect();
@@ -553,9 +551,7 @@ fn rewrite_body(
 
 fn host_of(url: &str) -> Option<String> {
     let after = url.split_once("://")?.1;
-    let end = after
-        .find(|c: char| c == '/' || c == '?' || c == '#')
-        .unwrap_or(after.len());
+    let end = after.find(['/', '?', '#']).unwrap_or(after.len());
     Some(after[..end].to_ascii_lowercase())
 }
 

@@ -360,7 +360,7 @@ mod tests {
         let a = ClaimId(uuid::Uuid::new_v4());
         let b = ClaimId(uuid::Uuid::new_v4());
 
-        let lines = vec![
+        let lines = [
             serde_json::to_string(&WikiEvent::ClaimUpserted {
                 claim_id: a,
                 at: time::OffsetDateTime::now_utc(),

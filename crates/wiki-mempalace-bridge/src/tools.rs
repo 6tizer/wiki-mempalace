@@ -13,6 +13,7 @@ use crate::MempalaceError;
 /// 所有方法返回 `Result<Value, MempalaceError>`，JSON 结构与重构前完全一致。
 pub trait MempalaceTools: Send + Sync {
     fn status(&self) -> Result<Value, MempalaceError>;
+    #[allow(clippy::too_many_arguments)]
     fn search(
         &self,
         query: &str,

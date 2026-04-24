@@ -1,3 +1,5 @@
+#![allow(clippy::too_many_arguments)]
+
 use assert_cmd::Command;
 use predicates::prelude::*;
 use rusqlite::params;
@@ -749,6 +751,62 @@ fn consume_to_mempalace_dispatches_active_events_from_cli_flow() {
 
     let progress_after = repo.get_outbox_consumer_progress("mempalace").unwrap();
     assert_eq!(progress_after.acked_up_to_id, Some(3));
+}
+
+#[test]
+fn consume_to_mempalace_live_palace_uses_viewer_scope_bank_and_acks() {
+    let db = tempfile::NamedTempFile::new().unwrap();
+    let db_path = db.path().to_owned();
+    let palace = tempfile::NamedTempFile::new().unwrap();
+    let palace_path = palace.path().to_owned();
+    let repo = SqliteRepository::open(&db_path).unwrap();
+
+    wiki_cli()
+        .arg("--db")
+        .arg(&db_path)
+        .arg("file-claim")
+        .arg("scope bank claim")
+        .arg("--scope")
+        .arg("private:cli")
+        .assert()
+        .success();
+
+    wiki_cli()
+        .arg("--db")
+        .arg(&db_path)
+        .arg("--viewer-scope")
+        .arg("private:cli")
+        .arg("--palace")
+        .arg(&palace_path)
+        .arg("consume-to-mempalace")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("seen=1"))
+        .stdout(predicate::str::contains("dispatched=1"))
+        .stdout(predicate::str::contains("acked=1"))
+        .stdout(predicate::str::contains("consumer_tag=mempalace"));
+
+    let conn = rusqlite::Connection::open(&palace_path).unwrap();
+    let cli_rows: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM drawers WHERE bank_id = 'cli' AND content LIKE '%scope bank claim%'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let wiki_rows: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM drawers WHERE bank_id = 'wiki'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(cli_rows, 1);
+    assert_eq!(wiki_rows, 0);
+
+    let progress_after = repo.get_outbox_consumer_progress("mempalace").unwrap();
+    assert_eq!(progress_after.acked_up_to_id, Some(1));
+    assert_eq!(progress_after.backlog_events, 0);
 }
 
 #[test]

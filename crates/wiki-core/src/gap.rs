@@ -3,6 +3,7 @@
 //! Gap 与 Lint Finding 语义不同：
 //! - Lint finding 表示"已有内容有质量问题"（坏了）
 //! - Gap finding 表示"应该有但缺失的内容"（缺了）
+//!
 //! 两者独立建模，后续 Fixer（J6）需要区分处理。
 
 use serde::{Deserialize, Serialize};

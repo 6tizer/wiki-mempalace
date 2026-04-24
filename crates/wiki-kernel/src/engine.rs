@@ -507,11 +507,23 @@ impl<H: WikiHook> LlmWikiEngine<H> {
         graph_rank_override: Option<Vec<String>>,
     ) -> Vec<(String, f64)> {
         let ports = crate::InMemorySearchPorts::new(&self.store, ctx.viewer_scope.clone());
+        self.query_ranked_with_ports(ctx, now, &ports, vector_rank_override, graph_rank_override)
+    }
+
+    /// 使用自定义 SearchPorts 做三路召回。
+    pub fn query_ranked_with_ports(
+        &self,
+        ctx: &QueryContext<'_>,
+        now: OffsetDateTime,
+        ports: &dyn SearchPorts,
+        vector_rank_override: Option<Vec<String>>,
+        graph_rank_override: Option<Vec<String>>,
+    ) -> Vec<(String, f64)> {
         query_ranked_with_ports(
             &self.schema,
             &self.store,
             ctx,
-            &ports,
+            ports,
             now,
             vector_rank_override,
             graph_rank_override,
@@ -533,22 +545,20 @@ impl<H: WikiHook> LlmWikiEngine<H> {
         ranked
     }
 
-    /// 与 [`query_ranked_with_ports`] 相同，但接收外部实现的检索端口。
-    pub fn query_pipeline_with_ports<P: SearchPorts>(
+    /// 使用自定义 SearchPorts 的完整 query pipeline。
+    pub fn query_pipeline_with_ports(
         &mut self,
         ctx: &QueryContext<'_>,
-        ports: &P,
         now: OffsetDateTime,
         actor: &str,
+        ports: &dyn SearchPorts,
         vector_rank_override: Option<Vec<String>>,
         graph_rank_override: Option<Vec<String>>,
     ) -> Vec<(String, f64)> {
-        let ranked = query_ranked_with_ports(
-            &self.schema,
-            &self.store,
+        let ranked = self.query_ranked_with_ports(
             ctx,
-            ports,
             now,
+            ports,
             vector_rank_override,
             graph_rank_override,
         );
@@ -839,11 +849,11 @@ impl<H: WikiHook> LlmWikiEngine<H> {
 }
 
 /// 自由函数：三路召回 + RRF + 保留强度（不写审计），避免 `SearchPorts` 与 `&mut self` 交错借用。
-pub fn query_ranked_with_ports<P: SearchPorts>(
+pub fn query_ranked_with_ports(
     schema: &DomainSchema,
     store: &InMemoryStore,
     ctx: &QueryContext<'_>,
-    ports: &P,
+    ports: &dyn SearchPorts,
     now: OffsetDateTime,
     vector_rank_override: Option<Vec<String>>,
     graph_rank_override: Option<Vec<String>>,
@@ -1821,5 +1831,81 @@ mod tests {
             matches!(result, Err(PromotePageError::NoPromotion { .. })),
             "无规则时应返回 NoPromotion，got: {result:?}"
         );
+    }
+
+    // --- 自定义 SearchPorts 测试 ---
+
+    struct FixedPorts(Vec<String>);
+
+    impl wiki_core::SearchPorts for FixedPorts {
+        fn bm25_ranked_ids(&self, _query: &str, _limit: usize) -> Vec<String> {
+            self.0.clone()
+        }
+        fn vector_ranked_ids(&self, _query: &str, _limit: usize) -> Vec<String> {
+            self.0.clone()
+        }
+        fn graph_ranked_ids(&self, _query: &str, _limit: usize) -> Vec<String> {
+            self.0.clone()
+        }
+    }
+
+    #[test]
+    fn query_with_custom_ports_uses_provided_ports() {
+        let eng = LlmWikiEngine::new(DomainSchema::permissive_default());
+        let ports = FixedPorts(vec!["claim:fixed-1".into(), "page:fixed-2".into()]);
+        let ctx = QueryContext::new("anything")
+            .with_per_stream_limit(20)
+            .with_viewer_scope(Scope::Private {
+                agent_id: "a".into(),
+            });
+        let now = OffsetDateTime::now_utc();
+        let ranked = eng.query_ranked_with_ports(&ctx, now, &ports, None, None);
+        assert!(!ranked.is_empty());
+        assert_eq!(ranked[0].0, "claim:fixed-1");
+    }
+
+    /// query_pipeline_with_ports 使用自定义 SearchPorts 并产生 QueryServed 事件。
+    #[test]
+    fn query_pipeline_with_ports_works_with_custom_ports() {
+        let mut eng = LlmWikiEngine::new(DomainSchema::permissive_default());
+        let ports = FixedPorts(vec!["doc:a".into(), "doc:b".into()]);
+        let ctx = QueryContext::new("test")
+            .with_per_stream_limit(20)
+            .with_viewer_scope(Scope::Private {
+                agent_id: "a".into(),
+            });
+        let now = OffsetDateTime::now_utc();
+        let ranked = eng.query_pipeline_with_ports(&ctx, now, "actor", &ports, None, None);
+        assert_eq!(ranked.len(), 2);
+        assert_eq!(ranked[0].0, "doc:a");
+        assert_eq!(ranked[1].0, "doc:b");
+        // 应产生 QueryServed 事件
+        let has_event = eng
+            .outbox
+            .iter()
+            .any(|ev| matches!(ev, wiki_core::WikiEvent::QueryServed { .. }));
+        assert!(has_event, "应发出 QueryServed 事件");
+    }
+
+    #[test]
+    fn query_pipeline_memory_backward_compatible() {
+        let mut eng = LlmWikiEngine::new(DomainSchema::permissive_default());
+        eng.file_claim(
+            "Redis caching for API",
+            Scope::Private {
+                agent_id: "a".into(),
+            },
+            MemoryTier::Semantic,
+            "t",
+        );
+        let ctx = QueryContext::new("Redis API")
+            .with_per_stream_limit(20)
+            .with_viewer_scope(Scope::Private {
+                agent_id: "a".into(),
+            });
+        let now = OffsetDateTime::now_utc();
+        let ranked = eng.query_pipeline_memory(&ctx, now, "t", None, None);
+        assert!(!ranked.is_empty());
+        assert!(ranked[0].0.starts_with("claim:"));
     }
 }

@@ -1,8 +1,9 @@
 use crate::InMemoryStore;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::fs;
 use std::io;
 use std::path::Path;
+use uuid::Uuid;
 use wiki_core::{AuditRecord, Claim, LintFinding, LintSeverity, RawArtifact, Scope, WikiPage};
 
 #[derive(Debug, Default, Clone, Copy)]
@@ -19,6 +20,7 @@ pub fn write_projection(
 ) -> io::Result<ProjectionStats> {
     let pages_dir = wiki_root.join("pages");
     fs::create_dir_all(&pages_dir)?;
+    cleanup_stale_managed_pages(&pages_dir, store)?;
 
     let mut stats = ProjectionStats::default();
     let mut page_rows = Vec::new();
@@ -57,6 +59,62 @@ pub fn write_projection(
     )?;
     fs::write(wiki_root.join("log.md"), render_log(audits))?;
     Ok(stats)
+}
+
+fn cleanup_stale_managed_pages(pages_dir: &Path, store: &InMemoryStore) -> io::Result<()> {
+    let current_page_ids: HashSet<Uuid> = store.pages.keys().map(|id| id.0).collect();
+    for path in markdown_files_under(pages_dir)? {
+        let content = match fs::read_to_string(&path) {
+            Ok(content) => content,
+            Err(err) if err.kind() == io::ErrorKind::InvalidData => continue,
+            Err(err) => return Err(err),
+        };
+        let Some(id) = managed_frontmatter_page_id(&content) else {
+            continue;
+        };
+        if !current_page_ids.contains(&id) {
+            fs::remove_file(path)?;
+        }
+    }
+    Ok(())
+}
+
+fn markdown_files_under(root: &Path) -> io::Result<Vec<std::path::PathBuf>> {
+    let mut out = Vec::new();
+    if !root.exists() {
+        return Ok(out);
+    }
+    collect_markdown_files(root, &mut out)?;
+    Ok(out)
+}
+
+fn collect_markdown_files(dir: &Path, out: &mut Vec<std::path::PathBuf>) -> io::Result<()> {
+    for entry in fs::read_dir(dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        let ft = entry.file_type()?;
+        if ft.is_dir() {
+            collect_markdown_files(&path, out)?;
+        } else if ft.is_file() && path.extension().is_some_and(|ext| ext == "md") {
+            out.push(path);
+        }
+    }
+    Ok(())
+}
+
+fn managed_frontmatter_page_id(content: &str) -> Option<Uuid> {
+    let rest = content.strip_prefix("---\n")?;
+    let end = rest.find("\n---")?;
+    let frontmatter = &rest[..end];
+    for line in frontmatter.lines() {
+        let trimmed = line.trim();
+        let Some(raw_id) = trimmed.strip_prefix("id:") else {
+            continue;
+        };
+        let raw_id = raw_id.trim().trim_matches('"').trim_matches('\'');
+        return Uuid::parse_str(raw_id).ok();
+    }
+    None
 }
 
 pub fn write_lint_report(
@@ -265,7 +323,7 @@ fn render_index(pages: &[String], claims: &[String], sources: &[String]) -> Stri
 fn render_log(audits: &[AuditRecord]) -> String {
     let mut lines = String::from("# log\n\n");
     let mut rows: Vec<_> = audits.iter().collect();
-    rows.sort_by(|a, b| a.at.cmp(&b.at));
+    rows.sort_by_key(|a| a.at);
     for a in rows {
         lines.push_str(&format!(
             "## [{}] {:?} | {}\n- actor: `{}`\n- summary: {}\n\n",
@@ -395,6 +453,46 @@ mod tests {
             .join("concept")
             .join("概念页.md")
             .exists());
+    }
+
+    #[test]
+    fn projection_removes_stale_managed_page_and_preserves_unmanaged() {
+        let dir = tempdir().unwrap();
+        let wiki_root = dir.path();
+        let pages_dir = wiki_root.join("pages").join("concept");
+        std::fs::create_dir_all(&pages_dir).unwrap();
+
+        let stale_id = uuid::Uuid::new_v4();
+        let stale = pages_dir.join("stale.md");
+        std::fs::write(
+            &stale,
+            format!(
+                "---\nid: \"{}\"\ntitle: \"Stale\"\n---\n\n# stale\n",
+                stale_id
+            ),
+        )
+        .unwrap();
+
+        let unmanaged = pages_dir.join("unmanaged.md");
+        std::fs::write(&unmanaged, "# unmanaged\n").unwrap();
+
+        let invalid_id = pages_dir.join("invalid-id.md");
+        std::fs::write(&invalid_id, "---\nid: \"not-a-uuid\"\n---\n\n# invalid\n").unwrap();
+
+        let mut store = InMemoryStore::default();
+        let page =
+            WikiPage::new("Current", "body", private_scope()).with_entry_type(EntryType::Concept);
+        store.pages.insert(page.id, page);
+
+        write_projection(wiki_root, &store, &[]).unwrap();
+
+        assert!(!stale.exists(), "stale managed page should be removed");
+        assert!(unmanaged.exists(), "unmanaged markdown should be preserved");
+        assert!(
+            invalid_id.exists(),
+            "markdown with invalid managed id should be preserved"
+        );
+        assert!(pages_dir.join("Current.md").exists());
     }
 
     // --- D1 frontmatter 测试 ---
