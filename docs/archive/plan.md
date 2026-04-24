@@ -1,4 +1,6 @@
-# wiki-mempalace 实施里程碑
+# Archived: wiki-mempalace 实施里程碑
+
+> Archived document. 旧 M1-M7 路线已被当前 [../roadmap.md](../roadmap.md) 取代。本文只保留历史里程碑上下文，不再作为当前事实源。
 
 本文是 `wiki-mempalace` 对齐并超越 Karpathy LLM Wiki 方案的执行版路线图。
 
@@ -94,4 +96,3 @@
 - `www.notion.so/*` 未解析内链处理
 - Memory Palace bridge 接入（mempalace 消费迁移产物）
 - T2 标签治理
-

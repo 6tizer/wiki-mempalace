@@ -1,193 +1,104 @@
 # wiki-mempalace 架构与业务流
 
-本文描述合并后的统一仓库架构，以及 ingest / query / 事件桥接的端到端业务流。
-
----
+本文描述当前统一 workspace 架构，以及 ingest / query / outbox / MCP 的端到端业务流。
 
 ## 1. Crate 依赖拓扑
 
-```
-                     ┌────────────────────────────┐
-                     │        wiki-cli            │
-                     │   binary + MCP server      │
-                     │   （22 tools over stdio）  │
-                     └────────────────────────────┘
-                          │         │         │
-                          ▼         ▼         ▼
-         ┌────────────────┐   ┌────────────┐   ┌──────────────┐
-         │  wiki-kernel   │   │ wiki-memp- │   │rust-mempalace│
-         │                │   │ alace-     │   │   (direct,   │
-         │ LlmWikiEngine  │   │ bridge     │   │   Phase 6 归 │
-         │ hooks / memory │   │ (live)     │   │   bridge)    │
-         │ wiki_writer    │   │            │   │              │
-         │ search_ports   │   └────────────┘   └──────────────┘
-         └────────────────┘        │                   │
-           │         │             │                   │
-           ▼         ▼             ▼                   │
-    ┌───────────┐ ┌────────────┐   │                   │
-    │wiki-core  │ │wiki-storage│   │                   │
-    │ 领域模型  │ │ SQLite     │   │                   │
-    └───────────┘ └────────────┘   │                   │
-                                   └──────┬────────────┘
-                                          │
-                                          ▼
-                             （进程内 rust-mempalace lib 调用）
+```text
+wiki-cli
+  ├─ wiki-kernel
+  │   ├─ wiki-core
+  │   └─ wiki-storage
+  ├─ wiki-mempalace-bridge
+  │   └─ rust-mempalace (live feature)
+  └─ MCP server (22 tools)
 ```
 
-`wiki-cli` 依赖所有其他 crate。`wiki-mempalace-bridge` 的 `live` feature 会把
-`rust-mempalace` 作为进程内 library 调用。`wiki-cli` 当前直接 `use rust_mempalace::service::*` 以实现 10 个 `mempalace_*` MCP 工具——这条旁路在
-Phase 6 会收敛到 bridge。
-
----
+`wiki-cli` 是统一 CLI 与 MCP 入口。wiki 侧能力通过 `wiki-kernel` / `wiki-storage`
+完成；mempalace 侧能力通过 `wiki-mempalace-bridge` 完成。10 个 `mempalace_*`
+MCP 工具通过 `wiki_mempalace_bridge::make_tools` 进入 `MempalaceTools` 抽象，
+不由 `wiki-cli` 直接调用 `rust_mempalace::service`。
 
 ## 2. 数据存储
 
-有两份独立 SQLite：
+| 文件 | 归属 | 用途 |
+| --- | --- | --- |
+| `wiki.db` | `wiki-storage` | snapshots / outbox / embeddings / automation run state |
+| `palace.db` | `rust-mempalace` | drawers / drawer_vectors / kg_facts / tunnels |
 
+两份 SQLite 不共享连接池。`wiki.db` 是主写入中心；`palace.db` 是 outbox 消费后的派生记忆层。
 
-| 文件                          | 归属             | 用途                                            |
-| --------------------------- | -------------- | --------------------------------------------- |
-| `wiki.db`                   | wiki-storage   | snapshots / outbox / embeddings / audits      |
-| `~/.mempalace-rs/palace.db` | rust-mempalace | drawers / drawer_vectors / kg_facts / tunnels |
+## 3. Ingest 与 outbox
 
-
-两个库**不共享连接池**，靠事件桥（outbox NDJSON）保持最终一致。
-
----
-
-## 3. Ingest 业务流
-
-```
-user CLI --------------> Cmd::Ingest (wiki-cli/main.rs)
-                                │
-                                ▼
-                 LlmWikiEngine::ingest_raw
-                    ├─ redact_for_ingest (脱敏)
-                    ├─ RawArtifact 入 InMemoryStore
-                    ├─ emit WikiEvent::SourceIngested  ──▶ hook.on_event
-                    └─ audit 写内存 audit log
-                                │
-                                ▼
-                 engine.save_to_repo(&repo)
-                    InMemoryStore → wiki.db.snapshots
-                                │
-                                ▼
-                 engine.flush_outbox_to_repo_with_policy
-                    WikiEvent → wiki.db.outbox（带 consumer 游标）
-                                │
-                     (可选 --sync-wiki)
-                                ▼
-                 write_projection(wiki_root, store, audits)
-                    → wiki/index.md, pages/**/*.md, log.md
-
-─── 异步消费 ───（consume-to-mempalace --last-id N 或 export-outbox-ndjson）
-
-repo.export_outbox_ndjson_from_id(last)
-    wiki.db.outbox → NDJSON
-                │
-                ▼
-bridge::consume_outbox_ndjson
-    逐行反序列化 WikiEvent，按事件类型分发：
-      ├─ ClaimUpserted   → sink.on_claim_upserted（无 resolver/悬挂事件时才回退 on_claim_event）
-      ├─ ClaimSuperseded → sink.on_claim_superseded
-      ├─ SourceIngested  → sink.on_source_ingested
-      └─ 其他 WikiEvent  → retained in outbox + bridge 统计为 ignored
-                │
-                ▼
-LiveMempalaceSink (live feature)
-    rust_mempalace::db::open(palace_db)
-    insert_drawer（content_hash 去重） → palace.db.drawers
-    service::upsert_vector            → palace.db.drawer_vectors
-    service::kg_add("supersedes")     → palace.db.kg_facts
-    service::kg_invalidate("is_active")
+```text
+CLI ingest / ingest-llm / batch-ingest
+  -> LlmWikiEngine 写 RawArtifact / Claim / WikiPage
+  -> save_to_repo()
+  -> flush_outbox_to_repo_with_policy()
+  -> wiki_outbox
+  -> wiki_outbox_consumer_progress 按 consumer_tag 记录 ack
+  -> 可选 write_projection()
 ```
 
----
+写入类 CLI 子命令会自动保存 snapshot、flush outbox，并在 `--sync-wiki` 开启时写
+Markdown projection。`write_projection` 只维护 `pages/{entry_type}/`、`index.md`、
+`log.md`，并清理带合法 page-id frontmatter 但已不在当前 store 中的 managed page。
 
-## 4. Query 业务流（三路 RRF）
+## 4. mempalace 消费
 
-```
-user query "Redis 缓存"
-        │
-        ▼
-LlmWikiEngine::query_pipeline_memory
-    │
-    ├─ 路 1：BM25 / 词法（InMemoryStore 内文本重叠）
-    │
-    ├─ 路 2：向量余弦（wiki.db.embedding，需 --vectors + [embed]）
-    │
-    └─ 路 3：图召回
-           ├─ 内核自身：walk_entities (wiki-core/graph.rs)
-           └─ MempalaceGraphRanker 追加外部候选
-                    │
-                    ▼
-              LiveMempalaceGraphRanker
-                 rust_mempalace::service::search_with_options
-                     → "mp_drawer:<id>"
-                 rust_mempalace::service::kg_query
-                     → "mp_kg:<subject>:<predicate>"
-        │
-        ▼
-merge_graph_rankings (wiki-kernel/search_ports.rs)
-   三路 doc_id 用 RRF (reciprocal rank fusion) 融合
-        │
-        ▼
-rank_fused_with_retention
-   按 claim.retention_strength 做半衰期衰减加权
-        │
-        ▼
-WikiEvent::QueryServed  (emit outbox)
-        │
-        ▼
-Vec<(doc_id, score)>
-        │
-        ▼ （可选 --write-page）
-WikiPage::new → engine.file_page → store.pages → write_projection
+```text
+consume-to-mempalace
+  -> export_outbox_ndjson_from_id(progress)
+  -> bridge consume_outbox_ndjson_with_resolver_and_stats
+  -> MempalaceWikiSink
+  -> ack wiki_outbox_consumer_progress
 ```
 
----
+当前正式消费到 mempalace 的事件：
 
-## 5. MCP Server 工具清单（22 tools）
+- `SourceIngested`
+- `ClaimUpserted`
+- `ClaimSuperseded`
 
+其他 `WikiEvent` 保留在 outbox 中，bridge 统计为 `ignored`，不派发到 mempalace。
 
-| 前缀            | 工具                                                                                                                                       | 实现路径                                                      |
-| ------------- | ---------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------- |
-| `wiki_*`      | status, ingest, file_claim, supersede_claim, query, promote_claim, crystallize, lint, wake_up, maintenance, export_graph_dot, ingest_llm | 走 `wiki-kernel::LlmWikiEngine`                            |
-| `mempalace_*` | status, search, wake_up, taxonomy, traverse, kg_query, kg_timeline, kg_stats, reflect, extract                                           | 当前直接 `use rust_mempalace::service::*`（Phase 6 归一到 bridge） |
+`consume-to-mempalace --palace <db>` 使用 `LiveMempalaceSink` 写真实 palace。live bank
+由 `--viewer-scope` 派生，例如 `private:cli -> cli`、`shared:team1 -> team1`。
 
+## 5. Query 与融合检索
 
-启动方式：`cargo run -p wiki-cli -- --db wiki.db mcp --palace ~/.mempalace-rs`。
+```text
+query / explain
+  -> run_fusion_query
+  -> 无 --palace-db: InMemorySearchPorts
+  -> 有 --palace-db: CompositeSearchPorts(InMemorySearchPorts, MempalaceSearchPorts)
+  -> query_ranked_with_ports
+  -> RRF + retention 加权
+  -> QueryServed event
+```
 
----
+wiki 内部检索提供 BM25 / vector / graph 三路候选。传入 `--palace-db` 后，
+`MempalaceSearchPorts` 会从 `palace.db` 注入 `mp_drawer:*` / `mp_kg:*` 候选，
+再由 `CompositeSearchPorts` 去重并进入同一套 RRF 排序。
 
-## 6. 数据模型映射（wiki ↔ mempalace）
+`--graph-extras-file` 中的 `claim:` / `page:` / `entity:` / `source:` 会按
+`--viewer-scope` 过滤；`mp_drawer:` / `mp_kg:` 作为外部 mempalace id 保留。
 
+## 6. MCP Server 工具清单
 
-| wiki-core                    | rust-mempalace          | 说明                                     |
-| ---------------------------- | ----------------------- | -------------------------------------- |
-| `RawArtifact`                | `drawers` 行             | 原始资料正文进入 drawer content                |
-| `Claim`                      | `kg_facts`              | `(subject, predicate, object)` SPO 三元组 |
-| `Claim.supersedes` / `stale` | `kg_facts.valid_to`     | 新结论写入后 `kg_invalidate` 旧事实             |
-| `WikiEvent::SourceIngested`  | `mine_path` 入库事件        | 桥接触发 drawer 写入                         |
-| `WikiEvent::ClaimUpserted`   | `drawers` / `drawer_vectors` 写入 | 事件驱动                           |
-| `Entity` / `TypedEdge`       | `kg_query` + `traverse` | 图路召回来源                                 |
+| 前缀 | 工具 | 实现路径 |
+| --- | --- | --- |
+| `wiki_*` | status, ingest, file_claim, supersede_claim, query, promote_claim, crystallize, lint, wake_up, maintenance, export_graph_dot, ingest_llm | `wiki-kernel::LlmWikiEngine` |
+| `mempalace_*` | status, search, wake_up, taxonomy, traverse, kg_query, kg_timeline, kg_stats, reflect, extract | `wiki-mempalace-bridge::MempalaceTools` |
 
+启动方式：
 
-映射细节见 [docs/mempalace-linkage.md](mempalace-linkage.md)。
+```bash
+cargo run -p wiki-cli -- --db wiki.db mcp --palace ~/.mempalace-rs
+```
 
-完整 outbox 事件矩阵、生产者和当前消费策略见
-[docs/outbox-event-matrix.md](outbox-event-matrix.md)。当前 mempalace 只正式消费
-`SourceIngested`、`ClaimUpserted`、`ClaimSuperseded`，其他事件仍写入 outbox，但 bridge
-不会派发到 mempalace。
+## 7. 当前架构债
 
----
-
-## 7. 已知架构债（Phase 6 修复）
-
-1. **旁路依赖**：`wiki-cli/src/mcp.rs` 绕开 `wiki-mempalace-bridge` 直接 `use
-  rust_mempalace::service::`*。应让所有外部依赖收敛到 bridge，
-   未来替换 mempalace 后端改一处即可。
-2. **Edition 版本不齐**：workspace `edition = "2021"`，`rust-mempalace` 独立
-  `edition = "2024"`。等 workspace 整体升 2024 再统一。
-3. **两份 SQLite 最终一致**：依赖 outbox 消费器手动触发。未来可考虑内核 hook 直连
-  bridge live sink，实现准实时一致。
+- workspace `edition = "2021"`，`rust-mempalace` 独立 `edition = "2024"`；整体升级时再统一。
+- `wiki.db` 与 `palace.db` 仍是最终一致；准实时同步可在未来通过内核 hook 直连 bridge live sink。
+- M10-M12 尚未完成：统一指标、运维控制台、策略层增强见 [roadmap.md](roadmap.md)。

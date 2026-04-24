@@ -2,6 +2,8 @@
 
 按用户规范逐步记录每一次有意义的工作。每条记录包括：实现的功能 / 遇到的错误 / 解决方式。
 
+> 历史日志：本文保留执行过程，不作为当前事实入口。当前文档入口见 [docs/README.md](docs/README.md)，当前计划见 [docs/roadmap.md](docs/roadmap.md)。
+
 > 仓库改名：`llm-wiki` → `wiki-mempalace`（2026-04-21 合并）；早期记录保留原名以还原上下文。
 
 ---
@@ -475,7 +477,7 @@ mempalace consume=4 → llm-smoke skip → viewer-scope 隔离验证）。
 
 3. **Obsidian vault 落盘**：产物从 `/tmp/wiki-migrated/` 搬家到 `~/Documents/wiki/`，用户 Obsidian 验证通过
 
-4. **`dogfood-readiness.md` 大更新**：U1–U5 + D1–D4 全标 ✅，附录 B 改为实际目录结构，附录 C 改为已完成迁移记录
+4. **归档的 Dogfood 清单大更新**：U1–U5 + D1–D4 全标 ✅，附录 B 改为实际目录结构，附录 C 改为已完成迁移记录
 
 ### 遇到了哪些错误
 
@@ -678,7 +680,7 @@ source 文件 frontmatter 中写回 `compiled_to_wiki: true`，并支持 dry-run
 
 ### 相关文档与 Git
 
-- 本次将 `README.md`（`batch-ingest` 使用示例）与 `docs/plan.md`（M6 与后续列表）
+- 本次将 `README.md`（`batch-ingest` 使用示例）与 `docs/archive/plan.md`（M6 与后续列表）
   与本条 `Progress` 同步提交。
 
 

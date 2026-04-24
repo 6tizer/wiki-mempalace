@@ -1,39 +1,54 @@
 # Outbox 持久化与消费语义
 
-本文描述 `llm-wiki` 当前最小 outbox 实现与后续演进方向。
+本文描述当前 `wiki.db` outbox、消费者进度和 ack 语义。事件内容见
+[outbox-event-matrix.md](outbox-event-matrix.md)。
 
 ## 当前实现
 
-- 事件类型：`wiki_core::WikiEvent`
-- 运行时缓冲：`wiki_kernel::LlmWikiEngine::outbox`（`Vec<WikiEvent>`）
-- 持久化接口：`wiki_storage::WikiRepository::append_outbox()`
-- SQLite 存储表：`wiki_storage` 中的 `wiki_outbox(id, event_json)`
-- 导出接口：`wiki_storage::WikiRepository::export_outbox_ndjson()`
-- CLI 命令：`wiki-cli export-outbox-ndjson`
+- 事件类型：`wiki_core::WikiEvent`。
+- 运行时缓冲：`wiki_kernel::LlmWikiEngine::outbox`。
+- 持久化接口：`wiki_storage::WikiRepository::append_outbox()`。
+- 事件表：`wiki_outbox(id, event_json, processed_at, consumer_tag)`。
+- 消费者进度表：`wiki_outbox_consumer_progress(consumer_tag, acked_up_to_id, acked_at)`。
+- 导出接口：`export_outbox_ndjson()` / `export_outbox_ndjson_from_id(last_id)`。
+- CLI 命令：`export-outbox-ndjson`、`export-outbox-ndjson-from`、`ack-outbox`、`consume-to-mempalace`。
 
-## 事件写入时机
+## 写入顺序
 
-`LlmWikiEngine` 的 `emit()` 会把事件放入内存 outbox；随后调用方应显式执行：
+写入类 CLI 子命令完成后会自动：
 
-1. `save_to_repo()` 保存快照
-2. `flush_outbox_to_repo()` 逐条写入 `wiki_outbox`
+1. `save_to_repo()` 保存 snapshot。
+2. `flush_outbox_to_repo_with_policy()` 分批写入 outbox。
+3. 若启用 `--sync-wiki`，同步 Markdown projection。
 
-此顺序保证「状态先落地，事件后追记」，并降低消费端读到空状态的概率。
+这个顺序保证主状态先落库，事件后追记，消费端通过 resolver 读取事件关联对象时不会读到空状态。
 
-## 消费模式
+## 消费者进度
 
-目前支持两种消费方式：
+`wiki_outbox_consumer_progress` 是消费者进度真源。每个 `consumer_tag` 独立维护
+`acked_up_to_id`，所以多个消费者可以各自 ack 同一批事件，不会互相阻塞或导致 replay 循环。
 
-- **拉取 ndjson**：定期执行 `wiki-cli export-outbox-ndjson`，将结果传给下游
-- **直接读表**：外部进程读取 `wiki_outbox`（推荐带 offset/last_id）
+`wiki_outbox.processed_at` / `wiki_outbox.consumer_tag` 仍保留作 legacy 观测字段；它们不是多消费者语义的真源。
+
+`mark_outbox_processed(up_to_id, consumer_tag)` 的语义：
+
+- 若该 consumer 第一次 ack，新增 progress 行。
+- 若 `up_to_id` 大于旧 progress，推进到新值。
+- 若 `up_to_id` 小于或等于旧 progress，不回退。
+- 返回值是该 consumer 自己本次新 ack 的事件数。
+
+## mempalace 消费
+
+`consume-to-mempalace --palace <db>` 使用 `LiveMempalaceSink` 写真实 `palace.db`。
+live bank 由 `--viewer-scope` 派生：
+
+- `private:cli` -> `cli`
+- `private:batch-ingest` -> `batch-ingest`
+- `shared:team1` -> `team1`
+
+这保证默认 `private:cli` 事件不会被写入错误 bank 后又被 ack。
 
 ## 幂等建议
 
-消费端应以 `(event_type, payload key fields)` 做幂等，或引入 `wiki_outbox.id` 游标；
-不建议假设事件严格只投递一次。
-
-## 后续增强（兼容当前结构）
-
-- 为 `wiki_outbox` 增加 `created_at`、`processed_at`、`consumer_tag`
-- 增加 `claim check` 风格 payload（大对象走 blob）
-- 在 `flush_outbox_to_repo` 增加分批与重试策略
+消费端应以 `wiki_outbox.id` 或事件 payload 的稳定 key 做幂等，不应假设事件只投递一次。
+外部消费者应使用独立 `consumer_tag`，不要复用 mempalace 的 tag。

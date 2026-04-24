@@ -1,7 +1,6 @@
 # Schema 后续项开发路线图
 
-> 基于 `crates/wiki-core/src/schema.rs` 中已定义但尚未被消费的 schema 字段，
-> 按前置依赖和 ROI 分为 T0 / T1 / T2 / T3 四层。
+> 当前状态：T0/T1 已完成；T2/T3 仍是活跃后续计划。本文保留 schema/tag 后续项，不归档。
 
 ---
 
@@ -146,13 +145,12 @@ maintenance 调用 cleanup_expired_pages(now, schema)
 
 ## 当前进度
 
-- T0.1 `wiki schema validate` 子命令
-- T0.2 `--entry-type` 扩档到 Crystallize
-- T1.A WikiPage.status 字段
-- T1.B initial_status 解析
-- T1.C promote_page 命令
-- T1.D stale_days 消费
-- T1.E auto_cleanup 消费
-- T1.D stale_days 消费
-- T1.E auto_cleanup 消费
-
+- ✅ T0.1 `wiki schema validate` 子命令
+- ✅ T0.2 `--entry-type` 扩档到 Crystallize
+- ✅ T1.A WikiPage.status 字段
+- ✅ T1.B initial_status 解析
+- ✅ T1.C promote_page 命令
+- ✅ T1.D stale_days 消费
+- ✅ T1.E auto_cleanup 消费
+- ⏳ T2 标签治理主线未完成
+- ⏳ T3 延后项未完成
