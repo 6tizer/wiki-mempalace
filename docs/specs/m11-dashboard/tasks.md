@@ -12,9 +12,9 @@
 - [x] Tests added/updated
 - [x] Docs updated
 - [x] Integration review complete
-- [ ] PR opened
+- [x] PR opened
 - [ ] Codex/GitHub review addressed
-- [ ] CI green
+- [x] CI green
 - [ ] Merged
 - [ ] Roadmap/PRD updated
 
@@ -31,7 +31,7 @@
 - J10 / M11 Dashboard is implemented on `codex/m11-dashboard`.
 - Focused tests passing: `cargo test -p wiki-cli dashboard`, `cargo test -p wiki-cli --test dashboard`, `cargo fmt --check -p wiki-cli`.
 - Integration gate passing: `cargo fmt --all -- --check`, `cargo test --workspace`, `cargo clippy --workspace --all-targets -- -D warnings`.
-- Draft PR, CI, and merge are still pending.
+- Draft PR #14 is open and CI quick is green. Merge is still pending.
 
 ## Verification
 
