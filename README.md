@@ -30,6 +30,11 @@ wiki-mempalace/
 ├── docs/
 │   ├── README.md              # 文档入口：当前事实 / 活跃计划 / 历史归档
 │   ├── roadmap.md             # 当前路线图（M1-M9 完成，M10-M12 待做）
+│   ├── dev-workflow.md        # PRD/spec/branch/subagent/review/PR/CI 固定开发流程
+│   ├── automation-issue-batch-3.md # 当前 batch-3 任务规划
+│   ├── prd/                   # 当前批次 PRD
+│   ├── specs/                 # 每个功能模块的 spec 三件套
+│   ├── templates/             # PRD/spec/subagent/review 模板
 │   ├── vault-standards.md     # Vault 目录/命名/frontmatter/正文骨架唯一标准
 │   ├── architecture.md        # 架构图 + 业务流转
 │   ├── mempalace-linkage.md   # workspace 内 crate 协同契约
