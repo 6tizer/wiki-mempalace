@@ -6,8 +6,9 @@ use walkdir::WalkDir;
 use wiki_core::{
     document_visible_to_viewer, parse_memory_tier, ClaimId, CompositeSearchPorts, Confidence,
     DomainSchema, Entity, EntityId, EntityKind, EntryStatus, EntryType, FixAction, FixActionType,
-    FixPatch, GapFinding, GapSeverity, LlmIngestPlanV1, MemoryTier, PageContract, PageId,
-    QueryContext, RelationKind, Scope, SessionCrystallizationInput, SourceId, TypedEdge, WikiPage,
+    FixPatch, FusionConfig, GapFinding, GapSeverity, LlmIngestPlanV1, MemoryTier, PageContract,
+    PageId, QueryContext, RelationKind, Scope, SessionCrystallizationInput, SourceId, TypedEdge,
+    WikiPage,
 };
 use wiki_kernel::{
     finalize_consumed_page, format_claim_doc_id, initial_status_for, map_findings_to_fixes,
@@ -1832,10 +1833,10 @@ fn run_fusion_query<'a>(
         match MempalaceSearchPorts::open(Path::new(pdb), Some(palace_bank.to_string())) {
             Ok(mp_ports) => {
                 let wiki_ports = InMemorySearchPorts::new(&eng.store, Some(viewer.clone()));
-                Box::new(CompositeSearchPorts::new(vec![
-                    Box::new(wiki_ports),
-                    Box::new(mp_ports),
-                ]))
+                Box::new(CompositeSearchPorts::new(
+                    vec![Box::new(wiki_ports), Box::new(mp_ports)],
+                    FusionConfig::default(),
+                ))
             }
             Err(e) => {
                 eprintln!(
@@ -2651,7 +2652,7 @@ mod tests {
     #[test]
     fn composite_search_ports_can_be_constructed() {
         // 验证 CompositeSearchPorts 导入正确且可构建
-        let composite = CompositeSearchPorts::new(vec![]);
+        let composite = CompositeSearchPorts::new(vec![], FusionConfig::default());
         assert!(composite.bm25_ranked_ids("q", 10).is_empty());
     }
 

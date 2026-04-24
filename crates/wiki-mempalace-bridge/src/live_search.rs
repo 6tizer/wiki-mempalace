@@ -1,4 +1,4 @@
-use rusqlite::{params, Connection};
+use rusqlite::Connection;
 use rust_mempalace::service::{self, RetrievalConfig};
 use std::sync::Mutex;
 use wiki_core::SearchPorts;
@@ -72,11 +72,23 @@ impl SearchPorts for MempalaceSearchPorts {
             return Vec::new();
         }
 
-        let mut stmt = match conn.prepare("SELECT drawer_id, vector_json FROM drawer_vectors") {
+        let (sql, params_vec): (&str, Vec<&dyn rusqlite::ToSql>) =
+            if let Some(ref bank) = self.bank_id {
+                (
+                    "SELECT dv.drawer_id, dv.vector_json FROM drawer_vectors dv \
+                     JOIN drawers d ON dv.drawer_id = d.id \
+                     WHERE d.bank_id = ?1",
+                    vec![bank as &dyn rusqlite::ToSql],
+                )
+            } else {
+                ("SELECT drawer_id, vector_json FROM drawer_vectors", vec![])
+            };
+
+        let mut stmt = match conn.prepare(sql) {
             Ok(s) => s,
             Err(_) => return Vec::new(),
         };
-        let mut rows = match stmt.query(params![]) {
+        let mut rows = match stmt.query(rusqlite::params_from_iter(params_vec.iter())) {
             Ok(r) => r,
             Err(_) => return Vec::new(),
         };

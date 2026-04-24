@@ -40,16 +40,17 @@ pub fn reciprocal_rank_fusion(rank_lists: &[Vec<String>], k: f64) -> Vec<RankedD
 /// 最后交给 RRF 层做全局排序。
 pub struct CompositeSearchPorts<'a> {
     ports: Vec<Box<dyn SearchPorts + 'a>>,
+    config: FusionConfig,
 }
 
 impl<'a> CompositeSearchPorts<'a> {
-    pub fn new(ports: Vec<Box<dyn SearchPorts + 'a>>) -> Self {
-        Self { ports }
+    pub fn new(ports: Vec<Box<dyn SearchPorts + 'a>>, config: FusionConfig) -> Self {
+        Self { ports, config }
     }
 
     /// 仅使用 wiki 内部端口（向后兼容）
     pub fn wiki_only(inner: Box<dyn SearchPorts + 'a>) -> Self {
-        Self::new(vec![inner])
+        Self::new(vec![inner], FusionConfig::default())
     }
 }
 
@@ -57,7 +58,7 @@ impl<'a> SearchPorts for CompositeSearchPorts<'a> {
     fn bm25_ranked_ids(&self, query: &str, limit: usize) -> Vec<String> {
         let mut seen = std::collections::HashSet::new();
         let mut result = Vec::new();
-        let per_source = limit;
+        let per_source = self.config.per_source_limit;
         for port in &self.ports {
             for id in port.bm25_ranked_ids(query, per_source) {
                 if seen.insert(id.clone()) {
@@ -74,7 +75,7 @@ impl<'a> SearchPorts for CompositeSearchPorts<'a> {
     fn vector_ranked_ids(&self, query: &str, limit: usize) -> Vec<String> {
         let mut seen = std::collections::HashSet::new();
         let mut result = Vec::new();
-        let per_source = limit;
+        let per_source = self.config.per_source_limit;
         for port in &self.ports {
             for id in port.vector_ranked_ids(query, per_source) {
                 if seen.insert(id.clone()) {
@@ -91,7 +92,7 @@ impl<'a> SearchPorts for CompositeSearchPorts<'a> {
     fn graph_ranked_ids(&self, query: &str, limit: usize) -> Vec<String> {
         let mut seen = std::collections::HashSet::new();
         let mut result = Vec::new();
-        let per_source = limit;
+        let per_source = self.config.per_source_limit;
         for port in &self.ports {
             for id in port.graph_ranked_ids(query, per_source) {
                 if seen.insert(id.clone()) {
@@ -156,7 +157,8 @@ mod tests {
 
         let a = Mock(vec!["x".into(), "y".into()]);
         let b = Mock(vec!["y".into(), "z".into()]);
-        let composite = CompositeSearchPorts::new(vec![Box::new(a), Box::new(b)]);
+        let composite =
+            CompositeSearchPorts::new(vec![Box::new(a), Box::new(b)], FusionConfig::default());
         let ids = composite.bm25_ranked_ids("q", 10);
         assert_eq!(ids, vec!["x", "y", "z"]);
     }
@@ -178,7 +180,8 @@ mod tests {
 
         let a = Mock(vec!["a1".into(), "a2".into(), "a3".into()]);
         let b = Mock(vec!["b1".into(), "b2".into()]);
-        let composite = CompositeSearchPorts::new(vec![Box::new(a), Box::new(b)]);
+        let composite =
+            CompositeSearchPorts::new(vec![Box::new(a), Box::new(b)], FusionConfig::default());
         let ids = composite.vector_ranked_ids("q", 4);
         assert_eq!(ids.len(), 4);
         assert_eq!(ids, vec!["a1", "a2", "a3", "b1"]);
@@ -201,7 +204,8 @@ mod tests {
 
         let a = Mock(vec!["first".into(), "second".into()]);
         let b = Mock(vec!["third".into()]);
-        let composite = CompositeSearchPorts::new(vec![Box::new(a), Box::new(b)]);
+        let composite =
+            CompositeSearchPorts::new(vec![Box::new(a), Box::new(b)], FusionConfig::default());
         let ids = composite.graph_ranked_ids("q", 10);
         assert_eq!(ids, vec!["first", "second", "third"]);
     }
@@ -216,7 +220,7 @@ mod tests {
     /// 空 ports 列表时，各路召回均返回空。
     #[test]
     fn composite_search_empty_ports_returns_empty() {
-        let composite = CompositeSearchPorts::new(vec![]);
+        let composite = CompositeSearchPorts::new(vec![], FusionConfig::default());
         assert!(composite.bm25_ranked_ids("q", 10).is_empty());
         assert!(composite.vector_ranked_ids("q", 10).is_empty());
         assert!(composite.graph_ranked_ids("q", 10).is_empty());
