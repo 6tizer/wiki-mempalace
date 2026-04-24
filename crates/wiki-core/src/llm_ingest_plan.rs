@@ -23,6 +23,7 @@ where
             ClaimOrString::Str(s) => LlmClaimDraft {
                 text: s,
                 tier: "semantic".to_string(),
+                tags: Vec::new(),
             },
         })
         .collect())
@@ -173,6 +174,8 @@ pub struct LlmClaimDraft {
     pub text: String,
     /// `working` | `episodic` | `semantic` | `procedural`
     pub tier: String,
+    #[serde(default)]
+    pub tags: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -240,7 +243,9 @@ mod tests {
         assert_eq!(p.claims.len(), 2);
         assert_eq!(p.claims[0].text, "claim one");
         assert_eq!(p.claims[0].tier, "semantic");
+        assert!(p.claims[0].tags.is_empty());
         assert_eq!(p.claims[1].text, "claim two");
+        assert!(p.claims[1].tags.is_empty());
     }
 
     #[test]
@@ -256,6 +261,7 @@ mod tests {
         assert_eq!(p.claims[0].tier, "working");
         assert_eq!(p.claims[1].text, "str claim");
         assert_eq!(p.claims[1].tier, "semantic");
+        assert!(p.claims[1].tags.is_empty());
     }
 
     #[test]
@@ -268,6 +274,13 @@ mod tests {
         assert_eq!(p.normalized_summary_confidence(), "medium");
         assert!(p.tags.is_empty());
         assert!(p.source_author.is_none());
+    }
+
+    #[test]
+    fn claim_draft_old_json_without_tags_deserializes_to_empty_vec() {
+        let j = r###"{"text":"claim","tier":"semantic"}"###;
+        let claim: LlmClaimDraft = serde_json::from_str(j).unwrap();
+        assert!(claim.tags.is_empty());
     }
 
     #[test]
@@ -286,6 +299,7 @@ mod tests {
             claims: vec![LlmClaimDraft {
                 text: "概念一".into(),
                 tier: "semantic".into(),
+                tags: vec![],
             }],
             entities: vec![],
             relationships: vec![],

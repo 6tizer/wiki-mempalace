@@ -6,11 +6,11 @@ use std::path::{Path, PathBuf};
 use time::{format_description::well_known::Rfc3339, Duration, OffsetDateTime};
 use walkdir::WalkDir;
 use wiki_core::{
-    document_visible_to_viewer, parse_memory_tier, ClaimId, CompositeSearchPorts, Confidence,
-    DomainSchema, Entity, EntityId, EntityKind, EntryStatus, EntryType, FixAction, FixActionType,
-    FixPatch, FusionConfig, GapFinding, GapSeverity, LlmIngestPlanV1, MemoryTier, PageContract,
-    PageId, QueryContext, RelationKind, Scope, SessionCrystallizationInput, SourceId, TypedEdge,
-    WikiMetricsReport, WikiPage,
+    document_visible_to_viewer, normalize_and_validate_tag_groups, parse_memory_tier, ClaimId,
+    CompositeSearchPorts, Confidence, DomainSchema, Entity, EntityId, EntityKind, EntryStatus,
+    EntryType, FixAction, FixActionType, FixPatch, FusionConfig, GapFinding, GapSeverity,
+    LlmIngestPlanV1, MemoryTier, PageContract, PageId, QueryContext, RelationKind, Scope,
+    SessionCrystallizationInput, SourceId, TypedEdge, WikiMetricsReport, WikiPage,
 };
 use wiki_kernel::{
     collect_wiki_metrics, finalize_consumed_page, format_claim_doc_id, initial_status_for,
@@ -72,6 +72,8 @@ enum Cmd {
         body: String,
         #[arg(long, default_value = "private:cli")]
         scope: String,
+        #[arg(long = "tag")]
+        tags: Vec<String>,
     },
     IngestLlm {
         uri: String,
@@ -91,6 +93,8 @@ enum Cmd {
         scope: String,
         #[arg(long, default_value = "working")]
         tier: String,
+        #[arg(long = "tag")]
+        tags: Vec<String>,
     },
     SupersedeClaim {
         old_claim_id: String,
@@ -1348,8 +1352,15 @@ fn run_with_engine(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                 println!("{}", serde_json::to_string_pretty(&plan)?);
                 return Ok(());
             }
+            preflight_llm_plan_tags(&plan, &plan.tags, &schema)?;
             let sc = parse_scope(&scope);
-            let sid = eng.ingest_raw(uri.clone(), &body, sc.clone(), "cli");
+            let sid = eng.ingest_raw_with_tags(
+                uri.clone(),
+                &body,
+                sc.clone(),
+                "cli",
+                plan.tags.iter().map(String::as_str),
+            )?;
             eng.save_to_repo(&repo)?;
             eng.flush_outbox_to_repo_with_policy(&repo, 128, 3)?;
             if cli.vectors {
@@ -1360,7 +1371,13 @@ fn run_with_engine(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             }
             for c in &plan.claims {
                 let tier = parse_memory_tier(&c.tier).unwrap_or(MemoryTier::Semantic);
-                let cid = eng.file_claim(c.text.clone(), sc.clone(), tier, "cli");
+                let cid = eng.file_claim_with_tags(
+                    c.text.clone(),
+                    sc.clone(),
+                    tier,
+                    "cli",
+                    c.tags.iter().map(String::as_str),
+                )?;
                 eng.attach_sources(cid, &[sid])?;
                 eng.save_to_repo(&repo)?;
                 eng.flush_outbox_to_repo_with_policy(&repo, 128, 3)?;
@@ -1432,8 +1449,13 @@ fn run_with_engine(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             maybe_sync_projection(sync_wiki, wiki_root.as_deref(), &eng)?;
             println!("ingested source={}", sid.0);
         }
-        Cmd::Ingest { uri, body, scope } => {
-            let sid = eng.ingest_raw(uri, &body, parse_scope(&scope), "cli");
+        Cmd::Ingest {
+            uri,
+            body,
+            scope,
+            tags,
+        } => {
+            let sid = eng.ingest_raw_with_tags(uri, &body, parse_scope(&scope), "cli", &tags)?;
             eng.save_to_repo(&repo)?;
             eng.flush_outbox_to_repo_with_policy(&repo, 128, 3)?;
             if cli.vectors {
@@ -1445,9 +1467,14 @@ fn run_with_engine(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             maybe_sync_projection(sync_wiki, wiki_root.as_deref(), &eng)?;
             println!("ingested source={}", sid.0);
         }
-        Cmd::FileClaim { text, scope, tier } => {
+        Cmd::FileClaim {
+            text,
+            scope,
+            tier,
+            tags,
+        } => {
             let tier = parse_tier(&tier)?;
-            let cid = eng.file_claim(text, parse_scope(&scope), tier, "cli");
+            let cid = eng.file_claim_with_tags(text, parse_scope(&scope), tier, "cli", &tags)?;
             eng.save_to_repo(&repo)?;
             eng.flush_outbox_to_repo_with_policy(&repo, 128, 3)?;
             if cli.vectors {
@@ -2251,6 +2278,17 @@ mod tests {
         }
     }
 
+    fn test_automation_health_thresholds() -> AutomationHealthThresholds {
+        AutomationHealthThresholds {
+            stale_heartbeat_yellow: Duration::hours(6),
+            stale_heartbeat_red: Duration::hours(24),
+            consecutive_failures_yellow: 2,
+            consecutive_failures_red: 3,
+            backlog_yellow: 25,
+            backlog_red: 100,
+        }
+    }
+
     #[test]
     fn effective_entry_type_defaults_to_concept() {
         assert_eq!(effective_ingest_entry_type(None), EntryType::Concept);
@@ -2266,6 +2304,115 @@ mod tests {
             effective_ingest_entry_type(Some(EntryType::Synthesis)),
             EntryType::Synthesis
         );
+    }
+
+    #[test]
+    fn tag_cli_ingest_accepts_repeatable_tag_args() {
+        let cli = Cli::try_parse_from([
+            "wiki",
+            "ingest",
+            "file:///a.md",
+            "body",
+            "--tag",
+            "alpha",
+            "--tag",
+            "beta",
+        ])
+        .expect("CLI args should parse");
+
+        match cli.cmd {
+            Cmd::Ingest { tags, .. } => {
+                assert_eq!(tags, vec!["alpha".to_string(), "beta".to_string()]);
+            }
+            _ => panic!("expected ingest command"),
+        }
+    }
+
+    #[test]
+    fn tag_cli_file_claim_accepts_repeatable_tag_args() {
+        let cli = Cli::try_parse_from([
+            "wiki",
+            "file-claim",
+            "claim text",
+            "--tag",
+            "alpha",
+            "--tag",
+            "beta",
+        ])
+        .expect("CLI args should parse");
+
+        match cli.cmd {
+            Cmd::FileClaim { tags, .. } => {
+                assert_eq!(tags, vec!["alpha".to_string(), "beta".to_string()]);
+            }
+            _ => panic!("expected file-claim command"),
+        }
+    }
+
+    #[test]
+    fn tag_batch_context_carries_source_tags_for_ingest() {
+        let batch = BatchIngestContext {
+            source_title: "source".to_string(),
+            source_url: "file:///source.md".to_string(),
+            source_tags: vec!["seed".to_string(), "new".to_string()],
+        };
+
+        assert_eq!(
+            batch_source_tags_for_ingest(&batch),
+            &["seed".to_string(), "new".to_string()]
+        );
+    }
+
+    fn tag_test_plan_with_claim_tags(claim_tags: Vec<String>) -> LlmIngestPlanV1 {
+        LlmIngestPlanV1 {
+            version: 1,
+            summary_title: String::new(),
+            summary_markdown: String::new(),
+            one_sentence_summary: String::new(),
+            key_insights: Vec::new(),
+            confidence: String::new(),
+            tags: Vec::new(),
+            source_author: None,
+            source_publisher: None,
+            source_published_at: None,
+            claims: vec![wiki_core::LlmClaimDraft {
+                text: "claim".to_string(),
+                tier: "semantic".to_string(),
+                tags: claim_tags,
+            }],
+            entities: Vec::new(),
+            relationships: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn tag_preflight_counts_source_and_claim_new_tags_per_ingest() {
+        let mut schema = DomainSchema::permissive_default();
+        schema.tag_config.max_new_tags_per_ingest = 1;
+        let source_tags = vec!["new-source".to_string()];
+        let plan = tag_test_plan_with_claim_tags(vec!["new-claim".to_string()]);
+
+        let err = preflight_llm_plan_tags(&plan, &source_tags, &schema).unwrap_err();
+
+        assert_eq!(
+            err,
+            wiki_core::TagPolicyError::TooManyNewTags {
+                count: 2,
+                max: 1,
+                tags: vec!["new-source".into(), "new-claim".into()],
+            }
+        );
+    }
+
+    #[test]
+    fn tag_preflight_ignores_seed_and_case_duplicates_for_new_count() {
+        let mut schema = DomainSchema::permissive_default();
+        schema.tag_config.seed_tags = vec!["Known".into()];
+        schema.tag_config.max_new_tags_per_ingest = 1;
+        let source_tags = vec!["KNOWN".to_string(), "new".to_string()];
+        let plan = tag_test_plan_with_claim_tags(vec!["known".to_string(), "New".to_string()]);
+
+        preflight_llm_plan_tags(&plan, &source_tags, &schema).unwrap();
     }
 
     #[test]
@@ -2415,7 +2562,7 @@ mod tests {
     #[test]
     fn stale_heartbeat_thresholds_classify_expected_levels() {
         let now = OffsetDateTime::from_unix_timestamp(1_800_000_000).unwrap();
-        let thresholds = automation_health_thresholds();
+        let thresholds = test_automation_health_thresholds();
         let green = sample_record(AutomationRunStatus::Running, now - Duration::hours(1));
         let yellow = sample_record(AutomationRunStatus::Running, now - Duration::hours(8));
         let red = sample_record(AutomationRunStatus::Running, now - Duration::hours(36));
@@ -2441,7 +2588,7 @@ mod tests {
 
     #[test]
     fn consecutive_failure_thresholds_classify_expected_levels() {
-        let thresholds = automation_health_thresholds();
+        let thresholds = test_automation_health_thresholds();
         assert_eq!(
             classify_consecutive_failures(0, thresholds),
             AutomationHealthLevel::Green
@@ -2458,7 +2605,7 @@ mod tests {
 
     #[test]
     fn backlog_thresholds_classify_expected_levels() {
-        let thresholds = automation_health_thresholds();
+        let thresholds = test_automation_health_thresholds();
         assert_eq!(
             classify_backlog(0, thresholds),
             AutomationHealthLevel::Green
@@ -3636,6 +3783,7 @@ struct SourceEntry {
 struct BatchIngestContext {
     source_title: String,
     source_url: String,
+    source_tags: Vec<String>,
 }
 
 /// 单条 source 编译结果
@@ -3675,6 +3823,22 @@ fn yaml_string_list_block(name: &str, items: &[String]) -> String {
         }
         out
     }
+}
+
+fn batch_source_tags_for_ingest(batch: &BatchIngestContext) -> &[String] {
+    &batch.source_tags
+}
+
+fn preflight_llm_plan_tags(
+    plan: &LlmIngestPlanV1,
+    source_tags: &[String],
+    schema: &DomainSchema,
+) -> Result<(), wiki_core::TagPolicyError> {
+    let mut groups = Vec::with_capacity(plan.claims.len() + 1);
+    groups.push(source_tags);
+    groups.extend(plan.claims.iter().map(|claim| claim.tags.as_slice()));
+    normalize_and_validate_tag_groups(&groups, schema)?;
+    Ok(())
 }
 
 fn entry_status_yaml(status: EntryStatus) -> &'static str {
@@ -3791,8 +3955,15 @@ fn ingest_one_source(
     let slice = llm::parse_json_object_slice(&reply);
     let plan: LlmIngestPlanV1 =
         serde_json::from_str(slice).map_err(|e| format!("JSON parse error: {e}; raw={reply}"))?;
+    preflight_llm_plan_tags(&plan, batch_source_tags_for_ingest(batch), schema)?;
 
-    let sid = eng.ingest_raw(uri, body, scope.clone(), "batch-ingest");
+    let sid = eng.ingest_raw_with_tags(
+        uri,
+        body,
+        scope.clone(),
+        "batch-ingest",
+        batch_source_tags_for_ingest(batch),
+    )?;
     eng.save_to_repo(repo)?;
     eng.flush_outbox_to_repo_with_policy(repo, 128, 3)?;
 
@@ -3805,7 +3976,13 @@ fn ingest_one_source(
 
     for c in &plan.claims {
         let tier = parse_memory_tier(&c.tier).unwrap_or(MemoryTier::Semantic);
-        let cid = eng.file_claim(c.text.clone(), scope.clone(), tier, "batch-ingest");
+        let cid = eng.file_claim_with_tags(
+            c.text.clone(),
+            scope.clone(),
+            tier,
+            "batch-ingest",
+            c.tags.iter().map(String::as_str),
+        )?;
         eng.attach_sources(cid, &[sid])?;
         eng.save_to_repo(repo)?;
         eng.flush_outbox_to_repo_with_policy(repo, 128, 3)?;
@@ -4027,6 +4204,7 @@ fn batch_ingest_cmd(
         let batch_ctx = BatchIngestContext {
             source_title: src.title.clone(),
             source_url: src.url.clone(),
+            source_tags: src.source_tags.clone(),
         };
 
         match ingest_one_source(

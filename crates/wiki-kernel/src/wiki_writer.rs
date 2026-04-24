@@ -207,6 +207,17 @@ fn yaml_escape(s: &str) -> String {
     s.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
+fn render_yaml_string_list(field: &str, values: &[String]) -> String {
+    if values.is_empty() {
+        return format!("{field}: []\n");
+    }
+    let mut out = format!("{field}:\n");
+    for value in values {
+        out.push_str(&format!("  - \"{}\"\n", yaml_escape(value)));
+    }
+    out
+}
+
 /// 将 Scope 序列化为人类可读字符串（用于 YAML frontmatter）。
 fn scope_label(scope: &Scope) -> String {
     match scope {
@@ -252,6 +263,7 @@ fn render_claim_with_frontmatter(claim: &Claim) -> String {
     fm.push_str(&format!("quality: {:.3}\n", claim.quality_score));
     fm.push_str(&format!("stale: {}\n", claim.stale));
     fm.push_str(&format!("sources_count: {}\n", claim.source_ids.len()));
+    fm.push_str(&render_yaml_string_list("tags", &claim.tags));
     fm.push_str(&format!("created_at: {}\n", claim.created_at.date()));
     fm.push_str("---\n\n");
     // 正文保持原有结构
@@ -279,6 +291,7 @@ fn render_source_with_frontmatter(source: &RawArtifact) -> String {
     let mut fm = String::from("---\n");
     fm.push_str(&format!("id: \"{}\"\n", source.id.0));
     fm.push_str(&format!("uri: \"{}\"\n", yaml_escape(&source.uri)));
+    fm.push_str(&render_yaml_string_list("tags", &source.tags));
     fm.push_str(&format!("ingested_at: {}\n", source.ingested_at.date()));
     fm.push_str("---\n\n");
     fm.push_str(&format!(
@@ -530,7 +543,8 @@ mod tests {
 
     #[test]
     fn frontmatter_claim_contains_tier_and_confidence() {
-        let claim = Claim::new("test claim", private_scope(), MemoryTier::Semantic);
+        let mut claim = Claim::new("test claim", private_scope(), MemoryTier::Semantic);
+        claim.tags = vec!["alpha".into(), "quoted \"tag\"".into()];
         let rendered = render_claim_with_frontmatter(&claim);
         assert!(rendered.starts_with("---\n"));
         assert!(rendered.contains(&format!("id: \"{}\"\n", claim.id.0)));
@@ -539,15 +553,18 @@ mod tests {
         assert!(rendered.contains("quality:"));
         assert!(rendered.contains("stale: false\n"));
         assert!(rendered.contains("sources_count: 0\n"));
+        assert!(rendered.contains("tags:\n  - \"alpha\"\n  - \"quoted \\\"tag\\\"\"\n"));
     }
 
     #[test]
     fn frontmatter_source_contains_uri() {
-        let source = RawArtifact::new("file:///notes/test.md", "body text", private_scope());
+        let source = RawArtifact::new("file:///notes/test.md", "body text", private_scope())
+            .with_tags(["alpha", "beta"]);
         let rendered = render_source_with_frontmatter(&source);
         assert!(rendered.starts_with("---\n"));
         assert!(rendered.contains(&format!("id: \"{}\"\n", source.id.0)));
         assert!(rendered.contains("uri: \"file:///notes/test.md\"\n"));
+        assert!(rendered.contains("tags:\n  - \"alpha\"\n  - \"beta\"\n"));
         assert!(rendered.contains("ingested_at:"));
         assert!(rendered.contains("## Preview"));
     }

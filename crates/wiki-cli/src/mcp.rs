@@ -4,8 +4,8 @@ use serde_json::{json, Value};
 use std::io::{self, BufRead, Write};
 use time::OffsetDateTime;
 use wiki_core::{
-    parse_memory_tier, ClaimId, DomainSchema, EntryType, MemoryTier, QueryContext, Scope,
-    SessionCrystallizationInput, WikiPage,
+    normalize_and_validate_tag_groups, parse_memory_tier, ClaimId, DomainSchema, EntryType,
+    MemoryTier, QueryContext, Scope, SessionCrystallizationInput, WikiPage,
 };
 use wiki_kernel::{initial_status_for, LlmWikiEngine, NoopWikiHook};
 use wiki_storage::SqliteRepository;
@@ -131,7 +131,8 @@ fn tools_list() -> Value {
                 "inputSchema": {"type":"object","properties":{
                     "uri":{"type":"string","description":"Source URI"},
                     "body":{"type":"string","description":"Source text body"},
-                    "scope":{"type":"string","description":"Scope: private:<agent> or shared:<team>"}
+                    "scope":{"type":"string","description":"Scope: private:<agent> or shared:<team>"},
+                    "tags":{"type":"array","items":{"type":"string"},"description":"Optional source tags"}
                 },"required":["uri","body"]}
             },
             {
@@ -140,7 +141,8 @@ fn tools_list() -> Value {
                 "inputSchema": {"type":"object","properties":{
                     "text":{"type":"string","description":"Claim text"},
                     "scope":{"type":"string","description":"Scope: private:<agent> or shared:<team>"},
-                    "tier":{"type":"string","description":"Memory tier: working|episodic|semantic|procedural"}
+                    "tier":{"type":"string","description":"Memory tier: working|episodic|semantic|procedural"},
+                    "tags":{"type":"array","items":{"type":"string"},"description":"Optional claim tags"}
                 },"required":["text"]}
             },
             {
@@ -335,7 +337,10 @@ fn call_tool(
                 .get("scope")
                 .and_then(Value::as_str)
                 .unwrap_or("private:mcp");
-            let sid = eng.ingest_raw(uri.to_string(), body, parse_scope(scope), "mcp");
+            let tags = tags_arg_from_value(&args, "tags")?;
+            let sid = eng
+                .ingest_raw_with_tags(uri.to_string(), body, parse_scope(scope), "mcp", &tags)
+                .map_err(|e| e.to_string())?;
             save_and_flush(eng, repo).map_err(|e| e.to_string())?;
             if vectors {
                 embed_source(repo, llm_config_path, &sid.0.to_string(), body)
@@ -357,7 +362,10 @@ fn call_tool(
                 .and_then(Value::as_str)
                 .unwrap_or("working");
             let tier = parse_tier(tier).map_err(|e| e.to_string())?;
-            let cid = eng.file_claim(text.to_string(), parse_scope(scope), tier, "mcp");
+            let tags = tags_arg_from_value(&args, "tags")?;
+            let cid = eng
+                .file_claim_with_tags(text.to_string(), parse_scope(scope), tier, "mcp", &tags)
+                .map_err(|e| e.to_string())?;
             save_and_flush(eng, repo).map_err(|e| e.to_string())?;
             Ok(json!({"claim_id": cid.0.to_string()}))
         }
@@ -650,11 +658,28 @@ fn call_tool(
             if dry_run {
                 return Ok(json!({"plan": serde_json::to_value(&plan).unwrap_or(Value::Null)}));
             }
+            preflight_llm_plan_tags(&plan, &plan.tags, &eng.schema).map_err(|e| e.to_string())?;
             let sc = parse_scope(scope);
-            let sid = eng.ingest_raw(uri.to_string(), body, sc.clone(), "mcp");
+            let sid = eng
+                .ingest_raw_with_tags(
+                    uri.to_string(),
+                    body,
+                    sc.clone(),
+                    "mcp",
+                    plan.tags.iter().map(String::as_str),
+                )
+                .map_err(|e| e.to_string())?;
             for c in &plan.claims {
                 let tier = parse_memory_tier(&c.tier).map_err(|e| e.to_string())?;
-                let cid = eng.file_claim(c.text.clone(), sc.clone(), tier, "mcp");
+                let cid = eng
+                    .file_claim_with_tags(
+                        c.text.clone(),
+                        sc.clone(),
+                        tier,
+                        "mcp",
+                        c.tags.iter().map(String::as_str),
+                    )
+                    .map_err(|e| e.to_string())?;
                 eng.attach_sources(cid, &[sid]).map_err(|e| e.to_string())?;
                 if vectors {
                     // 对齐 CLI 的向量写入行为（best-effort）
@@ -695,6 +720,35 @@ fn call_tool(
 
         _ => Err(format!("unknown tool: {name}")),
     }
+}
+
+fn tags_arg_from_value(args: &Value, key: &str) -> Result<Vec<String>, String> {
+    let Some(raw) = args.get(key) else {
+        return Ok(Vec::new());
+    };
+    let arr = raw
+        .as_array()
+        .ok_or_else(|| format!("{key} must be an array of strings"))?;
+    arr.iter()
+        .enumerate()
+        .map(|(idx, v)| {
+            v.as_str()
+                .map(ToString::to_string)
+                .ok_or_else(|| format!("{key}[{idx}] must be a string"))
+        })
+        .collect()
+}
+
+fn preflight_llm_plan_tags(
+    plan: &wiki_core::LlmIngestPlanV1,
+    source_tags: &[String],
+    schema: &DomainSchema,
+) -> Result<(), wiki_core::TagPolicyError> {
+    let mut groups = Vec::with_capacity(plan.claims.len() + 1);
+    groups.push(source_tags);
+    groups.extend(plan.claims.iter().map(|claim| claim.tags.as_slice()));
+    normalize_and_validate_tag_groups(&groups, schema)?;
+    Ok(())
 }
 
 fn call_mempalace_tool(
@@ -842,5 +896,85 @@ mod tests {
         for k in ["uri", "body", "scope", "dry_run"] {
             assert!(props.get(k).is_some(), "{k} 仍应存在");
         }
+    }
+
+    #[test]
+    fn tag_tools_list_exposes_ingest_and_claim_tags() {
+        let v = tools_list();
+        let tools = v.get("tools").and_then(Value::as_array).expect("tools[]");
+
+        for name in ["wiki_ingest", "wiki_file_claim"] {
+            let tool = tools
+                .iter()
+                .find(|t| t.get("name").and_then(Value::as_str) == Some(name))
+                .expect("tool should exist");
+            let tags = tool
+                .pointer("/inputSchema/properties/tags")
+                .expect("tags property should exist");
+            assert_eq!(tags.get("type").and_then(Value::as_str), Some("array"));
+            assert_eq!(
+                tags.pointer("/items/type").and_then(Value::as_str),
+                Some("string")
+            );
+        }
+    }
+
+    #[test]
+    fn tag_arg_from_value_parses_optional_string_array() {
+        let args = json!({"tags": ["alpha", "beta"]});
+        assert_eq!(
+            tags_arg_from_value(&args, "tags").expect("tags should parse"),
+            vec!["alpha".to_string(), "beta".to_string()]
+        );
+
+        assert_eq!(
+            tags_arg_from_value(&json!({}), "tags").expect("missing tags should default"),
+            Vec::<String>::new()
+        );
+    }
+
+    #[test]
+    fn tag_arg_from_value_rejects_non_string_array_items() {
+        let err = tags_arg_from_value(&json!({"tags": ["alpha", 42]}), "tags")
+            .expect_err("non-string item should fail");
+
+        assert_eq!(err, "tags[1] must be a string");
+    }
+
+    #[test]
+    fn tag_preflight_counts_source_and_claim_new_tags_per_ingest() {
+        let mut schema = DomainSchema::permissive_default();
+        schema.tag_config.max_new_tags_per_ingest = 1;
+        let source_tags = vec!["new-source".to_string()];
+        let plan = wiki_core::LlmIngestPlanV1 {
+            version: 1,
+            summary_title: String::new(),
+            summary_markdown: String::new(),
+            one_sentence_summary: String::new(),
+            key_insights: Vec::new(),
+            confidence: String::new(),
+            tags: Vec::new(),
+            source_author: None,
+            source_publisher: None,
+            source_published_at: None,
+            claims: vec![wiki_core::LlmClaimDraft {
+                text: "claim".to_string(),
+                tier: "semantic".to_string(),
+                tags: vec!["new-claim".to_string()],
+            }],
+            entities: Vec::new(),
+            relationships: Vec::new(),
+        };
+
+        let err = preflight_llm_plan_tags(&plan, &source_tags, &schema).unwrap_err();
+
+        assert_eq!(
+            err,
+            wiki_core::TagPolicyError::TooManyNewTags {
+                count: 2,
+                max: 1,
+                tags: vec!["new-source".into(), "new-claim".into()],
+            }
+        );
     }
 }

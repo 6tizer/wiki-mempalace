@@ -1,6 +1,6 @@
 # Schema 后续项开发路线图
 
-> 当前状态：T0/T1 已完成；T2/T3 仍是活跃后续计划。本文保留 schema/tag 后续项，不归档。
+> 当前状态：T0/T1 已完成；T2 本分支已实现且 integration gate 通过，等待 draft PR / CI；T3 仍是活跃后续计划。本文保留 schema/tag 后续项，不归档。
 
 ---
 
@@ -122,9 +122,9 @@ maintenance 调用 cleanup_expired_pages(now, schema)
 
 | #    | 功能                           | Schema 入口                           | 实现挂点                              | 完成判据                                 |
 | ---- | ---------------------------- | ----------------------------------- | --------------------------------- | ------------------------------------ |
-| T2.A | 数据模型补 tags 字段                | -                                   | `model.rs` / `llm_ingest_plan.rs` | Claim/Source/LlmClaimDraft 有 tags 字段 |
-| T2.B | `deprecated_tags` 拦截         | `TagConfig.deprecated_tags`         | `ingest` / `auto_hooks`           | 使用废弃标签时报错或降级                         |
-| T2.C | `max_new_tags_per_ingest` 限流 | `TagConfig.max_new_tags_per_ingest` | `ingest` 流程                       | 超限截断或报错                              |
+| T2.A | 数据模型补 tags 字段                | -                                   | `model.rs` / `llm_ingest_plan.rs` | ✅ 本分支已实现，Claim/Source/LlmClaimDraft 有 tags 字段 |
+| T2.B | `deprecated_tags` 拦截         | `TagConfig.deprecated_tags`         | `ingest` / `auto_hooks`           | ✅ 本分支已实现，使用废弃标签时报错                         |
+| T2.C | `max_new_tags_per_ingest` 限流 | `TagConfig.max_new_tags_per_ingest` | `ingest` 流程                       | ✅ 本分支已实现，超限报错                              |
 
 
 ---
@@ -152,5 +152,5 @@ maintenance 调用 cleanup_expired_pages(now, schema)
 - ✅ T1.C promote_page 命令
 - ✅ T1.D stale_days 消费
 - ✅ T1.E auto_cleanup 消费
-- ⏳ T2 标签治理主线未完成
+- 🟡 T2 标签治理主线本分支已实现，workspace fmt/test/clippy 已通过；等待 draft PR 和 CI
 - ⏳ T3 延后项未完成

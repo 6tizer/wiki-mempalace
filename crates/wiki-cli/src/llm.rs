@@ -73,11 +73,11 @@ Reply with ONLY a single JSON object (no markdown fences), schema:
   "one_sentence_summary": "one sentence TL;DR in the source language",
   "key_insights": [ "bullet-sized insight strings in the source language" ],
   "confidence": "high|medium|low",
-  "tags": [ "short wiki tags in the source language" ],
+  "tags": [ "short source/summary wiki tags in the source language" ],
   "source_author": "author if identifiable in text, else null",
   "source_publisher": "platform or publisher if identifiable, else null",
   "source_published_at": "publication time if identifiable, else null",
-  "claims": [ { "text": "atomic factual claim in the same language as the source", "tier": "semantic" } ],
+  "claims": [ { "text": "atomic factual claim in the same language as the source", "tier": "semantic", "tags": [ "short claim-specific wiki tags" ] } ],
   "entities": [ { "label": "EntityName", "kind": "library" } ],
   "relationships": [ { "from_label": "EntityA", "relation": "uses", "to_label": "EntityB" } ]
 }
@@ -86,10 +86,11 @@ Rules:
 - "kind" must be one of: person, project, library, concept, file_path, decision, other
 - "relation" must be one of: uses, depends_on, contradicts, caused, fixed, supersedes, related
 - claims: 0–12 items, each one short standalone sentence (these become "extracted concepts" in the vault)
+- claim tags: optional, 0–6 items per claim, specific to that claim
 - entities: 0–10 items, extract named entities (people, projects, libraries, concepts, decisions)
 - relationships: 0–10 items, typed directed edges between entities
 - key_insights: 0–8 items
-- tags: 0–12 items
+- top-level tags: 0–12 items, source/summary-level only
 - confidence must be exactly one of: high, medium, low
 - Prefer filling one_sentence_summary + key_insights; use summary_markdown only when needed for nuance
 - Do not include keys other than those listed."#
@@ -259,6 +260,21 @@ fn chat_completions_url(base_url: &str) -> String {
         format!("{trimmed}/chat/completions")
     } else {
         format!("{trimmed}/v1/chat/completions")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tag_ingest_prompt_describes_claim_level_tags() {
+        let prompt = ingest_llm_system_prompt();
+
+        assert!(prompt.contains("\"tags\": [ \"short source/summary wiki tags"));
+        assert!(prompt.contains("\"tags\": [ \"short claim-specific wiki tags\" ]"));
+        assert!(prompt.contains("claim tags: optional"));
+        assert!(prompt.contains("top-level tags: 0"));
     }
 }
 
