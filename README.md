@@ -110,6 +110,9 @@ cargo run -p wiki-cli -- schema-validate DomainSchema.json
 
 # 9) 启动统一 MCP Server（stdio JSON-RPC）
 cargo run -p wiki-cli -- --db wiki.db mcp --palace ~/.mempalace-rs
+
+# 10) 查看统一 metrics（默认只读；可写 JSON 或 Markdown 报告）
+cargo run -p wiki-cli -- --db wiki.db metrics --json --report wiki/reports/metrics.md
 ```
 
 完整子命令列表见 [AGENTS.md](AGENTS.md)（含 `ingest-llm`、`export-outbox-ndjson[-from]`、

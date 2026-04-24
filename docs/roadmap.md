@@ -15,13 +15,13 @@
 | M7 Fixer 工作流 | ✅ 已完成 | `wiki-cli fix`、`FixAction`、lint/gap finding 映射、低风险 auto fix |
 | M8 消费链产品化 | ✅ 已完成 | `PageContract`、`finalize_consumed_page`、`qa`/`synthesis`、统一 entry_type/status 骨架 |
 | M9 查询融合增强 | ✅ 已完成 | `query/explain --palace-db`、`MempalaceSearchPorts`、`CompositeSearchPorts`、scope 过滤与去重 |
-| M10 指标与评估 | ⏳ 未完成 | 还没有统一 metrics 命令/存储/报告；当前只有 health、doctor、kg_stats 等局部状态 |
+| M10 指标与评估 | ✅ Draft PR #12 / CI green | `wiki-cli metrics` 已实现；支持 `--consumer-tag`、`--low-coverage-threshold`、`--json`、`--report <PATH>`；覆盖 content/lint/gaps/outbox/lifecycle 5 组指标；core/kernel/cli metrics 测试通过；GitHub `quick` CI 已通过 |
 | M11 运维控制台 | ⏳ 未完成 | 还没有 Web UI 或本地 dashboard；当前只有 CLI 运维面 |
 | M12 策略层增强 | ⏳ 未完成 | 还没有自动 supersede/crystallize 建议层；当前只有规则维护、lint/gap/fix 基础链路 |
 
 ## 当前下一阶段
 
-1. M10 指标与评估：定义 ingest/lint/query/outbox/promotion 指标口径，增加 CLI 输出和测试。
+1. M10 指标与评估：Draft PR #12 已开且 CI green，等待 review / merge。
 2. M11 运维控制台：在 M10 指标稳定后，提供最小只读 dashboard 或本地报告页。
 3. M12 策略层增强：基于 lint/gap/query history 输出自动 supersede/crystallize 候选，不直接执行高风险写入。
 4. Schema T2 tag governance：落地 tags 模型、deprecated_tags 拦截、max_new_tags_per_ingest 限流。

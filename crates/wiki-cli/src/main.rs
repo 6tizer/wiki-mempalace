@@ -10,12 +10,12 @@ use wiki_core::{
     DomainSchema, Entity, EntityId, EntityKind, EntryStatus, EntryType, FixAction, FixActionType,
     FixPatch, FusionConfig, GapFinding, GapSeverity, LlmIngestPlanV1, MemoryTier, PageContract,
     PageId, QueryContext, RelationKind, Scope, SessionCrystallizationInput, SourceId, TypedEdge,
-    WikiPage,
+    WikiMetricsReport, WikiPage,
 };
 use wiki_kernel::{
-    finalize_consumed_page, format_claim_doc_id, initial_status_for, map_findings_to_fixes,
-    merge_graph_rankings, write_lint_report, write_projection, InMemorySearchPorts, InMemoryStore,
-    LlmWikiEngine, NoopWikiHook, SearchPorts,
+    collect_wiki_metrics, finalize_consumed_page, format_claim_doc_id, initial_status_for,
+    map_findings_to_fixes, merge_graph_rankings, write_lint_report, write_projection,
+    InMemorySearchPorts, InMemoryStore, LlmWikiEngine, NoopWikiHook, SearchPorts,
 };
 use wiki_mempalace_bridge::{
     consume_outbox_ndjson_with_resolver_and_stats, LiveMempalaceSink, MempalaceError,
@@ -217,6 +217,21 @@ enum Cmd {
         /// 用于 outbox ack / progress 跟踪的 consumer tag。
         #[arg(long, default_value = "mempalace")]
         consumer_tag: String,
+    },
+    /// Collect read-only wiki metrics.
+    Metrics {
+        /// Consumer tag used for outbox ack / lag metrics.
+        #[arg(long, default_value = DEFAULT_MEMPALACE_CONSUMER_TAG)]
+        consumer_tag: String,
+        /// Low coverage threshold used by gap scan.
+        #[arg(long, default_value_t = 2)]
+        low_coverage_threshold: usize,
+        /// Print pretty JSON instead of text.
+        #[arg(long, default_value_t = false)]
+        json: bool,
+        /// Also write a Markdown report to this path.
+        #[arg(long)]
+        report: Option<PathBuf>,
     },
     LlmSmoke {
         #[arg(long, default_value = "llm-config.toml")]
@@ -509,6 +524,173 @@ fn format_outbox_consumer_progress(progress: &OutboxConsumerProgress) -> String 
     }
     parts.push(format!("backlog_events={}", progress.backlog_events));
     parts.join(" ")
+}
+
+fn format_optional_i64(value: Option<i64>) -> String {
+    value
+        .map(|id| id.to_string())
+        .unwrap_or_else(|| "none".to_string())
+}
+
+fn entry_status_name(status: EntryStatus) -> &'static str {
+    match status {
+        EntryStatus::Draft => "draft",
+        EntryStatus::InReview => "in_review",
+        EntryStatus::Approved => "approved",
+        EntryStatus::NeedsUpdate => "needs_update",
+    }
+}
+
+fn entry_type_name(entry_type: &EntryType) -> &'static str {
+    match entry_type {
+        EntryType::Concept => "concept",
+        EntryType::Entity => "entity",
+        EntryType::Summary => "summary",
+        EntryType::Synthesis => "synthesis",
+        EntryType::Qa => "qa",
+        EntryType::LintReport => "lint_report",
+        EntryType::Index => "index",
+    }
+}
+
+fn render_metrics_text(report: &WikiMetricsReport) -> String {
+    let generated_at = report
+        .generated_at
+        .map(format_automation_time)
+        .unwrap_or_else(|| "unknown".to_string());
+    let consumer_tag = report
+        .outbox
+        .consumer_tag
+        .as_deref()
+        .unwrap_or("none")
+        .to_string();
+    let page_status = report
+        .lifecycle
+        .page_status
+        .iter()
+        .map(|item| format!("{}={}", entry_status_name(item.status), item.count))
+        .collect::<Vec<_>>()
+        .join(" ");
+    let entry_type = report
+        .lifecycle
+        .entry_type
+        .iter()
+        .map(|item| format!("{}={}", entry_type_name(&item.entry_type), item.count))
+        .collect::<Vec<_>>()
+        .join(" ");
+
+    format!(
+        concat!(
+            "metrics report: generated_at={}\n",
+            "content: sources={} pages={} claims={} entities={} relations={}\n",
+            "lint: total_findings={} info={} warn={} error={}\n",
+            "gaps: total_findings={} low={} medium={} high={}\n",
+            "outbox: head_id={} total_events={} unprocessed_events={} consumer_tag={} acked_up_to_id={} backlog_events={}\n",
+            "lifecycle: stale_claims={} page_status=[{}] entry_type=[{}]\n",
+        ),
+        generated_at,
+        report.content.sources,
+        report.content.pages,
+        report.content.claims,
+        report.content.entities,
+        report.content.relations,
+        report.lint.total_findings,
+        report.lint.severity.info,
+        report.lint.severity.warn,
+        report.lint.severity.error,
+        report.gaps.total_findings,
+        report.gaps.severity.low,
+        report.gaps.severity.medium,
+        report.gaps.severity.high,
+        format_optional_i64(report.outbox.head_id),
+        report.outbox.total_events,
+        report.outbox.unprocessed_events,
+        consumer_tag,
+        format_optional_i64(report.outbox.acked_up_to_id),
+        report.outbox.backlog_events,
+        report.lifecycle.stale_claims,
+        page_status,
+        entry_type,
+    )
+}
+
+fn render_metrics_markdown(report: &WikiMetricsReport) -> String {
+    let generated_at = report
+        .generated_at
+        .map(format_automation_time)
+        .unwrap_or_else(|| "unknown".to_string());
+    let page_status_rows = report
+        .lifecycle
+        .page_status
+        .iter()
+        .map(|item| format!("- {}: {}", entry_status_name(item.status), item.count))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let entry_type_rows = report
+        .lifecycle
+        .entry_type
+        .iter()
+        .map(|item| format!("- {}: {}", entry_type_name(&item.entry_type), item.count))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let consumer_tag = report.outbox.consumer_tag.as_deref().unwrap_or("none");
+
+    format!(
+        concat!(
+            "# Wiki Metrics Report\n\n",
+            "Generated at: {}\n\n",
+            "## Content\n\n",
+            "- Sources: {}\n",
+            "- Pages: {}\n",
+            "- Claims: {}\n",
+            "- Entities: {}\n",
+            "- Relations: {}\n\n",
+            "## Lint\n\n",
+            "- Total findings: {}\n",
+            "- Info: {}\n",
+            "- Warn: {}\n",
+            "- Error: {}\n\n",
+            "## Gaps\n\n",
+            "- Total findings: {}\n",
+            "- Low: {}\n",
+            "- Medium: {}\n",
+            "- High: {}\n\n",
+            "## Outbox\n\n",
+            "- Head id: {}\n",
+            "- Total events: {}\n",
+            "- Unprocessed events: {}\n",
+            "- Consumer tag: {}\n",
+            "- Acked up to id: {}\n",
+            "- Backlog events: {}\n\n",
+            "## Lifecycle\n\n",
+            "- Stale claims: {}\n\n",
+            "Page status:\n{}\n\n",
+            "Entry type:\n{}\n",
+        ),
+        generated_at,
+        report.content.sources,
+        report.content.pages,
+        report.content.claims,
+        report.content.entities,
+        report.content.relations,
+        report.lint.total_findings,
+        report.lint.severity.info,
+        report.lint.severity.warn,
+        report.lint.severity.error,
+        report.gaps.total_findings,
+        report.gaps.severity.low,
+        report.gaps.severity.medium,
+        report.gaps.severity.high,
+        format_optional_i64(report.outbox.head_id),
+        report.outbox.total_events,
+        report.outbox.unprocessed_events,
+        consumer_tag,
+        format_optional_i64(report.outbox.acked_up_to_id),
+        report.outbox.backlog_events,
+        report.lifecycle.stale_claims,
+        page_status_rows,
+        entry_type_rows,
+    )
 }
 
 fn format_duration_compact(duration: Duration) -> String {
@@ -1077,7 +1259,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             std::process::exit(if e.use_stderr() { 2 } else { 0 });
         }
     };
-    if !matches!(cli.cmd, Cmd::Mcp { .. } | Cmd::SchemaValidate { .. }) {
+    if !matches!(
+        &cli.cmd,
+        Cmd::Mcp { .. } | Cmd::SchemaValidate { .. } | Cmd::Metrics { .. }
+    ) {
         banner::print_startup_banner();
     }
 
@@ -1686,6 +1871,40 @@ fn run_with_engine(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                 dispatch.filtered,
                 dispatch.unresolved,
             );
+        }
+        Cmd::Metrics {
+            consumer_tag,
+            low_coverage_threshold,
+            json,
+            report,
+        } => {
+            let outbox_stats = repo.get_outbox_stats()?;
+            let outbox_progress = repo.get_outbox_consumer_progress(&consumer_tag)?;
+            let metrics = collect_wiki_metrics(
+                &eng.store,
+                &schema,
+                Some(&viewer),
+                Some(&outbox_stats),
+                Some(&outbox_progress),
+                low_coverage_threshold,
+                OffsetDateTime::now_utc(),
+            );
+            if let Some(path) = report {
+                if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
+                    std::fs::create_dir_all(parent)?;
+                }
+                std::fs::write(&path, render_metrics_markdown(&metrics))?;
+                if json {
+                    println!("{}", serde_json::to_string_pretty(&metrics)?);
+                } else {
+                    print!("{}", render_metrics_text(&metrics));
+                    println!("report_file={}", path.display());
+                }
+            } else if json {
+                println!("{}", serde_json::to_string_pretty(&metrics)?);
+            } else {
+                print!("{}", render_metrics_text(&metrics));
+            }
         }
         Cmd::LlmSmoke { config, prompt } => {
             let cfg = llm::load_llm_config(&config)?;
