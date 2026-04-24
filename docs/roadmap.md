@@ -24,6 +24,11 @@
 1. M10 指标与评估：定义 ingest/lint/query/outbox/promotion 指标口径，增加 CLI 输出和测试。
 2. M11 运维控制台：在 M10 指标稳定后，提供最小只读 dashboard 或本地报告页。
 3. M12 策略层增强：基于 lint/gap/query history 输出自动 supersede/crystallize 候选，不直接执行高风险写入。
+4. Schema T2 tag governance：落地 tags 模型、deprecated_tags 拦截、max_new_tags_per_ingest 限流。
+5. LongMemEval auto benchmark：nightly / weekly 非阻塞自动评测，artifact 报告，不进 PR 必跑。
+
+执行计划见 [automation-issue-batch-3.md](automation-issue-batch-3.md)。开发流程见
+[dev-workflow.md](dev-workflow.md)，batch-3 PRD 见 [prd/batch-3.md](prd/batch-3.md)。
 
 ## 不再重复开发
 

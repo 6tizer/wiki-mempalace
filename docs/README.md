@@ -19,8 +19,21 @@
 ## 活跃计划
 
 - [roadmap.md](roadmap.md) — M1-M9 已完成；M10-M12 是当前下一阶段。
+- [automation-issue-batch-3.md](automation-issue-batch-3.md) — M10 metrics、M11 dashboard、M12 strategy、Schema T2 tags、LongMemEval auto benchmark 的批次计划。
+- [dev-workflow.md](dev-workflow.md) — PRD → spec 三件套 → branch → subagent → review → PR → CI → merge 的固定开发流程。
+- [prd/batch-3.md](prd/batch-3.md) — batch-3 PRD。
+- [specs/](specs/) — batch-3 各模块 spec 三件套。
 - [schema-followup-plan.md](schema-followup-plan.md) — T0/T1 已完成；T2/T3 标签治理与延后项仍可继续。
 - [longmemeval.md](longmemeval.md) — LongMemEval / CI 策略。
+
+## 模板
+
+- [templates/prd.md](templates/prd.md)
+- [templates/spec-requirements.md](templates/spec-requirements.md)
+- [templates/spec-design.md](templates/spec-design.md)
+- [templates/spec-tasks.md](templates/spec-tasks.md)
+- [templates/subagent-task.md](templates/subagent-task.md)
+- [templates/review-checklist.md](templates/review-checklist.md)
 
 ## 历史资料
 
