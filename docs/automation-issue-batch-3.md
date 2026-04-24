@@ -14,7 +14,7 @@
 
 | 模块 | 状态 | 当前证据 | batch-3 要补什么 |
 | --- | --- | --- | --- |
-| M10 指标与评估 | ⏳ 未完成 | 只有 `automation health/doctor`、`kg_stats` 等局部状态 | 统一 metrics 数据模型、CLI 输出、报告、测试 |
+| M10 指标与评估 | 🔎 In Review / 已实现待 CI | 已有 `wiki-cli metrics`，支持 `--consumer-tag`、`--low-coverage-threshold`、`--json`、`--report <PATH>`；覆盖 content/lint/gaps/outbox/lifecycle 5 组指标；core/kernel/cli metrics 测试已补 | 模块 review、integration review、PR、CI |
 | M11 运维控制台 | ⏳ 未完成 | 只有 CLI 运维面，无 dashboard | 最小只读 dashboard / HTML report |
 | M12 策略层增强 | ⏳ 未完成 | 只有 lint/gap/fix 基础链路 | 自动 supersede / crystallize / stale 建议，不自动执行高风险写入 |
 | Schema T2 标签治理 | ⏳ 未完成 | `TagConfig` 字段已存在，`Claim/Source/LlmClaimDraft` tags 与 ingest 策略未落地 | tags 模型、deprecated_tags 拦截、max_new_tags_per_ingest 限流 |
@@ -87,11 +87,11 @@ flowchart TD
 
 ### 交付物
 
-- metrics 数据模型。
-- metrics 聚合函数。
-- `wiki-cli metrics` 命令。
-- 文本输出和至少一种机器可读输出或稳定报告文件。
-- 单元测试 + CLI 集成测试。
+- metrics 数据模型：已实现，进入 review。
+- metrics 聚合函数：已实现，聚合 content/lint/gaps/outbox/lifecycle。
+- `wiki-cli metrics` 命令：已实现。
+- 文本输出、`--json`、`--report <PATH>`：已实现。
+- 单元测试 + CLI 集成测试：core/kernel/cli metrics 初步通过，待 CI。
 
 ### 测试
 
@@ -109,9 +109,9 @@ flowchart TD
 
 ### 验收标准
 
-- 至少 5 类核心指标可稳定查看。
-- 输出稳定到可被 dashboard / strategy 复用。
-- 指标不触发写入，默认只读。
+- 至少 5 类核心指标可稳定查看：已实现，待 review/CI。
+- 输出稳定到可被 dashboard / strategy 复用：已实现 JSON/report 入口，待后续模块消费验证。
+- 指标不触发写入，默认只读：实现按只读聚合设计，待 review 确认。
 
 ### 风险
 

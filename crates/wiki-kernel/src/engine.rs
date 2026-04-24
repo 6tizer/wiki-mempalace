@@ -6,14 +6,13 @@ use std::path::Path;
 use wiki_storage::{StorageError, WikiRepository};
 
 use crate::search_ports::SearchPorts;
-use wiki_core::quality::check_page_completeness;
 use wiki_core::{
     advance_tier, apply_time_decay_to_confidence, document_visible_to_viewer, draft_from_session,
-    merge_sources_confidence, reciprocal_rank_fusion, redact_for_ingest, reinforce_claim,
-    retention_strength, supersede_claim, walk_entities, AuditOperation, AuditRecord, Claim,
-    ClaimId, ContradictionHint, CrystallizationDraft, DomainSchema, Entity, EntityId, EntryStatus,
-    EntryType, GapFinding, GraphWalkOptions, LintFinding, LintSeverity, MemoryTier, PageId,
-    QueryContext, RankedDoc, RawArtifact, RelationKind, SchemaLoadError, Scope,
+    extract_wikilinks, merge_sources_confidence, reciprocal_rank_fusion, redact_for_ingest,
+    reinforce_claim, retention_strength, supersede_claim, walk_entities, AuditOperation,
+    AuditRecord, Claim, ClaimId, ContradictionHint, CrystallizationDraft, DomainSchema, Entity,
+    EntityId, EntryStatus, EntryType, GapFinding, GraphWalkOptions, LintFinding, LintSeverity,
+    MemoryTier, PageId, QueryContext, RankedDoc, RawArtifact, RelationKind, SchemaLoadError, Scope,
     SessionCrystallizationInput, SourceId, TypedEdge, WikiEvent,
 };
 
@@ -594,116 +593,17 @@ impl<H: WikiHook> LlmWikiEngine<H> {
         actor: &str,
         viewer_scope: Option<&Scope>,
     ) -> Vec<LintFinding> {
-        let mut findings = Vec::new();
         let visible = |s: &Scope| match viewer_scope {
             None => true,
             Some(v) => document_visible_to_viewer(s, v),
         };
-        for c in self.store.claims.values() {
-            if !visible(&c.scope) {
-                continue;
-            }
-            if c.quality_score < 0.35 {
-                findings.push(LintFinding {
-                    code: "quality.low".into(),
-                    message: "claim quality below threshold".into(),
-                    severity: LintSeverity::Warn,
-                    subject: Some(c.id.0.to_string()),
-                });
-            }
-            if c.stale {
-                findings.push(LintFinding {
-                    code: "lifecycle.stale".into(),
-                    message: "stale claim retained for audit".into(),
-                    severity: LintSeverity::Info,
-                    subject: Some(c.id.0.to_string()),
-                });
-            }
-        }
-        let titles: std::collections::HashSet<String> = self
-            .store
-            .pages
-            .values()
-            .map(|p| p.title.trim().to_string())
-            .filter(|t| !t.is_empty())
-            .collect();
         for p in self.store.pages.values_mut() {
             if !visible(&p.scope) {
                 continue;
             }
             p.refresh_outbound_links();
-            if p.title.trim().is_empty() {
-                findings.push(LintFinding {
-                    code: "page.empty_title".into(),
-                    message: "wiki page has empty title".into(),
-                    severity: LintSeverity::Error,
-                    subject: Some(p.id.0.to_string()),
-                });
-            }
-            for link in &p.outbound_page_titles {
-                if !titles.contains(link) {
-                    findings.push(LintFinding {
-                        code: "page.broken_wikilink".into(),
-                        message: format!("broken wikilink: {link}"),
-                        severity: LintSeverity::Warn,
-                        subject: Some(p.id.0.to_string()),
-                    });
-                }
-            }
-            // 完整度基线：仅当 page.entry_type 非空且 schema 配置了对应段落时生效
-            findings.extend(check_page_completeness(&self.schema, p));
         }
-        let mut inbound_count: std::collections::HashMap<String, usize> =
-            std::collections::HashMap::new();
-        for p in self.store.pages.values() {
-            if !visible(&p.scope) {
-                continue;
-            }
-            for link in &p.outbound_page_titles {
-                *inbound_count.entry(link.clone()).or_insert(0) += 1;
-            }
-        }
-        for p in self.store.pages.values() {
-            if !visible(&p.scope) {
-                continue;
-            }
-            if inbound_count.get(&p.title).copied().unwrap_or(0) == 0 {
-                findings.push(LintFinding {
-                    code: "page.orphan".into(),
-                    message: "page has no inbound wikilinks".into(),
-                    severity: LintSeverity::Info,
-                    subject: Some(p.id.0.to_string()),
-                });
-            }
-        }
-        let mut page_text = String::new();
-        for p in self.store.pages.values() {
-            if !visible(&p.scope) {
-                continue;
-            }
-            page_text.push_str(&p.markdown.to_ascii_lowercase());
-            page_text.push('\n');
-        }
-        for c in self.store.claims.values() {
-            if !visible(&c.scope) {
-                continue;
-            }
-            if c.stale {
-                findings.push(LintFinding {
-                    code: "claim.stale".into(),
-                    message: "stale claim should be reconciled in wiki pages".into(),
-                    severity: LintSeverity::Warn,
-                    subject: Some(c.id.0.to_string()),
-                });
-            } else if !crate::gap::claim_has_page_reference(&c.text, &page_text) {
-                findings.push(LintFinding {
-                    code: "xref.missing".into(),
-                    message: "claim keywords are not referenced in current pages".into(),
-                    severity: LintSeverity::Info,
-                    subject: Some(c.id.0.to_string()),
-                });
-            }
-        }
+        let findings = collect_basic_lint_findings(&self.schema, &self.store, viewer_scope);
         self.audit(
             AuditOperation::RunLint,
             actor,
@@ -846,6 +746,127 @@ impl<H: WikiHook> LlmWikiEngine<H> {
     ) -> Vec<GapFinding> {
         crate::gap::run_gap_scan(&self.store, viewer_scope, low_coverage_threshold)
     }
+}
+
+pub fn collect_basic_lint_findings(
+    schema: &DomainSchema,
+    store: &InMemoryStore,
+    viewer_scope: Option<&Scope>,
+) -> Vec<LintFinding> {
+    let mut findings = Vec::new();
+    let visible = |s: &Scope| match viewer_scope {
+        None => true,
+        Some(v) => document_visible_to_viewer(s, v),
+    };
+    for c in store.claims.values() {
+        if !visible(&c.scope) {
+            continue;
+        }
+        if c.quality_score < 0.35 {
+            findings.push(LintFinding {
+                code: "quality.low".into(),
+                message: "claim quality below threshold".into(),
+                severity: LintSeverity::Warn,
+                subject: Some(c.id.0.to_string()),
+            });
+        }
+        if c.stale {
+            findings.push(LintFinding {
+                code: "lifecycle.stale".into(),
+                message: "stale claim retained for audit".into(),
+                severity: LintSeverity::Info,
+                subject: Some(c.id.0.to_string()),
+            });
+        }
+    }
+    let titles: std::collections::HashSet<String> = store
+        .pages
+        .values()
+        .filter(|p| visible(&p.scope))
+        .map(|p| p.title.trim().to_string())
+        .filter(|t| !t.is_empty())
+        .collect();
+    let page_links: std::collections::HashMap<_, _> = store
+        .pages
+        .values()
+        .map(|p| (p.id, extract_wikilinks(&p.markdown)))
+        .collect();
+    for p in store.pages.values() {
+        if !visible(&p.scope) {
+            continue;
+        }
+        if p.title.trim().is_empty() {
+            findings.push(LintFinding {
+                code: "page.empty_title".into(),
+                message: "wiki page has empty title".into(),
+                severity: LintSeverity::Error,
+                subject: Some(p.id.0.to_string()),
+            });
+        }
+        for link in page_links.get(&p.id).into_iter().flatten() {
+            if !titles.contains(link) {
+                findings.push(LintFinding {
+                    code: "page.broken_wikilink".into(),
+                    message: format!("broken wikilink: {link}"),
+                    severity: LintSeverity::Warn,
+                    subject: Some(p.id.0.to_string()),
+                });
+            }
+        }
+        findings.extend(wiki_core::quality::check_page_completeness(schema, p));
+    }
+    let mut inbound_count: std::collections::HashMap<String, usize> =
+        std::collections::HashMap::new();
+    for p in store.pages.values() {
+        if !visible(&p.scope) {
+            continue;
+        }
+        for link in page_links.get(&p.id).into_iter().flatten() {
+            *inbound_count.entry(link.clone()).or_insert(0) += 1;
+        }
+    }
+    for p in store.pages.values() {
+        if !visible(&p.scope) {
+            continue;
+        }
+        if inbound_count.get(&p.title).copied().unwrap_or(0) == 0 {
+            findings.push(LintFinding {
+                code: "page.orphan".into(),
+                message: "page has no inbound wikilinks".into(),
+                severity: LintSeverity::Info,
+                subject: Some(p.id.0.to_string()),
+            });
+        }
+    }
+    let mut page_text = String::new();
+    for p in store.pages.values() {
+        if !visible(&p.scope) {
+            continue;
+        }
+        page_text.push_str(&p.markdown.to_ascii_lowercase());
+        page_text.push('\n');
+    }
+    for c in store.claims.values() {
+        if !visible(&c.scope) {
+            continue;
+        }
+        if c.stale {
+            findings.push(LintFinding {
+                code: "claim.stale".into(),
+                message: "stale claim should be reconciled in wiki pages".into(),
+                severity: LintSeverity::Warn,
+                subject: Some(c.id.0.to_string()),
+            });
+        } else if !crate::gap::claim_has_page_reference(&c.text, &page_text) {
+            findings.push(LintFinding {
+                code: "xref.missing".into(),
+                message: "claim keywords are not referenced in current pages".into(),
+                severity: LintSeverity::Info,
+                subject: Some(c.id.0.to_string()),
+            });
+        }
+    }
+    findings
 }
 
 /// 自由函数：三路召回 + RRF + 保留强度（不写审计），避免 `SearchPorts` 与 `&mut self` 交错借用。
@@ -1043,6 +1064,30 @@ mod tests {
             }),
         );
         assert!(findings.iter().any(|f| f.code == "page.broken_wikilink"));
+    }
+
+    #[test]
+    fn lint_treats_hidden_page_title_as_broken_wikilink_for_viewer_scope() {
+        let mut eng = LlmWikiEngine::new(DomainSchema::permissive_default());
+        let viewer = Scope::Private {
+            agent_id: "a".into(),
+        };
+        let visible_page = WikiPage::new("Visible", "Link to [[Hidden]]", viewer.clone());
+        let hidden_page = WikiPage::new(
+            "Hidden",
+            "secret",
+            Scope::Private {
+                agent_id: "b".into(),
+            },
+        );
+        eng.store.pages.insert(visible_page.id, visible_page);
+        eng.store.pages.insert(hidden_page.id, hidden_page);
+
+        let findings = eng.run_basic_lint("tester", Some(&viewer));
+
+        assert!(findings
+            .iter()
+            .any(|f| f.code == "page.broken_wikilink" && f.message == "broken wikilink: Hidden"));
     }
 
     #[test]

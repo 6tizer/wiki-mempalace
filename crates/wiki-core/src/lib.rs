@@ -14,6 +14,7 @@ pub mod gap;
 pub mod graph;
 pub mod lifecycle;
 pub mod llm_ingest_plan;
+pub mod metrics;
 pub mod model;
 pub mod page;
 pub mod privacy;
@@ -39,6 +40,10 @@ pub use lifecycle::{
 };
 pub use llm_ingest_plan::{
     parse_memory_tier, LlmClaimDraft, LlmEntityDraft, LlmIngestPlanV1, LlmRelationDraft,
+};
+pub use metrics::{
+    ContentMetrics, EntryTypeCount, GapMetrics, GapSeverityCounts, LifecycleMetrics, LintMetrics,
+    LintSeverityCounts, OutboxMetrics, PageStatusCount, WikiMetricsReport,
 };
 pub use model::{
     Claim, ClaimId, Entity, EntityId, EntityKind, MemoryTier, PageId, RelationKind, Scope,
