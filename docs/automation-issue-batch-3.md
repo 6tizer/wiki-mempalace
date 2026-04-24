@@ -14,7 +14,7 @@
 
 | 模块 | 状态 | 当前证据 | batch-3 要补什么 |
 | --- | --- | --- | --- |
-| M10 指标与评估 | 🔎 In Review / 已实现待 CI | 已有 `wiki-cli metrics`，支持 `--consumer-tag`、`--low-coverage-threshold`、`--json`、`--report <PATH>`；覆盖 content/lint/gaps/outbox/lifecycle 5 组指标；core/kernel/cli metrics 测试已补 | 模块 review、integration review、PR、CI |
+| M10 指标与评估 | ✅ Draft PR #12 / CI green | 已有 `wiki-cli metrics`，支持 `--consumer-tag`、`--low-coverage-threshold`、`--json`、`--report <PATH>`；覆盖 content/lint/gaps/outbox/lifecycle 5 组指标；core/kernel/cli metrics 测试已补；GitHub `quick` CI 已通过 | 等待 review / merge |
 | M11 运维控制台 | ⏳ 未完成 | 只有 CLI 运维面，无 dashboard | 最小只读 dashboard / HTML report |
 | M12 策略层增强 | ⏳ 未完成 | 只有 lint/gap/fix 基础链路 | 自动 supersede / crystallize / stale 建议，不自动执行高风险写入 |
 | Schema T2 标签治理 | ⏳ 未完成 | `TagConfig` 字段已存在，`Claim/Source/LlmClaimDraft` tags 与 ingest 策略未落地 | tags 模型、deprecated_tags 拦截、max_new_tags_per_ingest 限流 |
