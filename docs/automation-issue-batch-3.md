@@ -17,7 +17,7 @@
 | M10 指标与评估 | ✅ Draft PR #12 / CI green | 已有 `wiki-cli metrics`，支持 `--consumer-tag`、`--low-coverage-threshold`、`--json`、`--report <PATH>`；覆盖 content/lint/gaps/outbox/lifecycle 5 组指标；core/kernel/cli metrics 测试已补；GitHub `quick` CI 已通过 | 等待 review / merge |
 | M11 运维控制台 | ⏳ 未完成 | 只有 CLI 运维面，无 dashboard | 最小只读 dashboard / HTML report |
 | M12 策略层增强 | ⏳ 未完成 | 只有 lint/gap/fix 基础链路 | 自动 supersede / crystallize / stale 建议，不自动执行高风险写入 |
-| Schema T2 标签治理 | ⏳ 未完成 | `TagConfig` 字段已存在，`Claim/Source/LlmClaimDraft` tags 与 ingest 策略未落地 | tags 模型、deprecated_tags 拦截、max_new_tags_per_ingest 限流 |
+| Schema T2 标签治理 | 🟡 本分支已实现 / integration gate 通过 | `Claim/Source/LlmClaimDraft` tags 已落地；CLI/MCP/batch ingest 已接 tags；`deprecated_tags` 与 `max_new_tags_per_ingest` 已拦截；workspace fmt/test/clippy 已通过 | 开 draft PR，等 CI |
 | LongMemEval 自动评测 | ⏳ 未完成 | 当前文档策略是不进必跑 CI，尚无自动 workflow / artifact 报告 | scheduled benchmark workflow、retrieval-only runner、artifact 报告 |
 
 ## Batch-3 总览
@@ -301,11 +301,11 @@ CLI 已能查看 health / doctor，但非开发者或长期运行时需要一个
 
 ### 交付物
 
-- tags 字段向后兼容反序列化。
-- tags 归一规则：trim、去空、去重、保持稳定顺序。
-- deprecated tags 拦截或降级策略。
-- max new tags 限流。
-- 测试覆盖旧 snapshot、LLM plan、CLI ingest。
+- tags 字段向后兼容反序列化：已实现，旧 JSON 缺字段默认空数组。
+- tags 归一规则：已实现 trim、去空、去重、稳定保序。
+- deprecated tags 拦截：已实现，命中后返回错误。
+- max new tags 限流：已实现，超出 `max_new_tags_per_ingest` 返回错误。
+- 测试覆盖旧 snapshot、LLM plan、CLI ingest：focused tests 与 workspace integration gate 已通过。
 
 ### 测试
 
@@ -323,9 +323,10 @@ CLI 已能查看 health / doctor，但非开发者或长期运行时需要一个
 
 ### 验收标准
 
-- Claim / Source / LlmClaimDraft 都有 tags。
-- `TagConfig.deprecated_tags` 和 `max_new_tags_per_ingest` 被真实消费。
-- 旧数据兼容，不需要迁移命令。
+- Claim / Source / LlmClaimDraft 都有 tags：本分支已实现。
+- `TagConfig.deprecated_tags` 和 `max_new_tags_per_ingest` 被真实消费：本分支已实现。
+- 旧数据兼容，不需要迁移命令：本分支已实现。
+- 当前状态：local focused tests passing，integration review 与全量 fmt/test/clippy 已通过，等待 draft PR 和 CI。
 
 ### 风险
 

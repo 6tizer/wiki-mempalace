@@ -91,6 +91,8 @@ pub struct Claim {
     pub text: String,
     pub tier: MemoryTier,
     pub scope: Scope,
+    #[serde(default)]
+    pub tags: Vec<String>,
     /// 综合置信度（来源数量、时间、矛盾处理后的结果）。
     pub confidence: f64,
     pub quality_score: f64,
@@ -110,6 +112,7 @@ impl Claim {
             text: text.into(),
             tier,
             scope,
+            tags: Vec::new(),
             confidence: 0.5,
             quality_score: 0.5,
             source_ids: Vec::new(),
@@ -119,6 +122,39 @@ impl Claim {
             last_reinforced_at: None,
             access_count: 0,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn claim_old_json_without_tags_deserializes_to_empty_vec() {
+        let original = Claim::new(
+            "claim",
+            Scope::Private {
+                agent_id: "cli".into(),
+            },
+            MemoryTier::Semantic,
+        );
+        let mut value = serde_json::to_value(original).unwrap();
+        value.as_object_mut().unwrap().remove("tags");
+
+        let claim: Claim = serde_json::from_value(value).unwrap();
+        assert!(claim.tags.is_empty());
+    }
+
+    #[test]
+    fn claim_new_initializes_empty_tags() {
+        let claim = Claim::new(
+            "claim",
+            Scope::Private {
+                agent_id: "cli".into(),
+            },
+            MemoryTier::Semantic,
+        );
+        assert!(claim.tags.is_empty());
     }
 }
 

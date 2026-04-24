@@ -8,12 +8,13 @@ use wiki_storage::{StorageError, WikiRepository};
 use crate::search_ports::SearchPorts;
 use wiki_core::{
     advance_tier, apply_time_decay_to_confidence, document_visible_to_viewer, draft_from_session,
-    extract_wikilinks, merge_sources_confidence, reciprocal_rank_fusion, redact_for_ingest,
-    reinforce_claim, retention_strength, supersede_claim, walk_entities, AuditOperation,
-    AuditRecord, Claim, ClaimId, ContradictionHint, CrystallizationDraft, DomainSchema, Entity,
-    EntityId, EntryStatus, EntryType, GapFinding, GraphWalkOptions, LintFinding, LintSeverity,
-    MemoryTier, PageId, QueryContext, RankedDoc, RawArtifact, RelationKind, SchemaLoadError, Scope,
-    SessionCrystallizationInput, SourceId, TypedEdge, WikiEvent,
+    extract_wikilinks, merge_sources_confidence, normalize_and_validate_tags,
+    reciprocal_rank_fusion, redact_for_ingest, reinforce_claim, retention_strength,
+    supersede_claim, walk_entities, AuditOperation, AuditRecord, Claim, ClaimId, ContradictionHint,
+    CrystallizationDraft, DomainSchema, Entity, EntityId, EntryStatus, EntryType, GapFinding,
+    GraphWalkOptions, LintFinding, LintSeverity, MemoryTier, PageId, QueryContext, RankedDoc,
+    RawArtifact, RelationKind, SchemaLoadError, Scope, SessionCrystallizationInput, SourceId,
+    TagPolicyError, TypedEdge, WikiEvent,
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -32,6 +33,8 @@ pub enum EngineError {
     Storage(#[from] StorageError),
     #[error("scope denied: resource not visible to this viewer")]
     ScopeDenied,
+    #[error(transparent)]
+    TagPolicy(#[from] TagPolicyError),
 }
 
 /// 页面状态晋升失败的细粒度错误
@@ -105,8 +108,36 @@ impl<H: WikiHook> LlmWikiEngine<H> {
         scope: Scope,
         actor: &str,
     ) -> SourceId {
+        self.ingest_raw_validated(uri, body, scope, actor, Vec::new())
+    }
+
+    pub fn ingest_raw_with_tags<I, S>(
+        &mut self,
+        uri: impl Into<String>,
+        body: &str,
+        scope: Scope,
+        actor: &str,
+        tags: I,
+    ) -> Result<SourceId, EngineError>
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
+        let tags = normalize_and_validate_tags(tags, &self.schema)?;
+        Ok(self.ingest_raw_validated(uri, body, scope, actor, tags))
+    }
+
+    fn ingest_raw_validated(
+        &mut self,
+        uri: impl Into<String>,
+        body: &str,
+        scope: Scope,
+        actor: &str,
+        tags: Vec<String>,
+    ) -> SourceId {
         let (clean, findings) = redact_for_ingest(body);
-        let art = RawArtifact::new(uri, clean, scope);
+        let mut art = RawArtifact::new(uri, clean, scope);
+        art.tags = tags;
         let id = art.id;
         self.store.sources.insert(id, art);
         self.audit(
@@ -136,7 +167,35 @@ impl<H: WikiHook> LlmWikiEngine<H> {
         tier: MemoryTier,
         actor: &str,
     ) -> ClaimId {
-        let c = Claim::new(text, scope, tier);
+        self.file_claim_validated(text, scope, tier, actor, Vec::new())
+    }
+
+    pub fn file_claim_with_tags<I, S>(
+        &mut self,
+        text: impl Into<String>,
+        scope: Scope,
+        tier: MemoryTier,
+        actor: &str,
+        tags: I,
+    ) -> Result<ClaimId, EngineError>
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
+        let tags = normalize_and_validate_tags(tags, &self.schema)?;
+        Ok(self.file_claim_validated(text, scope, tier, actor, tags))
+    }
+
+    fn file_claim_validated(
+        &mut self,
+        text: impl Into<String>,
+        scope: Scope,
+        tier: MemoryTier,
+        actor: &str,
+        tags: Vec<String>,
+    ) -> ClaimId {
+        let mut c = Claim::new(text, scope, tier);
+        c.tags = tags;
         let id = c.id;
         self.store.claims.insert(id, c);
         self.audit(AuditOperation::WriteClaim, actor, format!("claim {}", id.0));
@@ -964,6 +1023,12 @@ mod tests {
     use wiki_core::{SessionCrystallizationInput, WikiEvent, WikiPage};
     use wiki_storage::{SqliteRepository, WikiRepository};
 
+    fn private_scope() -> Scope {
+        Scope::Private {
+            agent_id: "a1".into(),
+        }
+    }
+
     #[test]
     fn ingest_and_file_claim_flow() {
         let mut eng = LlmWikiEngine::new(DomainSchema::permissive_default());
@@ -986,6 +1051,135 @@ mod tests {
         eng.attach_sources(cid, &[sid]).unwrap();
         assert!(eng.store.sources[&sid].body.contains("REDACTED"));
         assert!(!eng.store.claims[&cid].source_ids.is_empty());
+    }
+
+    #[test]
+    fn ingest_raw_with_tags_writes_normalized_source_tags() {
+        let mut schema = DomainSchema::permissive_default();
+        schema.tag_config.seed_tags = vec!["alpha".into(), "beta".into()];
+        let mut eng = LlmWikiEngine::new(schema);
+
+        let sid = eng
+            .ingest_raw_with_tags(
+                "file:///tmp/note.md",
+                "body",
+                private_scope(),
+                "tester",
+                [" Alpha ", "", "beta", "alpha"],
+            )
+            .unwrap();
+
+        assert_eq!(eng.store.sources[&sid].tags, vec!["Alpha", "beta"]);
+    }
+
+    #[test]
+    fn file_claim_with_tags_writes_normalized_claim_tags() {
+        let mut schema = DomainSchema::permissive_default();
+        schema.tag_config.seed_tags = vec!["topic".into(), "owner".into()];
+        let mut eng = LlmWikiEngine::new(schema);
+
+        let cid = eng
+            .file_claim_with_tags(
+                "tagged claim",
+                private_scope(),
+                MemoryTier::Semantic,
+                "tester",
+                [" topic ", "owner", "TOPIC"],
+            )
+            .unwrap();
+
+        assert_eq!(eng.store.claims[&cid].tags, vec!["topic", "owner"]);
+    }
+
+    #[test]
+    fn deprecated_tag_rejects_source_and_does_not_insert() {
+        let mut schema = DomainSchema::permissive_default();
+        schema.tag_config.deprecated_tags = vec!["old".into()];
+        let mut eng = LlmWikiEngine::new(schema);
+
+        let err = eng
+            .ingest_raw_with_tags(
+                "file:///tmp/note.md",
+                "body",
+                private_scope(),
+                "tester",
+                [" old "],
+            )
+            .unwrap_err();
+
+        assert!(matches!(
+            err,
+            EngineError::TagPolicy(TagPolicyError::DeprecatedTag(tag)) if tag == "old"
+        ));
+        assert!(eng.store.sources.is_empty());
+        assert!(eng.audits.is_empty());
+        assert!(eng.outbox.is_empty());
+    }
+
+    #[test]
+    fn deprecated_tag_rejects_claim_and_does_not_insert() {
+        let mut schema = DomainSchema::permissive_default();
+        schema.tag_config.deprecated_tags = vec!["old".into()];
+        let mut eng = LlmWikiEngine::new(schema);
+
+        let err = eng
+            .file_claim_with_tags(
+                "claim",
+                private_scope(),
+                MemoryTier::Semantic,
+                "tester",
+                ["old"],
+            )
+            .unwrap_err();
+
+        assert!(matches!(
+            err,
+            EngineError::TagPolicy(TagPolicyError::DeprecatedTag(tag)) if tag == "old"
+        ));
+        assert!(eng.store.claims.is_empty());
+        assert!(eng.audits.is_empty());
+        assert!(eng.outbox.is_empty());
+    }
+
+    #[test]
+    fn max_new_tags_rejects_and_does_not_insert() {
+        let mut schema = DomainSchema::permissive_default();
+        schema.tag_config.seed_tags = vec!["known".into()];
+        schema.tag_config.max_new_tags_per_ingest = 1;
+        let mut eng = LlmWikiEngine::new(schema);
+
+        let err = eng
+            .file_claim_with_tags(
+                "claim",
+                private_scope(),
+                MemoryTier::Semantic,
+                "tester",
+                ["known", "new-one", "new-two"],
+            )
+            .unwrap_err();
+
+        assert!(matches!(
+            err,
+            EngineError::TagPolicy(TagPolicyError::TooManyNewTags {
+                count: 2,
+                max: 1,
+                ..
+            })
+        ));
+        assert!(eng.store.claims.is_empty());
+        assert!(eng.audits.is_empty());
+        assert!(eng.outbox.is_empty());
+    }
+
+    #[test]
+    fn legacy_ingest_raw_and_file_claim_still_use_empty_tags() {
+        let mut eng = LlmWikiEngine::new(DomainSchema::permissive_default());
+
+        let sid = eng.ingest_raw("file:///tmp/note.md", "body", private_scope(), "tester");
+        let cid = eng.file_claim("claim", private_scope(), MemoryTier::Working, "tester");
+
+        assert!(eng.store.sources[&sid].tags.is_empty());
+        assert!(eng.store.claims[&cid].tags.is_empty());
     }
 
     #[test]
