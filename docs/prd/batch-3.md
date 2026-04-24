@@ -28,7 +28,7 @@ Out:
 | Module | Goal | Owner area | Status |
 | --- | --- | --- | --- |
 | J9 Metrics Core | Unified metrics model, CLI, reports | `wiki-core`, `wiki-kernel`, `wiki-cli` | Draft PR #12 / CI green |
-| J10 Dashboard | Static read-only dashboard/report | `wiki-cli`, docs | Planned |
+| J10 Dashboard | Static read-only dashboard/report | `wiki-cli`, docs | 本分支已实现 / integration gate passed / draft PR pending |
 | J11 Strategy Suggestions | Explainable suggestions, no auto execution | `wiki-core`, `wiki-kernel`, `wiki-cli` | Planned |
 | J12 Tag Governance | Tags model + schema policy consumption | `wiki-core`, `wiki-kernel`, `wiki-cli` | Implemented locally / integration gate passed / draft PR pending |
 | J13 LongMemEval Auto Benchmark | Scheduled retrieval benchmark artifacts | `.github/workflows`, `scripts`, docs | Planned |
