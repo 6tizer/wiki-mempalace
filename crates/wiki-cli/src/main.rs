@@ -3837,7 +3837,9 @@ fn batch_ingest_cmd(
                 }
 
                 // 按 vault-standards 写 summary 页到 pages/summary/
-                if let Some(root) = wiki_root.filter(|_| stats.plan.should_materialize_summary_page()) {
+                if let Some(root) =
+                    wiki_root.filter(|_| stats.plan.should_materialize_summary_page())
+                {
                     write_batch_summary(
                         root,
                         &src.title,

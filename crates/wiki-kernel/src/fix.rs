@@ -156,10 +156,7 @@ fn dedup_fixes(fixes: &mut Vec<FixAction>) {
             if let Some(ref subject) = fix.subject {
                 if let Some(FixPatch::AppendSections { sections }) = &fix.patch {
                     let set: std::collections::HashSet<String> = sections.iter().cloned().collect();
-                    append_map
-                        .entry(subject.clone())
-                        .or_default()
-                        .extend(set);
+                    append_map.entry(subject.clone()).or_default().extend(set);
                 }
             }
         }

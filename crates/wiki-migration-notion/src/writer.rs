@@ -233,9 +233,7 @@ fn slugify(title: &str) -> String {
     let mut out = String::with_capacity(title.len());
     let mut last_sep = true;
     for c in title.chars() {
-        if c.is_ascii_alphanumeric()
-            || (!c.is_ascii() && !c.is_control())
-            || matches!(c, '-' | '_')
+        if c.is_ascii_alphanumeric() || (!c.is_ascii() && !c.is_control()) || matches!(c, '-' | '_')
         {
             out.push(c);
             last_sep = false;
@@ -553,9 +551,7 @@ fn rewrite_body(
 
 fn host_of(url: &str) -> Option<String> {
     let after = url.split_once("://")?.1;
-    let end = after
-        .find(['/', '?', '#'])
-        .unwrap_or(after.len());
+    let end = after.find(['/', '?', '#']).unwrap_or(after.len());
     Some(after[..end].to_ascii_lowercase())
 }
 

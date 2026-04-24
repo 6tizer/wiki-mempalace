@@ -214,9 +214,7 @@ pub fn render_report(pages: &[RawPage], resolved: &Resolved) -> String {
 fn extract_host(url: &str) -> String {
     if let Some(after_scheme) = url.split_once("://") {
         let rest = after_scheme.1;
-        let end = rest
-            .find(['/', '?', '#'])
-            .unwrap_or(rest.len());
+        let end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
         return rest[..end].to_ascii_lowercase();
     }
     "<no-scheme>".into()
