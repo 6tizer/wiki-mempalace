@@ -1,6 +1,6 @@
 # Automation Health / Alert Strategy
 
-本文件定义 `wiki-cli automation health` 的最小运维判定规则，作为 batch-2 / J2 的源码配套文档。
+本文件定义 `wiki-cli automation health` 的当前运维判定规则。
 
 ## 命令入口
 

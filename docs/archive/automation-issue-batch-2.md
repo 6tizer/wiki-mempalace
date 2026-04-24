@@ -1,6 +1,8 @@
-# wiki-mempalace 第二批 Issue / Task List 模板
+# Archived: wiki-mempalace 第二批 Issue / Task List 模板
 
-本文档基于 [automation-implementation-plan.md](/Users/mac-mini/wiki-migration/wiki-mempalace/docs/automation-implementation-plan.md) 和当前仓库真实实现，给出：
+> Archived document. 本批次已完成；M10-M12 当前计划见 [../roadmap.md](../roadmap.md)。本文只保留历史执行上下文，不再作为当前事实源。
+
+本文档基于 [automation-implementation-plan.md](automation-implementation-plan.md) 和当时仓库实现，给出：
 
 1. 一份 **P0 / P1 开发进度盘点**
 2. 一份 **batch-2 开发计划**
@@ -26,7 +28,7 @@
 
 ## 进度盘点
 
-下表以 [automation-implementation-plan.md](/Users/mac-mini/wiki-migration/wiki-mempalace/docs/automation-implementation-plan.md) 为基线，对当前代码状态做一次真实对照。
+下表以 [automation-implementation-plan.md](automation-implementation-plan.md) 为基线，对当时代码状态做一次真实对照。
 
 
 | 模块             | 计划目标                                               | 当前状态              | 当前证据                                                                                                         | batch-2 要补什么        |
@@ -38,15 +40,15 @@
 | M5 恢复与回滚       | 备份、恢复、重建、演练、恢复成功检查                                 | **✅ 已完成**         | `automation verify-restore`、升级后的 `recovery-drill.sh`、`recovery-drill-template.md`、CLI + 脚本行为测试               | 无                   |
 | M6 Gap 工作流     | 发现知识缺口、产出报告或草稿                                     | **✅ 已完成**         | `wiki-cli gap` 命令、`GapFinding` / `GapSeverity` 结构、3 条规则（missing_xref / low_coverage / orphan_source）、markdown 报告、`--write-page` 写入 wiki page、5 条单元测试 | 无                   |
 | M7 Fixer 工作流   | 把 lint/gap finding 转成 fix actions                    | **✅ 已完成**         | `wiki-cli fix` 命令（dry_run/auto_only/write）、FixAction 模型、11 种 finding code 映射、dedup 合并、Auto 类型自动执行（AppendSections/SetTitle）、安全防护（不覆盖非空标题/不重复追加）、25 个测试 | 无                   |
-| M8 消费链产品化      | 统一 qa / synthesis / crystallize / query-write-page | **未开始（仅有零散基础能力）** | 现有 `query --write-page`、`crystallize`、entry_type/status 零散逻辑                                                 | 抽成统一消费入口和统一 page 契约 |
-| M9 查询融合增强      | 把 mempalace 候选更自然接入 wiki query                     | **未开始（仅有桥接基础件）**  | 有 `MempalaceSearchPorts` / `live_ranker`，但 `wiki query` 仍以 in-memory 路为主                                     | 全量实现                |
+| M8 消费链产品化      | 统一 qa / synthesis / crystallize / query-write-page | **✅ 已完成**         | `PageContract`、`finalize_consumed_page`、`qa` / `synthesis` 命令、`query --write-page` / `crystallize` 统一生命周期与骨架 | 无                   |
+| M9 查询融合增强      | 把 mempalace 候选更自然接入 wiki query                     | **✅ 已完成**         | `run_fusion_query`、`CompositeSearchPorts`、`MempalaceSearchPorts`、`query/explain --palace-db`、scope 过滤与去重测试       | 无                   |
 
 
 ### 当前结论
 
 - **P0 已收口**（J1/J2/J3/J4 已完成）
-- **P1 已启动**（J5 Gap 工作流、J6 Fixer 工作流已完成）
-- 下一步重心：启动 J7（消费链产品化）、J8（查询融合增强）
+- **P1 已收口**（J5 Gap 工作流、J6 Fixer 工作流、J7 消费链产品化、J8 查询融合增强均已完成）
+- 下一步重心：进入后续批次前，保持 CI / 文档 / 验收记录同步
 
 ---
 
@@ -63,13 +65,13 @@
 | `automation run <job>`    | ✅   | `AutomationCmd::Run { job }`，clap value_enum 校验，未知 job 报错                                                                                       |
 | 完整 job registry           | ✅   | `AUTOMATION_JOB_SPECS`：batch-ingest / lint / maintenance / consume-to-mempalace / llm-smoke，每个含 `in_daily` / `requires_network` / `description` |
 | llm-smoke 健康检查 job        | ✅   | `in_daily: false, requires_network: true`，dispatch 调用 `smoke_chat_completion`                                                                   |
-| restore success check job | ❌   | 未实现为 automation job（J4 范围）                                                                                                                      |
+| restore success check job | ✅   | J4 已实现为 `wiki-cli automation verify-restore`，并由 `scripts/recovery-drill.sh` 与 CI smoke 覆盖                                                        |
 | job 帮助文案                  | ✅   | `Cmd::Automation` 有顶层 `/// Run, inspect, and monitor scheduled automation jobs.`；各子命令均有 `///` 注释                                                |
 | 单元测试                      | ✅   | job 列表顺序稳定、unknown job 报错、`run <job>` 只跑目标（lint/maintenance 有覆盖）、run-daily 顺序                                                                   |
 | 集成测试                      | ✅   | lint / maintenance / consume-to-mempalace / batch-ingest 均有 `run <job>` 集成测试；llm-smoke 依赖外部 LLM endpoint，CI 跳过                                  |
 
 
-**遗留**：restore success check job（属 J4 范围）；llm-smoke 集成测试（需外部 LLM endpoint）。
+**遗留**：llm-smoke 集成测试需外部 LLM endpoint，CI 保持跳过策略。
 
 ### J2. 运维健康与告警完成版 — 完成度 100%
 
@@ -167,7 +169,9 @@
 | PR                      | ✅   | PR #7，Codex 补审后合并至 main                                                                             |
 
 
-### J7. 消费链产品化 — 完成度 20%
+### J7. 消费链产品化 — 完成度 100%
+
+> **2026-04-24 回填更新**：J7 已完成。消费链入口仍保留各自命令面，但产物已通过 `PageContract` / `finalize_consumed_page` 收束到统一 page 生命周期、entry_type/status 和段落骨架。
 
 
 | 交付物                         | 状态  | 证据                                                                        |
@@ -175,22 +179,28 @@
 | `query --write-page`        | ✅   | `Query` 子命令含 `--write-page` + `--entry-type`                              |
 | `crystallize`               | ✅   | `Crystallize` 子命令含 `--entry-type` + `--finding`                           |
 | `EntryType` / `EntryStatus` | ✅   | `schema.rs`：Concept/Principle/…/Index；Draft/InReview/Approved/NeedsUpdate |
-| 统一消费入口                      | ❌   | query-write-page 和 crystallize 仍为独立路径，无统一入口                               |
-| 统一 page contract            | ❌   | 无 `PageContract` 类型或统一产物契约                                                |
-| qa / synthesis 命令           | ❌   | 无独立 qa / synthesis 子命令                                                    |
-| frontmatter 统一审计            | ⚠️  | 有 vault-standards.md 但代码中各入口的 frontmatter 生成逻辑分散                          |
+| 统一消费入口                      | ✅   | `query` / `crystallize` / `ingest-llm` 等入口通过 `finalize_consumed_page` 对齐产物生命周期；`qa` / `synthesis` 通过 `PageContract` 生成 page |
+| 统一 page contract            | ✅   | `wiki-core/src/page_contract.rs` 定义 `PageContract`，`wiki-kernel/src/page_contract.rs` 定义最终标准化函数 |
+| qa / synthesis 命令           | ✅   | `Cmd::Qa` / `Cmd::Synthesis` 已落地，默认写入 `EntryType::Qa` / `EntryType::Synthesis` |
+| frontmatter 统一审计            | ✅   | `write_projection` 统一按 `EntryType` 输出目录与 frontmatter；相关入口产物可被 lint 正常处理 |
+
+**遗留**：无。J7 范围内的统一 page contract、qa/synthesis 命令面、query/crystallize 产物生命周期对齐均已完成。
 
 
-### J8. 查询融合增强 — 完成度 10%
+### J8. 查询融合增强 — 完成度 100%
+
+> **2026-04-24 回填更新**：J8 已完成。`query` / `explain` 默认仍可走纯 wiki 路径；传入 `--palace-db` 后会启用 mempalace 候选并与 wiki 召回做融合。
 
 
 | 交付物                        | 状态  | 证据                                                             |
 | -------------------------- | --- | -------------------------------------------------------------- |
 | `MempalaceSearchPorts`     | ✅   | `live_search.rs` 有实现                                           |
 | `LiveMempalaceGraphRanker` | ✅   | `live_ranker.rs` 有实现                                           |
-| wiki query 接入 mempalace 候选 | ❌   | CLI query 主路径仍用 `InMemorySearchPorts`，未调用 bridge 的 live search |
-| explain 输出                 | ❌   | 无                                                              |
-| scope 过滤 / 去重              | ⚠️  | `LiveMempalaceSink` 有 `scope_filter`；query 侧未接入                |
+| wiki query 接入 mempalace 候选 | ✅   | `run_fusion_query` 在 `--palace-db` 存在时组合 `InMemorySearchPorts` + `MempalaceSearchPorts` |
+| explain 输出                 | ✅   | `Explain` 子命令支持 `--palace-db` / `--palace-bank`，可输出融合后的候选路径 |
+| scope 过滤 / 去重              | ✅   | `doc_id_visible_to_viewer` / `graph_extra_visible_to_viewer` 过滤 wiki graph extras；`CompositeSearchPorts` 按 doc id 去重；mempalace 查询按 bank 过滤 |
+
+**遗留**：无。J8 范围内的 mempalace 候选接入、explain 调试输出、scope 过滤与去重均已完成。
 
 
 ---
@@ -206,8 +216,8 @@
 | J4 恢复验证      | **100%** | P0  | ✅ 已完成               |
 | J5 Gap 工作流   | **100%** | P1  | ✅ 已完成               |
 | J6 Fixer 工作流 | **100%** | P1  | ✅ 已完成（PR #7 合并）      |
-| J7 消费链产品化    | **20%**  | P1  | ⚠️ 零散能力在，统一契约缺      |
-| J8 查询融合增强    | **10%**  | P1  | ⚠️ 桥接基础件在，query 未接入 |
+| J7 消费链产品化    | **100%** | P1  | ✅ 已完成               |
+| J8 查询融合增强    | **100%** | P1  | ✅ 已完成               |
 
 
 ---
@@ -969,4 +979,3 @@ flowchart TD
 - 同一轮不要让两个 Agent 同时大改 `crates/wiki-cli/src/main.rs`
 - 所有跨模块接口，先写接口文档或结构体定义，再放开调用方开发
 - 每完成一个模块，就立刻回填进度到批次计划文档
-

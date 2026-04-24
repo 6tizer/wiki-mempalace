@@ -1,4 +1,6 @@
-# wiki-mempalace 自动化中枢实施计划（P0–P2）
+# Archived: wiki-mempalace 自动化中枢实施计划（P0–P2）
+
+> Archived document. P0/P1 已完成，P2 当前计划已拆到 [../roadmap.md](../roadmap.md)。本文只保留历史设计上下文，不再作为当前事实源。
 
 本文档把当前 `wiki-mempalace` 从“可运行的本地知识系统”推进到“稳定的自动化中枢”。
 

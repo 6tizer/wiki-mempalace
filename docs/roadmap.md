@@ -1,0 +1,34 @@
+# Current Roadmap
+
+本文是当前计划源。历史总计划和批次 issue 已归档到 [archive/](archive/README.md)。
+
+## 状态总览
+
+| 模块 | 状态 | 当前证据 |
+| --- | --- | --- |
+| M1 调度编排层 | ✅ 已完成 | `wiki-cli automation list-jobs/run/run-daily`、固定 job registry、dry-run、失败短路 |
+| M2 运行状态与心跳 | ✅ 已完成 | `wiki_automation_run`、`AutomationHeartbeat`、`automation status/doctor` |
+| M3 告警与运维出口 | ✅ 已完成 | `automation health/last-failures`、green/yellow/red、stderr alert、阈值环境变量 |
+| M4 Outbox 闭环增强 | ✅ 已完成 | `docs/outbox-event-matrix.md`、bridge dispatch stats、active/ignored/unresolved 统计 |
+| M5 恢复与回滚 | ✅ 已完成 | `automation verify-restore`、`scripts/recovery-drill.sh`、runbook、CI smoke |
+| M6 Gap 工作流 | ✅ 已完成 | `wiki-cli gap`、`GapFinding`、missing_xref/low_coverage/orphan_source、报告与 page 写入 |
+| M7 Fixer 工作流 | ✅ 已完成 | `wiki-cli fix`、`FixAction`、lint/gap finding 映射、低风险 auto fix |
+| M8 消费链产品化 | ✅ 已完成 | `PageContract`、`finalize_consumed_page`、`qa`/`synthesis`、统一 entry_type/status 骨架 |
+| M9 查询融合增强 | ✅ 已完成 | `query/explain --palace-db`、`MempalaceSearchPorts`、`CompositeSearchPorts`、scope 过滤与去重 |
+| M10 指标与评估 | ⏳ 未完成 | 还没有统一 metrics 命令/存储/报告；当前只有 health、doctor、kg_stats 等局部状态 |
+| M11 运维控制台 | ⏳ 未完成 | 还没有 Web UI 或本地 dashboard；当前只有 CLI 运维面 |
+| M12 策略层增强 | ⏳ 未完成 | 还没有自动 supersede/crystallize 建议层；当前只有规则维护、lint/gap/fix 基础链路 |
+
+## 当前下一阶段
+
+1. M10 指标与评估：定义 ingest/lint/query/outbox/promotion 指标口径，增加 CLI 输出和测试。
+2. M11 运维控制台：在 M10 指标稳定后，提供最小只读 dashboard 或本地报告页。
+3. M12 策略层增强：基于 lint/gap/query history 输出自动 supersede/crystallize 候选，不直接执行高风险写入。
+
+## 不再重复开发
+
+- `mempalace_*` MCP 工具已经通过 `wiki_mempalace_bridge::make_tools` 访问 bridge。
+- outbox ack 已经以 `wiki_outbox_consumer_progress(consumer_tag, acked_up_to_id, acked_at)` 为消费者进度真源。
+- `consume-to-mempalace --palace` 的 live bank 已由 `--viewer-scope` 派生。
+- `--graph-extras-file` 已按 viewer scope 过滤 wiki doc id，只允许 `mp_drawer:` / `mp_kg:` 外部 id。
+- `write_projection` 已清理带合法 page-id frontmatter 的 stale managed page。

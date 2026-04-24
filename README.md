@@ -28,14 +28,15 @@ wiki-mempalace/
 │   ├── e2e.sh                 # 端到端回归脚本
 │   └── backup.sh              # Dogfood 备份脚本（D4）
 ├── docs/
+│   ├── README.md              # 文档入口：当前事实 / 活跃计划 / 历史归档
+│   ├── roadmap.md             # 当前路线图（M1-M9 完成，M10-M12 待做）
 │   ├── vault-standards.md     # Vault 目录/命名/frontmatter/正文骨架唯一标准
 │   ├── architecture.md        # 架构图 + 业务流转
-│   ├── dogfood-readiness.md   # Dogfood 就绪清单（U1–U5 + D1–D4 全完成）
 │   ├── mempalace-linkage.md   # workspace 内 crate 协同契约
 │   ├── outbox-and-consumers.md# outbox 事件与消费者契约
-│   ├── schema-followup-plan.md# Schema 迭代跟进计划
+│   ├── schema-followup-plan.md# Schema / tag 后续计划
 │   ├── longmemeval.md         # 长期记忆评测说明
-│   ├── plan.md                # 里程碑（M1–M7 全完成）
+│   ├── archive/               # 历史计划与已完成批次
 │   └── blog/
 │       └── article2.md        # 两仓合并前的工程长文
 └── crates/
@@ -97,7 +98,7 @@ cargo run -p wiki-cli -- --db wiki.db --wiki-dir wiki --sync-wiki maintenance
 # 7) 会话结晶为一张页面
 cargo run -p wiki-cli -- --db wiki.db \
   crystallize "如何选型向量库？" \
-  --finding "pgvector 足够" --file "docs/plan.md" --lesson "先量后换"
+  --finding "pgvector 足够" --file "docs/roadmap.md" --lesson "先量后换"
 
 # 8) Schema 快速校验（不需要 DB）
 cargo run -p wiki-cli -- schema-validate DomainSchema.json
@@ -158,10 +159,12 @@ Agent 或 CLI 使用者请优先阅读 [AGENTS.md](AGENTS.md)，其中定义了 
 
 - [AGENTS.md](AGENTS.md)：面向 Agent 的稳定工作流
 - [DomainSchema.json](DomainSchema.json)：领域 Schema v1.0 实例
+- [docs/README.md](docs/README.md)：文档入口与分类
+- [docs/roadmap.md](docs/roadmap.md)：当前路线图
 - [docs/vault-standards.md](docs/vault-standards.md)：**Vault 目录/命名/frontmatter/正文骨架唯一标准**
 - [docs/architecture.md](docs/architecture.md)：架构图与业务流
 - [docs/mempalace-linkage.md](docs/mempalace-linkage.md)：bridge 契约与数据映射
-- [docs/plan.md](docs/plan.md)：里程碑
+- [docs/archive/README.md](docs/archive/README.md)：历史计划归档
 - [Progress.md](Progress.md)：每轮工作日志
 - [crates/rust-mempalace/README.md](crates/rust-mempalace/README.md)：
 `rust-mempalace` 作为独立 crate 的原始说明（保留）

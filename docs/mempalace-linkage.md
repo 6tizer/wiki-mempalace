@@ -25,6 +25,7 @@
   - `LiveMempalaceSink`：消费 outbox NDJSON，写入 palace.db 的 drawers / kg_facts / drawer_vectors
   - `LiveMempalaceGraphRanker`：query 的第三路图召回来源
   - `MempalaceSearchPorts`：实现 `wiki-core::SearchPorts`，给三路 RRF 提供 BM25/向量/图候选
+  - `LiveMempalaceTools`：实现 10 个 `mempalace_*` MCP 工具，供 `wiki-cli` 通过 bridge 调用
 
 优点：无跨进程序列化开销；结构清晰；测试可内联。
 代价：bridge 与 rust-mempalace 的内部 API（`service::search_with_options` /
@@ -68,10 +69,15 @@ cargo run -p wiki-cli -- --db wiki.db ack-outbox --up-to-id 999 --consumer-tag m
   `on_claim_upserted`，只有无 resolver 或悬挂事件时才兼容回退到 `on_claim_event`
 3. 非 mempalace 消费事件继续保留在 outbox，中间层只把它们计为 `ignored`
 4. 在 mempalace 侧写 `drawers` / `kg_facts`，必要时执行 `kg_invalidate`
-5. 读侧查询继续由各自系统负责，`MempalaceSearchPorts` 把 mempalace 的候选注入 RRF
+5. 读侧在 `query/explain --palace-db` 开启时使用 `CompositeSearchPorts`，由
+  `MempalaceSearchPorts` 把 mempalace 的候选注入 RRF
 
-## 6) 未来收敛方向（Phase 6）
+## 6) 当前边界
 
-当前 `wiki-cli/src/mcp.rs` 的 10 个 `mempalace_*` MCP 工具**绕开 bridge**直接 `use rust_mempalace::service::*;`，违反本契约的抽象边界。Phase 6 会把这些工具的实现
-挪到 bridge（新增一个 `MempalaceTools` trait 或扩展现有 trait），让 `wiki-cli`
-不再直接依赖 `rust-mempalace`，bridge 成为唯一的对 mempalace 访问层。
+`wiki-cli/src/mcp.rs` 的 10 个 `mempalace_*` MCP 工具已通过
+`wiki_mempalace_bridge::make_tools` 调用 `MempalaceTools`。默认 feature 下使用
+`NoopMempalaceTools`，`live` feature 下使用 `LiveMempalaceTools` 连接真实 palace。
+
+剩余耦合在 bridge 内部：`live_sink`、`live_search`、`live_ranker`、`live_tools`
+仍直接依赖 `rust_mempalace::service` / `db`。这是有意的 crate 边界：替换
+mempalace 后端时应主要修改 bridge，而不是 wiki-cli。

@@ -1,4 +1,6 @@
-# Dogfood 就绪清单
+# Archived: Dogfood 就绪清单
+
+> Archived document. Dogfood 就绪工作已完成；当前操作入口见 [../README.md](../README.md)。本文只保留历史检查上下文，不再作为当前事实源。
 
 > 目标：**层级二**——1–2 天打磨后可作为个人知识库日常使用。
 > 此清单聚焦"开始真实喂文章"前的最小必要工作，不是完整的 T1 打磨。
@@ -227,4 +229,3 @@ X书签 (674) + 微信 (426) = 1100 条 source
 - **日期字段转 ISO 8601**（目前 `2026年4月11日 08:58` 逐字透传）
 - **2002 条 `www.notion.so/` 未解析内链**（指向三库之外的 Notion 页面）
 - **Memory Palace bridge 接入**：让本地 wiki 变成 mempalace 数据源
-

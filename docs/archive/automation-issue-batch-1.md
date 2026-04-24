@@ -1,6 +1,8 @@
-# wiki-mempalace 第一批 Issue / Task List 模板
+# Archived: wiki-mempalace 第一批 Issue / Task List 模板
 
-本文档基于 [automation-implementation-plan.md](/Users/mac-mini/wiki-migration/wiki-mempalace/docs/automation-implementation-plan.md) 拆出第一批适合并行启动的开发任务。
+> Archived document. 本批次已完成；当前计划见 [../roadmap.md](../roadmap.md)。本文只保留历史执行上下文，不再作为当前事实源。
+
+本文档基于 [automation-implementation-plan.md](automation-implementation-plan.md) 拆出第一批适合并行启动的开发任务。
 
 目标：
 
