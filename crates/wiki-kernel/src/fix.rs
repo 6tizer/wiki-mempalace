@@ -159,7 +159,7 @@ fn dedup_fixes(fixes: &mut Vec<FixAction>) {
                     append_map
                         .entry(subject.clone())
                         .or_default()
-                        .extend(set.into_iter());
+                        .extend(set);
                 }
             }
         }

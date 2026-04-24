@@ -21,6 +21,12 @@ impl AutoWikiHook {
     }
 }
 
+impl Default for AutoWikiHook {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl WikiHook for AutoWikiHook {
     fn on_event(&mut self, event: &WikiEvent) {
         self.events_processed += 1;

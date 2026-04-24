@@ -282,6 +282,7 @@ pub fn search(
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn search_with_options(
     conn: &Connection,
     query: &str,
@@ -1007,7 +1008,7 @@ fn one_line(s: &str) -> String {
 
 fn rerank_rows(
     query: &str,
-    rows: &mut Vec<SearchRow>,
+    rows: &mut [SearchRow],
     retrieval: &RetrievalConfig,
     include_explain: bool,
 ) {

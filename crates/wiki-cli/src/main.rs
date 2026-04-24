@@ -1,3 +1,5 @@
+#![allow(clippy::items_after_test_module, clippy::too_many_arguments)]
+
 use clap::{Parser, Subcommand, ValueEnum};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -690,7 +692,7 @@ fn render_automation_health_report(report: &AutomationHealthReport, consumer_tag
             let detail = failure
                 .latest_failure
                 .as_ref()
-                .map(|run| format_automation_record(run))
+                .map(format_automation_record)
                 .unwrap_or_else(|| "latest_failure=missing".to_string());
             out.push_str(&format!(
                 "- job={} consecutive_failures={} {}\n",
@@ -1326,6 +1328,7 @@ fn run_with_engine(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             };
             let graph_override = if let Some(ref path) = cli.graph_extras_file {
                 let extras = read_graph_extras_lines(path)?;
+                let extras = filter_graph_extras_for_viewer(extras, &eng.store, &viewer);
                 let ports = InMemorySearchPorts::new(&eng.store, Some(viewer.clone()));
                 let kernel = SearchPorts::graph_ranked_ids(&ports, &query, per_stream_limit);
                 Some(merge_graph_rankings(kernel, extras, per_stream_limit))
@@ -1394,6 +1397,7 @@ fn run_with_engine(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             };
             let graph_override = if let Some(ref path) = cli.graph_extras_file {
                 let extras = read_graph_extras_lines(path)?;
+                let extras = filter_graph_extras_for_viewer(extras, &eng.store, &viewer);
                 let ports = InMemorySearchPorts::new(&eng.store, Some(viewer.clone()));
                 let kernel = SearchPorts::graph_ranked_ids(&ports, &query, per_stream_limit);
                 Some(merge_graph_rankings(kernel, extras, per_stream_limit))
@@ -1672,6 +1676,7 @@ fn run_with_engine(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                 &consumer_tag,
                 last_id,
                 cli.palace.as_deref(),
+                &cli.viewer_scope,
             )?;
             println!(
                 "seen={} dispatched={} ignored={} filtered={} unresolved={} start_id={start_id} acked={acked} consumer_tag={consumer_tag}",
@@ -1890,6 +1895,35 @@ pub(crate) fn doc_id_visible_to_viewer(
     false
 }
 
+pub(crate) fn graph_extra_visible_to_viewer(
+    doc_id: &str,
+    store: &InMemoryStore,
+    viewer: &Scope,
+) -> bool {
+    if doc_id.starts_with("mp_drawer:") || doc_id.starts_with("mp_kg:") {
+        return true;
+    }
+    if doc_id.starts_with("claim:")
+        || doc_id.starts_with("page:")
+        || doc_id.starts_with("entity:")
+        || doc_id.starts_with("source:")
+    {
+        return doc_id_visible_to_viewer(doc_id, store, viewer);
+    }
+    false
+}
+
+fn filter_graph_extras_for_viewer(
+    extras: Vec<String>,
+    store: &InMemoryStore,
+    viewer: &Scope,
+) -> Vec<String> {
+    extras
+        .into_iter()
+        .filter(|id| graph_extra_visible_to_viewer(id, store, viewer))
+        .collect()
+}
+
 fn truncate_chars(s: &str, max: usize) -> String {
     s.chars().take(max).collect()
 }
@@ -2012,6 +2046,45 @@ mod tests {
         assert_eq!(
             effective_ingest_entry_type(Some(EntryType::Synthesis)),
             EntryType::Synthesis
+        );
+    }
+
+    #[test]
+    fn graph_extras_filter_private_doc_and_keep_mempalace_ids() {
+        let mut store = InMemoryStore::default();
+        let viewer = Scope::Private {
+            agent_id: "agent1".into(),
+        };
+        let other = Scope::Private {
+            agent_id: "agent2".into(),
+        };
+        let own_claim = wiki_core::Claim::new("visible", viewer.clone(), MemoryTier::Semantic);
+        let other_claim = wiki_core::Claim::new("hidden", other, MemoryTier::Semantic);
+        let own_id = format_claim_doc_id(own_claim.id);
+        let other_id = format_claim_doc_id(other_claim.id);
+        store.claims.insert(own_claim.id, own_claim);
+        store.claims.insert(other_claim.id, other_claim);
+
+        let filtered = filter_graph_extras_for_viewer(
+            vec![
+                other_id,
+                "mp_drawer:42".into(),
+                "mp_kg:subject:predicate".into(),
+                own_id.clone(),
+                "weird:thing".into(),
+                "claim:not-a-uuid".into(),
+            ],
+            &store,
+            &viewer,
+        );
+
+        assert_eq!(
+            filtered,
+            vec![
+                "mp_drawer:42".to_string(),
+                "mp_kg:subject:predicate".to_string(),
+                own_id,
+            ]
         );
     }
 
@@ -3094,12 +3167,20 @@ fn effective_consume_start_id(progress: &OutboxConsumerProgress, requested_last_
         .map_or(requested_last_id, |acked| acked.max(requested_last_id))
 }
 
+fn mempalace_bank_from_viewer_scope(viewer_scope: &str) -> String {
+    match parse_scope(viewer_scope) {
+        Scope::Private { agent_id } => agent_id,
+        Scope::Shared { team_id } => team_id,
+    }
+}
+
 fn run_consume_to_mempalace_job(
     eng: &LlmWikiEngine<NoopWikiHook>,
     repo: &SqliteRepository,
     consumer_tag: &str,
     last_id: i64,
     palace_path: Option<&std::path::Path>,
+    viewer_scope: &str,
 ) -> Result<(OutboxDispatchStats, i64, usize), Box<dyn std::error::Error>> {
     let progress = repo.get_outbox_consumer_progress(consumer_tag)?;
     let start_id = effective_consume_start_id(&progress, last_id);
@@ -3115,7 +3196,8 @@ fn run_consume_to_mempalace_job(
 
     let resolver = EngineResolver { store: &eng.store };
     let dispatch = if let Some(pp) = palace_path {
-        let live = LiveMempalaceSink::open(pp, "wiki")?;
+        let bank = mempalace_bank_from_viewer_scope(viewer_scope);
+        let live = LiveMempalaceSink::open(pp, &bank)?;
         consume_outbox_ndjson_with_resolver_and_stats(&live, &resolver, &ndjson)?
     } else {
         consume_outbox_ndjson_with_resolver_and_stats(&CliMempalaceSink, &resolver, &ndjson)?
@@ -3151,6 +3233,7 @@ fn dispatch_automation_job(
             DEFAULT_MEMPALACE_CONSUMER_TAG,
             0,
             cli.palace.as_deref(),
+            &cli.viewer_scope,
         )
         .map(|_| ()),
         AutomationJob::LlmSmoke => {
@@ -3349,7 +3432,7 @@ struct IngestOneStats {
 /// 解析 frontmatter 中的 tags 字符串（支持中英文逗号）
 fn parse_tags_csv(raw: Option<&String>) -> Vec<String> {
     raw.map(|s| {
-        s.split(|c: char| c == ',' || c == '，')
+        s.split([',', '，'])
             .map(|t| t.trim().to_string())
             .filter(|t| !t.is_empty())
             .collect()
@@ -3754,9 +3837,9 @@ fn batch_ingest_cmd(
                 }
 
                 // 按 vault-standards 写 summary 页到 pages/summary/
-                if wiki_root.is_some() && stats.plan.should_materialize_summary_page() {
+                if let Some(root) = wiki_root.filter(|_| stats.plan.should_materialize_summary_page()) {
                     write_batch_summary(
-                        wiki_root.unwrap(),
+                        root,
                         &src.title,
                         &stats.plan,
                         &src.url,

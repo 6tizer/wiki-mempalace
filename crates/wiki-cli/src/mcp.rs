@@ -1,3 +1,5 @@
+#![allow(clippy::too_many_arguments)]
+
 use serde_json::{json, Value};
 use std::io::{self, BufRead, Write};
 use time::OffsetDateTime;

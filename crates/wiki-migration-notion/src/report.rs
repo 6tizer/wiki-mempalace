@@ -161,7 +161,7 @@ pub fn render_report(pages: &[RawPage], resolved: &Resolved) -> String {
         *by_host.entry(host).or_default() += 1;
     }
     let mut v: Vec<_> = by_host.into_iter().collect();
-    v.sort_by(|a, b| b.1.cmp(&a.1));
+    v.sort_by_key(|item| std::cmp::Reverse(item.1));
     let _ = writeln!(out, "| 域名 | 次数 |");
     let _ = writeln!(out, "| --- | ---: |");
     for (h, n) in v.iter().take(15) {
@@ -215,7 +215,7 @@ fn extract_host(url: &str) -> String {
     if let Some(after_scheme) = url.split_once("://") {
         let rest = after_scheme.1;
         let end = rest
-            .find(|c: char| c == '/' || c == '?' || c == '#')
+            .find(['/', '?', '#'])
             .unwrap_or(rest.len());
         return rest[..end].to_ascii_lowercase();
     }

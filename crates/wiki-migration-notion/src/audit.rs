@@ -458,6 +458,7 @@ pub struct FixStats {
 /// 策略：
 /// - A 类：利用审计 JSON 中已有的 title_matches 信息定位
 /// - B1 类（已编译未匹配但归一化后能匹配到）：用归一化标题在 Wiki 正文搜索
+///
 /// 在匹配行尾追加 `（[source](相对路径)）` 格式的 Markdown 链接。
 /// 已有 `[摘要：...](...)` 或 `[...](source)` 格式链接的跳过。
 pub fn fix_orphans(vault_dir: &Path, audit_json_path: &Path) -> Result<FixStats> {
@@ -641,7 +642,7 @@ pub fn fix_orphans(vault_dir: &Path, audit_json_path: &Path) -> Result<FixStats>
             continue;
         };
 
-        patches.sort_by(|a, b| b.0.cmp(&a.0));
+        patches.sort_by_key(|item| std::cmp::Reverse(item.0));
 
         for (pos, insert) in patches {
             let pos = find_char_boundary(&content, pos);
@@ -769,7 +770,7 @@ fn load_wiki_bodies(
 fn normalize_for_match(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for c in s.chars() {
-        if c.is_ascii_alphanumeric() || (c >= '\u{4e00}' && c <= '\u{9fff}') {
+        if c.is_ascii_alphanumeric() || ('\u{4e00}'..='\u{9fff}').contains(&c) {
             out.extend(c.to_lowercase());
         }
     }
@@ -781,7 +782,7 @@ fn norm_to_byte_idx(orig: &str, _norm: &str, norm_idx: usize) -> usize {
     let mut norm_count = 0;
     let mut byte_pos = 0;
     for (i, c) in orig.char_indices() {
-        if c.is_ascii_alphanumeric() || (c >= '\u{4e00}' && c <= '\u{9fff}') {
+        if c.is_ascii_alphanumeric() || ('\u{4e00}'..='\u{9fff}').contains(&c) {
             norm_count += c.len_utf8(); // to_lowercase 可能变长，但 ASCII 和中文都是 1:1
             if norm_count >= norm_idx {
                 byte_pos = i + c.len_utf8();

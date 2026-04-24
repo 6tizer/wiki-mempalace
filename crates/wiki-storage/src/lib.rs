@@ -1,4 +1,4 @@
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use time::{
     format_description, format_description::well_known::Rfc3339, OffsetDateTime, PrimitiveDateTime,
@@ -122,6 +122,11 @@ CREATE TABLE IF NOT EXISTS wiki_outbox (
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
   processed_at TEXT,
   consumer_tag TEXT
+);
+CREATE TABLE IF NOT EXISTS wiki_outbox_consumer_progress (
+  consumer_tag TEXT PRIMARY KEY,
+  acked_up_to_id INTEGER NOT NULL,
+  acked_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS wiki_embedding (
   doc_id TEXT PRIMARY KEY,
@@ -283,16 +288,14 @@ CREATE INDEX IF NOT EXISTS wiki_automation_run_job_status_id_idx
     ) -> Result<OutboxConsumerProgress, StorageError> {
         let stats = self.get_outbox_stats()?;
         let row = self.conn.query_row(
-            "SELECT id, processed_at
-             FROM wiki_outbox
-             WHERE consumer_tag = ?1 AND processed_at IS NOT NULL
-             ORDER BY id DESC
-             LIMIT 1",
+            "SELECT acked_up_to_id, acked_at
+             FROM wiki_outbox_consumer_progress
+             WHERE consumer_tag = ?1",
             params![consumer_tag],
             |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)),
         );
         let (acked_up_to_id, acked_at) = match row {
-            Ok((id, processed_at_raw)) => (Some(id), Some(parse_time(&processed_at_raw)?)),
+            Ok((id, acked_at_raw)) => (Some(id), Some(parse_time(&acked_at_raw)?)),
             Err(rusqlite::Error::QueryReturnedNoRows) => (None, None),
             Err(e) => return Err(StorageError::Db(e)),
         };
@@ -658,13 +661,45 @@ impl WikiRepository for SqliteRepository {
         up_to_id: i64,
         consumer_tag: &str,
     ) -> Result<usize, StorageError> {
-        let n = self.conn.execute(
+        let previous_ack = self
+            .conn
+            .query_row(
+                "SELECT acked_up_to_id
+                 FROM wiki_outbox_consumer_progress
+                 WHERE consumer_tag = ?1",
+                params![consumer_tag],
+                |row| row.get::<_, i64>(0),
+            )
+            .optional()?
+            .unwrap_or(0);
+        if up_to_id <= previous_ack {
+            return Ok(0);
+        }
+
+        let newly_acked: i64 = self.conn.query_row(
+            "SELECT COUNT(*)
+             FROM wiki_outbox
+             WHERE id > ?1 AND id <= ?2",
+            params![previous_ack, up_to_id],
+            |row| row.get(0),
+        )?;
+
+        self.conn.execute(
+            "INSERT INTO wiki_outbox_consumer_progress(consumer_tag, acked_up_to_id, acked_at)
+             VALUES(?1, ?2, datetime('now'))
+             ON CONFLICT(consumer_tag) DO UPDATE SET
+               acked_up_to_id = excluded.acked_up_to_id,
+               acked_at = excluded.acked_at",
+            params![consumer_tag, up_to_id],
+        )?;
+
+        self.conn.execute(
             "UPDATE wiki_outbox
              SET processed_at = datetime('now'), consumer_tag = ?2
              WHERE id <= ?1 AND processed_at IS NULL",
             params![up_to_id, consumer_tag],
         )?;
-        Ok(n)
+        Ok(newly_acked as usize)
     }
 }
 
@@ -866,6 +901,42 @@ mod tests {
         assert_eq!(progress_after_ack.acked_up_to_id, Some(2));
         assert!(progress_after_ack.acked_at.is_some());
         assert_eq!(progress_after_ack.backlog_events, 1);
+    }
+
+    #[test]
+    fn outbox_consumer_progress_tracks_consumers_independently() {
+        let dir = tempdir().unwrap();
+        let db = dir.path().join("wiki.db");
+        let repo = SqliteRepository::open(&db).unwrap();
+
+        for idx in 1..=4 {
+            repo.append_outbox(&WikiEvent::QueryServed {
+                query_fingerprint: format!("q{idx}"),
+                top_doc_ids: vec![format!("doc:{idx}")],
+                at: time::OffsetDateTime::now_utc(),
+            })
+            .unwrap();
+        }
+
+        assert_eq!(repo.mark_outbox_processed(2, "mempalace").unwrap(), 2);
+        assert_eq!(repo.mark_outbox_processed(3, "archive").unwrap(), 3);
+
+        let mempalace = repo.get_outbox_consumer_progress("mempalace").unwrap();
+        let archive = repo.get_outbox_consumer_progress("archive").unwrap();
+        assert_eq!(mempalace.acked_up_to_id, Some(2));
+        assert_eq!(mempalace.backlog_events, 2);
+        assert_eq!(archive.acked_up_to_id, Some(3));
+        assert_eq!(archive.backlog_events, 1);
+
+        assert_eq!(repo.mark_outbox_processed(4, "mempalace").unwrap(), 2);
+        assert_eq!(repo.mark_outbox_processed(3, "archive").unwrap(), 0);
+
+        let mempalace = repo.get_outbox_consumer_progress("mempalace").unwrap();
+        let archive = repo.get_outbox_consumer_progress("archive").unwrap();
+        assert_eq!(mempalace.acked_up_to_id, Some(4));
+        assert_eq!(mempalace.backlog_events, 0);
+        assert_eq!(archive.acked_up_to_id, Some(3));
+        assert_eq!(archive.backlog_events, 1);
     }
 
     #[test]

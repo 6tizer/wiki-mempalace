@@ -129,8 +129,6 @@ fn split_property(line: &str) -> Option<(String, String)> {
     } else if let Some(i) = line.find("：") {
         // 全角冒号 3 字节
         (i, "：".len())
-    } else if line.ends_with(':') || line.ends_with('：') {
-        return None;
     } else {
         return None;
     };
