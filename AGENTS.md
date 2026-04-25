@@ -12,16 +12,19 @@
 后续功能开发必须按 [docs/dev-workflow.md](docs/dev-workflow.md) 执行：
 
 1. 先有 PRD：`docs/prd/<batch>.md`。
-2. 每个模块先有 spec 三件套：
+2. PRD 后先做白话架构对话，用户确认模块职责和模块关系后再写 spec。
+3. 每个模块先有 spec 三件套：
    - `docs/specs/<feature>/requirements.md`
    - `docs/specs/<feature>/design.md`
    - `docs/specs/<feature>/tasks.md`
-3. 新开发必须开 `codex/<topic>` 分支，不直接在 `main` 开发。
-4. 进入实现前先走 Plan mode，明确 owner files、测试、review gate。
-5. 每个功能模块优先用 sub agent 实现；main agent 负责计划、分派、集成、review。
-6. sub agent 必须有明确写入范围，多个 sub agent 不得同时拥有同一写入范围。
-7. 每个小模块完成后做 focused review；全部完成后做 integration review；PR 后再做 GitHub/Codex review。
-8. 合并前必须回填 PRD/spec/roadmap 状态。
+4. spec 是实现源；spec 和代码冲突时，先改 spec，再改代码。PRD 范围变更必须让用户决定。
+5. 新开发必须开 `codex/<topic>` 分支，不直接在 `main` 开发。
+6. 进入实现前先走 Plan mode，明确 task grade、owner files、测试、review gate。
+7. 复杂功能模块优先用 sub agent；简单机械任务用 script，固定模式任务用 skill。
+8. sub agent 必须有明确写入范围，多个 sub agent 不得同时拥有同一写入范围。
+9. sub agent 完成后必须写 `docs/handovers/<feature>/<module>.md`。
+10. 每个小模块完成后做 focused review；全部完成后做 integration review；PR 后再做 GitHub/Codex review。
+11. 合并前必须回填 PRD/spec/roadmap 状态，合并后更新 `docs/LESSONS.md`。
 
 ## 0. 命令行参数约定
 

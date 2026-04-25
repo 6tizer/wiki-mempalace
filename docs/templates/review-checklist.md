@@ -2,11 +2,13 @@
 
 ## Focus
 
+- Spec compliance
 - Correctness
 - Regression risk
 - Scope creep
 - Missing tests
 - Docs drift
+- Handoff completeness
 
 ## Findings
 
@@ -20,6 +22,8 @@
 - [ ] `cargo test --workspace`
 - [ ] `cargo clippy --workspace --all-targets -- -D warnings`
 - [ ] Feature-specific tests:
+- [ ] Spec checklist updated
+- [ ] Module handoff present if subagent touched code
 
 ## Decision
 

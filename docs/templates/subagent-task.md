@@ -16,6 +16,21 @@
 
 -
 
+## Spec Context
+
+- Requirements:
+- Design:
+- Tasks:
+- Boundary with other modules:
+
+## Success Criteria
+
+-
+
+## Stop Conditions
+
+-
+
 ## Tests
 
 -
@@ -24,5 +39,10 @@
 
 - Summary:
 - Files changed:
+- Public interfaces:
+- Known limits:
+- Dependencies:
 - Tests run:
+- Spec/checklist status:
 - Risks:
+- Handoff path:

@@ -6,6 +6,12 @@
 - User value:
 - Success criteria:
 
+## Plain-Language Product Scope
+
+- User can:
+- User cannot:
+- User decision needed:
+
 ## Scope
 
 In:
@@ -39,6 +45,7 @@ Out:
 ## Status
 
 - [ ] PRD approved
+- [ ] Plain architecture approved
 - [ ] Specs created
 - [ ] Modules implemented
 - [ ] CI green
