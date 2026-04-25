@@ -12,11 +12,11 @@
 - [x] Tests added/updated
 - [x] Docs updated
 - [x] Integration review complete
-- [ ] PR opened
-- [ ] Codex/GitHub review addressed
-- [ ] CI green
-- [ ] Merged
-- [ ] Roadmap/PRD updated
+- [x] PR opened
+- [x] Codex/GitHub review addressed
+- [x] CI green
+- [x] Merged
+- [x] Roadmap/PRD updated
 
 ## Subtasks
 
@@ -41,8 +41,13 @@
 
 ## Verification
 
+- `python3 -m py_compile scripts/longmemeval_run.py`
+- `python3 tests/longmemeval_runner_test.py`
+- `bash -n scripts/longmemeval_fetch.sh`
 - tiny fixture run
 - workflow syntax / script compile
 - report JSON parses
 - markdown report generated from same JSON data
 - no `pull_request` trigger in LongMemEval workflow
+- PR #19 GitHub `quick` CI passed and merged into main on 2026-04-25.
+- PR #20 recorded post-merge status and lessons.
