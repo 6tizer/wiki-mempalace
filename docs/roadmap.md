@@ -21,12 +21,13 @@
 | Schema T2 tag governance | ✅ 已合入 | PR #13 已 merge；`Claim/Source/LlmClaimDraft` tags、tag normalize/validate、deprecated_tags 拦截、max_new_tags_per_ingest 限流、CLI/MCP/batch ingest tags 已实现 |
 | J13 LongMemEval auto benchmark | ✅ 已合入 | PR #19 已 merge；`rust-mempalace` 本地检索基线 runner、fetch/cache script、nightly/weekly workflow、30 天 artifact、fixture tests、review handoff 已实现；不进 PR 必跑 CI |
 | Vault Backfill + Palace Init | ✅ 已合入并已跑生产初始化 | PR #23 已 merge；`vault-audit`、`vault-backfill`、`palace-init`、MCP `shared:wiki` runtime defaults 已实现；2026-04-25 已对 `/Users/mac-mini/Documents/wiki` 完成生产 backfill + palace init |
+| B5 Orphan Governance | ✅ 已合入 | PR #28 已 merge；`wiki-cli orphan-governance` 已实现只读治理报告；基于 2026-04-25 生产 `vault-audit` 的 4/12/5/16 四类发现做分类，不清理 vault |
 | C16A Atomic snapshot + outbox | ✅ 已合入 | PR #25 已 merge；新增 `save_snapshot_and_append_outbox` 单事务持久化路径；CLI/MCP/backfill 写路径已切到原子提交 |
 | C16B Embedding ANN index | 💤 未开始 | 仍保留在 [embedding-ann-index](specs/embedding-ann-index/)；可单独规划，不和存储一致性混在一个 PR |
 
 ## 当前下一阶段
 
-1. B5 orphan governance：draft PR #28 已开且 GitHub `quick` 已绿；`codex/orphan-governance` 已实现只读治理报告；基于 2026-04-25 生产 `vault-audit` 的 4 个 orphan candidates、12 个 unsupported frontmatter、5 个缺 `status` page、16 个缺 `compiled_to_wiki` source 做分类，不清理 vault。
+1. B5 follow-up：复盘 PR #28 的产品缺口，先补白话架构与 PRD/spec，再决定是否做 path-level audit、中文 report、`plan -> review -> apply` 自动执行流程。
 2. C16B Embedding ANN index 如需推进，单独从 PRD/spec 开新分支。
 3. 观察 J13 scheduled artifacts：先积累至少 7 份 nightly report 和 1 份 weekly full report，确认 artifact 稳定和 full run 真实耗时。
 4. J14 Semantic Fusion Benchmark：只有在 J13 报告显示同义表达/词面不匹配是主要错因，且运行预算明确后，再评估 `wiki-cli --vectors --palace-db` 语义融合 lane。
