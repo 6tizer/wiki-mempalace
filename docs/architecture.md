@@ -33,16 +33,16 @@ MCP 工具通过 `wiki_mempalace_bridge::make_tools` 进入 `MempalaceTools` 抽
 ```text
 CLI ingest / ingest-llm / batch-ingest
   -> LlmWikiEngine 写 RawArtifact / Claim / WikiPage
-  -> save_to_repo()
-  -> flush_outbox_to_repo_with_policy()
+  -> save_to_repo_and_flush_outbox_with_policy()
+  -> save_snapshot_and_append_outbox() transaction
   -> wiki_outbox
   -> wiki_outbox_consumer_progress 按 consumer_tag 记录 ack
   -> 可选 write_projection()
 ```
 
-写入类 CLI 子命令会自动保存 snapshot、flush outbox，并在 `--sync-wiki` 开启时写
-Markdown projection。`write_projection` 只维护 `pages/{entry_type}/`、`index.md`、
-`log.md`，并清理带合法 page-id frontmatter 但已不在当前 store 中的 managed page。
+写入类 CLI 子命令会自动在同一 SQLite transaction 中保存 snapshot 与本次 outbox，
+并在 `--sync-wiki` 开启时写 Markdown projection。`write_projection` 只维护
+`pages/{entry_type}/`、`index.md`、`log.md`，并清理带合法 page-id frontmatter 但已不在当前 store 中的 managed page。
 
 ## 4. mempalace 消费
 

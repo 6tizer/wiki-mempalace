@@ -2,14 +2,14 @@
 
 ## Checklist
 
-- [ ] Requirements approved
-- [ ] Design approved (trait vs `SqliteRepository`-only API)
-- [ ] Plan approved
-- [ ] Branch: `codex/persist-snapshot-outbox` (or user prefix)
-- [ ] Implementation
-- [ ] Tests (failure injection or rollback proof)
-- [ ] Docs: `AGENTS.md` / `docs/outbox-and-consumers.md`
-- [ ] Handoff: `docs/handovers/persist-snapshot-outbox/summary.md`
+- [x] Requirements approved
+- [x] Design approved: option A, `BEGIN IMMEDIATE` API on `WikiRepository`
+- [x] Plan approved
+- [x] Branch: `codex/persist-snapshot-outbox`
+- [x] Implementation
+- [x] Tests (failure injection or rollback proof)
+- [x] Docs: `AGENTS.md` / `docs/outbox-and-consumers.md`
+- [x] Handoff: `docs/handovers/persist-snapshot-outbox/summary.md`
 - [ ] PR + CI green
 - [ ] PRD / roadmap / spec status updated
 
@@ -17,11 +17,11 @@
 
 | Task | Grade | Owner | Files | Depends on | Status |
 | --- | --- | --- | --- | --- | --- |
-| `SqliteRepository` batched `BEGIN…COMMIT` API | Agent | TBD | `crates/wiki-storage/` | Design lock | Not started |
-| `LlmWikiEngine` + CLI/MCP use batched path | Agent | TBD | `crates/wiki-kernel/`, `crates/wiki-cli/` | Storage API | Not started |
-| `WikiRepository` trait update + impls | Agent | TBD | `wiki-storage` | Storage API | Not started |
-| Rollback/atomicity integration test | Agent | TBD | `crates/wiki-storage/tests` or `wiki-cli` | API | Not started |
-| Doc sync | Script | TBD | `AGENTS.md`, `docs/outbox-and-consumers.md` | Implementation | Not started |
+| `SqliteRepository` batched `BEGIN…COMMIT` API | Agent | Main | `crates/wiki-storage/` | Design lock | Complete |
+| `LlmWikiEngine` + CLI/MCP use batched path | Agent | Main | `crates/wiki-kernel/`, `crates/wiki-cli/` | Storage API | Complete |
+| `WikiRepository` trait update + impls | Agent | Main | `wiki-storage` | Storage API | Complete |
+| Rollback/atomicity integration test | Agent | Main | `crates/wiki-storage/src/lib.rs` | API | Complete |
+| Doc sync | Script | Main | `AGENTS.md`, `docs/outbox-and-consumers.md` | Implementation | Complete |
 
 ## Review Gates
 
@@ -39,3 +39,14 @@
 - `cargo fmt --all -- --check`
 - `cargo test --workspace`
 - Manual: `wiki-cli ingest` + power-cut simulation (optional)
+
+Focused verification run during implementation:
+
+- `cargo test -p wiki-storage --quiet`
+- `cargo test -p wiki-kernel --quiet`
+- `cargo test -p wiki-cli --test vault_backfill --quiet`
+- `cargo test -p wiki-cli --test automation_run_daily --quiet`
+- `cargo test -p wiki-cli --quiet`
+- `cargo fmt --all -- --check`
+- `cargo test --workspace`
+- `cargo clippy --workspace --all-targets -- -D warnings`

@@ -1669,8 +1669,7 @@ fn run_with_engine(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                 "cli",
                 plan.tags.iter().map(String::as_str),
             )?;
-            eng.save_to_repo(&repo)?;
-            eng.flush_outbox_to_repo_with_policy(&repo, 128, 3)?;
+            eng.save_to_repo_and_flush_outbox_with_policy(&repo, 128, 3)?;
             if cli.vectors {
                 let app = llm::load_app_config(&cli.llm_config)?;
                 let body_short = truncate_chars(&body, 16000);
@@ -1687,8 +1686,7 @@ fn run_with_engine(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                     c.tags.iter().map(String::as_str),
                 )?;
                 eng.attach_sources(cid, &[sid])?;
-                eng.save_to_repo(&repo)?;
-                eng.flush_outbox_to_repo_with_policy(&repo, 128, 3)?;
+                eng.save_to_repo_and_flush_outbox_with_policy(&repo, 128, 3)?;
                 if cli.vectors {
                     let app = llm::load_app_config(&cli.llm_config)?;
                     let vec = llm::embed_first(&app, &c.text)?;
@@ -1730,8 +1728,7 @@ fn run_with_engine(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                     let _ = eng.add_edge(edge);
                 }
             }
-            eng.save_to_repo(&repo)?;
-            eng.flush_outbox_to_repo_with_policy(&repo, 128, 3)?;
+            eng.save_to_repo_and_flush_outbox_with_policy(&repo, 128, 3)?;
             // summary 页固定为 vault 约定的 Summary 类型 + 五段正文（与 batch-ingest 对齐）
             if plan.should_materialize_summary_page() {
                 let title = if plan.summary_title.trim().is_empty() {
@@ -1751,8 +1748,7 @@ fn run_with_engine(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                         &schema,
                     );
                 }
-                eng.save_to_repo(&repo)?;
-                eng.flush_outbox_to_repo_with_policy(&repo, 128, 3)?;
+                eng.save_to_repo_and_flush_outbox_with_policy(&repo, 128, 3)?;
             }
             maybe_sync_projection(sync_wiki, wiki_root.as_deref(), &eng)?;
             println!("ingested source={}", sid.0);
@@ -1764,8 +1760,7 @@ fn run_with_engine(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             tags,
         } => {
             let sid = eng.ingest_raw_with_tags(uri, &body, parse_scope(&scope), "cli", &tags)?;
-            eng.save_to_repo(&repo)?;
-            eng.flush_outbox_to_repo_with_policy(&repo, 128, 3)?;
+            eng.save_to_repo_and_flush_outbox_with_policy(&repo, 128, 3)?;
             if cli.vectors {
                 let app = llm::load_app_config(&cli.llm_config)?;
                 let body_short = truncate_chars(&body, 16000);
@@ -1783,8 +1778,7 @@ fn run_with_engine(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         } => {
             let tier = parse_tier(&tier)?;
             let cid = eng.file_claim_with_tags(text, parse_scope(&scope), tier, "cli", &tags)?;
-            eng.save_to_repo(&repo)?;
-            eng.flush_outbox_to_repo_with_policy(&repo, 128, 3)?;
+            eng.save_to_repo_and_flush_outbox_with_policy(&repo, 128, 3)?;
             if cli.vectors {
                 let app = llm::load_app_config(&cli.llm_config)?;
                 let t = eng.store.claims[&cid].text.clone();
@@ -1803,8 +1797,7 @@ fn run_with_engine(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             let old = wiki_core::ClaimId(uuid::Uuid::parse_str(&old_claim_id)?);
             let tier = parse_tier(&tier)?;
             let new_id = eng.supersede(old, new_text, parse_scope(&scope), tier, "cli")?;
-            eng.save_to_repo(&repo)?;
-            eng.flush_outbox_to_repo_with_policy(&repo, 128, 3)?;
+            eng.save_to_repo_and_flush_outbox_with_policy(&repo, 128, 3)?;
             if cli.vectors {
                 let app = llm::load_app_config(&cli.llm_config)?;
                 let t = eng.store.claims[&new_id].text.clone();
@@ -1879,8 +1872,7 @@ fn run_with_engine(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                 );
                 eng.store.pages.insert(page.id, page);
             }
-            eng.save_to_repo(&repo)?;
-            eng.flush_outbox_to_repo_with_policy(&repo, 128, 3)?;
+            eng.save_to_repo_and_flush_outbox_with_policy(&repo, 128, 3)?;
             maybe_sync_projection(sync_wiki, wiki_root.as_deref(), &eng)?;
             for (id, score) in ranked.into_iter().take(20) {
                 println!("{score:.6}\t{id}");
@@ -2053,8 +2045,7 @@ fn run_with_engine(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         Cmd::Promote { claim_id } => {
             let cid = wiki_core::ClaimId(uuid::Uuid::parse_str(&claim_id)?);
             eng.promote_if_qualified(cid, "cli", &viewer)?;
-            eng.save_to_repo(&repo)?;
-            eng.flush_outbox_to_repo_with_policy(&repo, 128, 3)?;
+            eng.save_to_repo_and_flush_outbox_with_policy(&repo, 128, 3)?;
             maybe_sync_projection(sync_wiki, wiki_root.as_deref(), &eng)?;
             println!("promoted {claim_id}");
         }
@@ -2082,8 +2073,7 @@ fn run_with_engine(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             };
             let now = OffsetDateTime::now_utc();
             eng.promote_page(pid, to_status, "cli", now, force)?;
-            eng.save_to_repo(&repo)?;
-            eng.flush_outbox_to_repo_with_policy(&repo, 128, 3)?;
+            eng.save_to_repo_and_flush_outbox_with_policy(&repo, 128, 3)?;
             maybe_sync_projection(sync_wiki, wiki_root.as_deref(), &eng)?;
             println!("promoted page {page_id} to {to_status:?}");
         }
@@ -2111,8 +2101,7 @@ fn run_with_engine(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             if let Some(page) = eng.store.pages.get_mut(&draft.page.id) {
                 finalize_consumed_page(page, et, Confidence::default(), &schema);
             }
-            eng.save_to_repo(&repo)?;
-            eng.flush_outbox_to_repo_with_policy(&repo, 128, 3)?;
+            eng.save_to_repo_and_flush_outbox_with_policy(&repo, 128, 3)?;
             maybe_sync_projection(sync_wiki, wiki_root.as_deref(), &eng)?;
             println!(
                 "page={} claims={}",
@@ -2137,8 +2126,7 @@ fn run_with_engine(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
 
             let pid = page.id;
             eng.store.pages.insert(pid, page);
-            eng.save_to_repo(&repo)?;
-            eng.flush_outbox_to_repo_with_policy(&repo, 128, 3)?;
+            eng.save_to_repo_and_flush_outbox_with_policy(&repo, 128, 3)?;
             maybe_sync_projection(sync_wiki, wiki_root.as_deref(), &eng)?;
             println!("page={}", pid.0);
         }
@@ -2168,8 +2156,7 @@ fn run_with_engine(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
 
             let pid = page.id;
             eng.store.pages.insert(pid, page);
-            eng.save_to_repo(&repo)?;
-            eng.flush_outbox_to_repo_with_policy(&repo, 128, 3)?;
+            eng.save_to_repo_and_flush_outbox_with_policy(&repo, 128, 3)?;
             maybe_sync_projection(sync_wiki, wiki_root.as_deref(), &eng)?;
             println!("page={}", pid.0);
         }
@@ -3723,8 +3710,7 @@ fn run_lint_job(
     wiki_root: Option<&std::path::Path>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let findings = eng.run_basic_lint("cli", Some(viewer));
-    eng.save_to_repo(repo)?;
-    eng.flush_outbox_to_repo_with_policy(repo, 128, 3)?;
+    eng.save_to_repo_and_flush_outbox_with_policy(repo, 128, 3)?;
     if let Some(root) = wiki_root {
         let report = write_lint_report(root, &format!("lint-{}", timestamp_slug()), &findings)?;
         println!("lint_report={}", report.display());
@@ -3811,8 +3797,7 @@ fn run_gap_job(
     schema: &DomainSchema,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let findings = eng.run_gap_scan(Some(viewer), low_coverage_threshold);
-    eng.save_to_repo(repo)?;
-    eng.flush_outbox_to_repo_with_policy(repo, 128, 3)?;
+    eng.save_to_repo_and_flush_outbox_with_policy(repo, 128, 3)?;
 
     let report_md = gap_report_markdown(&findings);
 
@@ -3829,8 +3814,7 @@ fn run_gap_job(
         if let Some(page) = eng.store.pages.get_mut(&pid) {
             finalize_consumed_page(page, EntryType::LintReport, Confidence::default(), schema);
         }
-        eng.save_to_repo(repo)?;
-        eng.flush_outbox_to_repo_with_policy(repo, 128, 3)?;
+        eng.save_to_repo_and_flush_outbox_with_policy(repo, 128, 3)?;
     }
 
     maybe_sync_projection(sync_wiki, wiki_root, eng)?;
@@ -3940,8 +3924,7 @@ fn run_fix_job(
     if write && !dry_run {
         let modified = apply_auto_fixes(eng, &fixes);
         if modified > 0 {
-            eng.save_to_repo(repo)?;
-            eng.flush_outbox_to_repo_with_policy(repo, 128, 3)?;
+            eng.save_to_repo_and_flush_outbox_with_policy(repo, 128, 3)?;
             maybe_sync_projection(sync_wiki, wiki_root, eng)?;
         }
     }
@@ -3973,8 +3956,7 @@ fn run_maintenance_job(
     }
     let pages_marked = eng.mark_stale_pages(now);
     let pages_cleaned = eng.cleanup_expired_pages(now);
-    eng.save_to_repo(repo)?;
-    eng.flush_outbox_to_repo_with_policy(repo, 128, 3)?;
+    eng.save_to_repo_and_flush_outbox_with_policy(repo, 128, 3)?;
     maybe_sync_projection(sync_wiki, wiki_root, eng)?;
     println!(
         "decay=applied lint_findings={} promoted={promoted} pages_marked_needs_update={pages_marked} pages_auto_cleaned={pages_cleaned}",
@@ -4431,8 +4413,7 @@ fn ingest_one_source(
         "batch-ingest",
         batch_source_tags_for_ingest(batch),
     )?;
-    eng.save_to_repo(repo)?;
-    eng.flush_outbox_to_repo_with_policy(repo, 128, 3)?;
+    eng.save_to_repo_and_flush_outbox_with_policy(repo, 128, 3)?;
 
     if vectors {
         let app = llm::load_app_config(llm_config_path)?;
@@ -4451,8 +4432,7 @@ fn ingest_one_source(
             c.tags.iter().map(String::as_str),
         )?;
         eng.attach_sources(cid, &[sid])?;
-        eng.save_to_repo(repo)?;
-        eng.flush_outbox_to_repo_with_policy(repo, 128, 3)?;
+        eng.save_to_repo_and_flush_outbox_with_policy(repo, 128, 3)?;
         if vectors {
             let app = llm::load_app_config(llm_config_path)?;
             let vec = llm::embed_first(&app, &c.text)?;
@@ -4498,8 +4478,7 @@ fn ingest_one_source(
             let _ = eng.add_edge(edge);
         }
     }
-    eng.save_to_repo(repo)?;
-    eng.flush_outbox_to_repo_with_policy(repo, 128, 3)?;
+    eng.save_to_repo_and_flush_outbox_with_policy(repo, 128, 3)?;
 
     // summary 页：磁盘与引擎均约定为 EntryType::Summary + 五段正文
     if plan.should_materialize_summary_page() {
@@ -4516,8 +4495,7 @@ fn ingest_one_source(
             .with_entry_type(et)
             .with_status(status);
         eng.store.pages.insert(page.id, page);
-        eng.save_to_repo(repo)?;
-        eng.flush_outbox_to_repo_with_policy(repo, 128, 3)?;
+        eng.save_to_repo_and_flush_outbox_with_policy(repo, 128, 3)?;
     }
 
     Ok(IngestOneStats {
