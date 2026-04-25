@@ -75,7 +75,7 @@
 
 **背景**：M4 的 Notion 迁移产出了规范的 `sources/{origin}/` + `pages/{entry_type}/` 文件树，但 M6 的 `batch-ingest` 把 78 条产物写成了 `entry_type: concept` + 哈希命名，且 `write_projection` 还在向根 `sources/`、根 `concepts/` 重复写哈希文件，两套规范并存。本里程碑将 **Notion 迁移版式固化为唯一标准**，同时一次性完成代码、文件系统、DB 的全局对齐。
 
-- 新增 [docs/vault-standards.md](vault-standards.md)：目录 / 命名 / frontmatter / 正文 5 段骨架的单一事实来源。
+- 新增 [docs/vault-standards.md](../vault-standards.md)：目录 / 命名 / frontmatter / 正文 5 段骨架的单一事实来源。
 - `LlmIngestPlanV1` 扩展：`one_sentence_summary` / `key_insights` / `confidence` / `tags` / `source_author` / `source_publisher` / `source_published_at`，并提供 `to_five_section_summary_body()` 生成标准 5 段正文。
 - `batch-ingest` / `ingest-llm` / MCP `wiki_ingest_llm` 统一硬编码 `EntryType::Summary`，frontmatter 含 `source_url` / `source_tags` / `created_at` / `updated_at` / `last_compiled_at` / `compiled_by`。
 - `write_projection`：`pages/` 按 `entry_type` 拆子目录；中文标题直用（仅 `/` → `-`）；**停止**向根 `sources/`、根 `concepts/` 写投影。
