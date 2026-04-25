@@ -52,7 +52,7 @@
 
 ## Status
 
-- **C16A in progress** — `persist-snapshot-outbox` implementation is on branch
-  `codex/persist-snapshot-outbox`; chosen architecture is `WikiRepository`
-  method + SQLite `BEGIN IMMEDIATE` transaction.
+- **C16A complete** — PR #25 merged. `persist-snapshot-outbox` uses a
+  `WikiRepository` method plus SQLite `BEGIN IMMEDIATE` transaction for
+  snapshot + current outbox durability.
 - **C16B not started** — `embedding-ann-index` remains a separate follow-up.

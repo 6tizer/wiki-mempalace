@@ -10,8 +10,8 @@
 - [x] Tests (failure injection or rollback proof)
 - [x] Docs: `AGENTS.md` / `docs/outbox-and-consumers.md`
 - [x] Handoff: `docs/handovers/persist-snapshot-outbox/summary.md`
-- [ ] PR + CI green
-- [ ] PRD / roadmap / spec status updated
+- [x] PR + CI green
+- [x] PRD / roadmap / spec status updated
 
 ## Subtasks
 
@@ -50,3 +50,5 @@ Focused verification run during implementation:
 - `cargo fmt --all -- --check`
 - `cargo test --workspace`
 - `cargo clippy --workspace --all-targets -- -D warnings`
+
+PR #25 merged on 2026-04-25.
