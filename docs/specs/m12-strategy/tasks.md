@@ -13,9 +13,9 @@
 - [x] Docs updated
 - [x] Integration review complete
 - [x] PR opened
-- [ ] Codex/GitHub review addressed
-- [ ] CI green
-- [ ] Merged
+- [x] Codex/GitHub review addressed
+- [x] CI green
+- [x] Merged
 - [x] Roadmap/PRD updated
 
 ## Subtasks
@@ -71,3 +71,4 @@
 - `cargo test --workspace`
 - `cargo clippy --workspace --all-targets -- -D warnings`
 - Draft PR #16 opened.
+- PR #16 GitHub `quick` CI passed and merged into main on 2026-04-25.

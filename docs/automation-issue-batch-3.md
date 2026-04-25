@@ -16,7 +16,7 @@
 | --- | --- | --- | --- |
 | M10 指标与评估 | ✅ 已合入 PR #12 | 已有 `wiki-cli metrics`，支持 `--consumer-tag`、`--low-coverage-threshold`、`--json`、`--report <PATH>`；覆盖 content/lint/gaps/outbox/lifecycle 5 组指标 | 后续只消费接口 |
 | M11 运维控制台 | ✅ 已合入 PR #14 | 已新增 `wiki-cli dashboard`，默认输出 `wiki/reports/dashboard.html`，支持 `--output <PATH>`、`--consumer-tag <TAG>`、`--low-coverage-threshold <N>`；生成静态自包含 HTML | 后续只消费接口 |
-| M12 策略层增强 | 🚧 本分支已实现 | 新增 `wiki-cli suggest`，支持文本、`--json`、`--report-dir [PATH]`；JSON/Markdown 同源 report；默认只读，不写 DB/outbox/projection | PR/CI/merge |
+| M12 策略层增强 | ✅ 已合入 PR #16 | 新增 `wiki-cli suggest`，支持文本、`--json`、`--report-dir [PATH]`；JSON/Markdown 同源 report；默认只读，不写 DB/outbox/projection | 后续 operator/executor 单独规划 |
 | Schema T2 标签治理 | ✅ 已合入 PR #13 | `Claim/Source/LlmClaimDraft` tags 已落地；CLI/MCP/batch ingest 已接 tags；`deprecated_tags` 与 `max_new_tags_per_ingest` 已拦截 | 后续 T3 单独规划 |
 | LongMemEval 自动评测 | ⏳ 未完成 | 当前文档策略是不进必跑 CI，尚无自动 workflow / artifact 报告 | scheduled benchmark workflow、retrieval-only runner、artifact 报告 |
 
@@ -458,8 +458,8 @@ LongMemEval 是长期对话记忆评测，覆盖 information extraction、multi-
 1. J9 Metrics Core：已合入。
 2. J12 Tag Governance：已合入。
 3. J10 Dashboard：已合入。
-4. J11 Strategy Suggestions：本分支已实现，待 PR/CI/merge。
-5. J13 LongMemEval Auto Benchmark：M12 merge 后启动；可独立做 retrieval-only。
+4. J11 Strategy Suggestions：已合入。
+5. J13 LongMemEval Auto Benchmark：下一主线；可独立做 retrieval-only。
 
 ## Batch-3 完成标准
 

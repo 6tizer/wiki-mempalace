@@ -101,4 +101,4 @@ cargo run -p wiki-cli -- --db wiki.db mcp --palace ~/.mempalace-rs
 
 - workspace `edition = "2021"`，`rust-mempalace` 独立 `edition = "2024"`；整体升级时再统一。
 - `wiki.db` 与 `palace.db` 仍是最终一致；准实时同步可在未来通过内核 hook 直连 bridge live sink。
-- M10 metrics 与 M11 dashboard 已合入；M12 strategy 本分支已实现，当前状态见 [roadmap.md](roadmap.md)。
+- M10 metrics、M11 dashboard 与 M12 strategy 已合入；当前状态见 [roadmap.md](roadmap.md)。
