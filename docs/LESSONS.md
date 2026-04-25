@@ -61,3 +61,12 @@
 - Spec changes needed: 生产数据初始化任务要把 “验证命令也可能产生 outbox” 写进 checklist。
 - Tests or reviews that caught issues: `vault-audit`、`vault-backfill --apply`、frontmatter count、DB snapshot count、outbox count、`palace-init` report、fusion `query/explain --palace-db` 均通过。
 - Next plan note: 生产 backfill 已完成；下一步是 B5 orphan governance，基于新 audit 报告处理 4 个 orphan candidates 和 unsupported frontmatter，不要重复跑全量 backfill。
+
+## 2026-04-25 / B5 Orphan Governance
+
+- Scope: 新增只读 `wiki-cli orphan-governance`，读取生产 `vault-audit.json`，生成 JSON/Markdown sibling report，把 4/12/5/16 四类审计发现分到 human-required、agent-review、future-auto-fix lane。
+- What worked: 先用白话架构锁定“报告可写、vault 不清理”，实现就能保持 DB/outbox/palace 零触碰。
+- What caused rework: reviewer 抓到旧/空 audit 会被默认成 0，以及 report-dir symlink 可逃逸；以后 report command 的 path gate 要直接测 malformed input 和 symlink escape。
+- Spec changes needed: 后续若要修 `status` 或 `compiled_to_wiki`，先让 `vault-audit` 输出 path-level arrays，再更新 B5 spec 并让用户确认 apply mode。
+- Tests or reviews that caught issues: 独立 review subagent 抓到 2 个 P2；新增 malformed audit 与 symlink escape tests；最终需跑 `fmt/test/clippy` gate。
+- Next plan note: B5 v1 只给治理报告。不要在本 PR 里清理 `_archive`、改 frontmatter、重跑 LLM 或移动历史文件。

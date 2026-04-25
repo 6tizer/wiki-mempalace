@@ -46,6 +46,34 @@ fn seed_vault(vault: &Path) {
     );
 }
 
+fn orphan_audit_body() -> &'static str {
+    r#"{
+  "vault_path": "/tmp/wiki",
+  "generated_at": "2026-04-25T00:00:00Z",
+  "orphan_candidates": {
+    "total_files": 4,
+    "samples_by_category": {
+      "old_wiki_artifact": [".wiki/orphan-audit-report.md"],
+      "unclassified_markdown": [
+        "_archive/legacy-root/AGENTS md 5da673ca2377484498ec12f5679bfbf3.md",
+        "_archive/legacy-root/README.md",
+        "_archive/legacy-root/concepts/04ff4434.md"
+      ]
+    }
+  },
+  "readiness": { "unsupported_frontmatter": 12 },
+  "pages": { "missing_status": 5 },
+  "sources": {
+    "compiled_to_wiki": {
+      "true_count": 10,
+      "false_count": 2,
+      "missing": 16,
+      "other": 0
+    }
+  }
+}"#
+}
+
 #[test]
 fn vault_audit_cli_writes_reports_under_vault_reports() {
     let temp = tempfile::tempdir().unwrap();
@@ -61,6 +89,33 @@ fn vault_audit_cli_writes_reports_under_vault_reports() {
 
     assert!(vault.join("reports/vault-audit.json").exists());
     assert!(vault.join("reports/vault-audit.md").exists());
+}
+
+#[test]
+fn orphan_governance_cli_writes_reports_under_vault_reports() {
+    let temp = tempfile::tempdir().unwrap();
+    let vault = temp.path().join("vault");
+    let audit_path = vault.join("reports/vault-audit.json");
+    seed_vault(&vault);
+    write_file(&audit_path, orphan_audit_body());
+    let before = std::fs::read_to_string(vault.join("sources/source-a.md")).unwrap();
+
+    wiki_cmd()
+        .arg("--wiki-dir")
+        .arg(&vault)
+        .arg("orphan-governance")
+        .arg("--audit-report")
+        .arg(&audit_path)
+        .assert()
+        .success()
+        .stdout(contains(
+            "orphan_governance orphan_candidates=4 unsupported_frontmatter=12 pages_missing_status=5 sources_missing_compiled_to_wiki=16",
+        ));
+
+    assert!(vault.join("reports/orphan-governance-report.json").exists());
+    assert!(vault.join("reports/orphan-governance-report.md").exists());
+    let after = std::fs::read_to_string(vault.join("sources/source-a.md")).unwrap();
+    assert_eq!(before, after);
 }
 
 #[test]

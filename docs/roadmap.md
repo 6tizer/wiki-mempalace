@@ -26,7 +26,7 @@
 
 ## 当前下一阶段
 
-1. B5 orphan governance：基于 2026-04-25 生产 `vault-audit` 新报告制定治理计划，不直接清理 vault。
+1. B5 orphan governance：`codex/orphan-governance` 已实现只读治理报告；基于 2026-04-25 生产 `vault-audit` 的 4 个 orphan candidates、12 个 unsupported frontmatter、5 个缺 `status` page、16 个缺 `compiled_to_wiki` source 做分类，不清理 vault。
 2. C16B Embedding ANN index 如需推进，单独从 PRD/spec 开新分支。
 3. 观察 J13 scheduled artifacts：先积累至少 7 份 nightly report 和 1 份 weekly full report，确认 artifact 稳定和 full run 真实耗时。
 4. J14 Semantic Fusion Benchmark：只有在 J13 报告显示同义表达/词面不匹配是主要错因，且运行预算明确后，再评估 `wiki-cli --vectors --palace-db` 语义融合 lane。
