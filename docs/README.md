@@ -18,7 +18,7 @@
 
 ## 活跃计划
 
-- [roadmap.md](roadmap.md) — 当前路线图；M10 metrics、M11 dashboard、M12 strategy、Schema T2 tags 已合入，LongMemEval 仍在计划中。
+- [roadmap.md](roadmap.md) — 当前路线图；M10 metrics、M11 dashboard、M12 strategy、Schema T2 tags、J13 LongMemEval 已合入。
 - [automation-issue-batch-3.md](automation-issue-batch-3.md) — M10 metrics、M11 dashboard、M12 strategy、Schema T2 tags、LongMemEval auto benchmark 的批次计划。
 - [dev-workflow.md](dev-workflow.md) — PRD → spec 三件套 → branch → subagent → review → PR → CI → merge 的固定开发流程。
 - [LESSONS.md](LESSONS.md) — 每轮合并后的项目级经验，下一轮 Plan mode 前必读。
