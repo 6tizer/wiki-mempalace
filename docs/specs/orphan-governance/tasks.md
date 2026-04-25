@@ -16,10 +16,10 @@
 - [x] Docs updated
 - [x] Integration review complete
 - [x] PR opened
-- [ ] Codex/GitHub review addressed
+- [x] Codex/GitHub review addressed
 - [x] CI green
-- [ ] Merged
-- [ ] Roadmap/PRD updated
+- [x] Merged
+- [x] Roadmap/PRD updated
 
 ## Subtasks
 
@@ -33,6 +33,7 @@
 | Status backfill | Script | Main | `docs/specs/orphan-governance/tasks.md`, `docs/specs/README.md`, `docs/roadmap.md`, `docs/LESSONS.md` | Review | Done |
 | Draft PR | Skill | Main | GitHub PR #28 | Gate pass | Done |
 | GitHub CI quick | Skill | Main | PR #28 `quick` check | Draft PR | Done |
+| Merge sync | Script | Main | `docs/specs/orphan-governance/tasks.md`, `docs/roadmap.md` | PR #28 merged | Done |
 
 ## Review Notes
 
