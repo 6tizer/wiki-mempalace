@@ -4,11 +4,14 @@
 
 - [x] Requirements approved
 - [x] Design approved
+- [x] Plain architecture approved
 - [x] Plan approved
 - [x] Branch created
-- [x] Subagent tasks assigned
+- [x] Tasks graded as Script / Skill / Agent
+- [x] Subagent tasks assigned where needed
 - [x] Implementation complete
 - [x] Module review complete
+- [x] Module handoff written
 - [x] Tests added/updated
 - [x] Docs updated
 - [x] Integration review complete
@@ -20,14 +23,15 @@
 
 ## Subtasks
 
-| Task | Owner | Files | Status |
-| --- | --- | --- | --- |
-| Suggestion model | Subagent A | `crates/wiki-core/` | Complete |
-| Strategy scanner | Subagent B + main | `crates/wiki-kernel/` | Complete |
-| Report rendering | Subagent C | `crates/wiki-cli/` | Complete |
-| CLI output | Subagent C | `crates/wiki-cli/` | Complete |
-| Focused review | Reviewer D | M12 diff | Complete; findings addressed |
-| Tests/docs | Main | tests, docs | Complete |
+| Task | Grade | Owner | Files | Depends on | Status |
+| --- | --- | --- | --- | --- | --- |
+| Suggestion model | Agent | Subagent A | `crates/wiki-core/` | Requirements/design approval | Complete |
+| Strategy scanner | Agent | Subagent B + main | `crates/wiki-kernel/` | Suggestion model | Complete |
+| Report rendering | Agent | Subagent C | `crates/wiki-cli/` | Strategy scanner | Complete |
+| CLI output | Agent | Subagent C | `crates/wiki-cli/` | Report rendering | Complete |
+| Focused review | Agent | Reviewer D | M12 diff | Implementation complete | Complete; findings addressed |
+| Tests/docs | Script / Agent | Main | tests, docs | Review findings addressed | Complete |
+| Workflow handoff backfill | Script | Main | `docs/handovers/m12-strategy/summary.md`, this file | PR #16/#17 merged | Complete |
 
 ## Review Notes
 
@@ -57,6 +61,10 @@
 - Query history schema: consider adding explicit viewer scope or a true query
   hash to `QueryServed` so future suggestion rules can use history with less
   redaction.
+
+## Handoff
+
+- [docs/handovers/m12-strategy/summary.md](../../handovers/m12-strategy/summary.md)
 
 ## Verification
 

@@ -14,9 +14,8 @@
 
 ## Active Specs
 
-- [m10-metrics/](m10-metrics/) — M10 unified metrics core。
-- [m11-dashboard/](m11-dashboard/) — M11 read-only dashboard/report。
-- [m12-strategy/](m12-strategy/) — M12 strategy suggestions。
-- [schema-t2-tags/](schema-t2-tags/) — Schema T2 tag governance。
-- [longmemeval-auto/](longmemeval-auto/) — LongMemEval scheduled benchmark artifacts。
-
+- [m10-metrics/](m10-metrics/) — M10 unified metrics core. Merged PR #12。
+- [m11-dashboard/](m11-dashboard/) — M11 read-only dashboard/report. Merged PR #14。
+- [m12-strategy/](m12-strategy/) — M12 strategy suggestions. Merged PR #16。
+- [schema-t2-tags/](schema-t2-tags/) — Schema T2 tag governance. Merged PR #13。
+- [longmemeval-auto/](longmemeval-auto/) — LongMemEval scheduled benchmark artifacts. Planned。
