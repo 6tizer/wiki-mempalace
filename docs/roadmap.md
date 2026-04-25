@@ -22,9 +22,10 @@
 
 ## 当前下一阶段
 
-1. LongMemEval auto benchmark：nightly / weekly 非阻塞自动评测，artifact 报告，不进 PR 必跑。
-2. M12 后续 operator/executor、dashboard latest suggestion report、QueryServed scope/hash schema 改进单独规划，不混入首版 suggest。
-3. M10/M11/M12/Schema T2 已合入；后续只做消费对齐或回归修复，不重复开发。
+1. LongMemEval auto benchmark：J13 先做 `rust-mempalace` 本地检索基线，nightly 50 题、weekly full，artifact 报告，不进 PR 必跑。
+2. J14 Semantic Fusion Benchmark：等 J13 至少 7 份 nightly report、1 份 weekly full report、full run 真实耗时明确后，再评估 `wiki-cli --vectors --palace-db` 语义融合 lane。
+3. M12 后续 operator/executor、dashboard latest suggestion report、QueryServed scope/hash schema 改进单独规划，不混入首版 suggest。
+4. M10/M11/M12/Schema T2 已合入；后续只做消费对齐或回归修复，不重复开发。
 
 执行计划见 [automation-issue-batch-3.md](automation-issue-batch-3.md)。开发流程见
 [dev-workflow.md](dev-workflow.md)，batch-3 PRD 见 [prd/batch-3.md](prd/batch-3.md)。

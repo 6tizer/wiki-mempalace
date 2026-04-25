@@ -18,4 +18,4 @@
 - [m11-dashboard/](m11-dashboard/) — M11 read-only dashboard/report. Merged PR #14。
 - [m12-strategy/](m12-strategy/) — M12 strategy suggestions. Merged PR #16。
 - [schema-t2-tags/](schema-t2-tags/) — Schema T2 tag governance. Merged PR #13。
-- [longmemeval-auto/](longmemeval-auto/) — LongMemEval scheduled benchmark artifacts. Planned。
+- [longmemeval-auto/](longmemeval-auto/) — J13 LongMemEval `rust-mempalace` local retrieval baseline artifacts. Planned。

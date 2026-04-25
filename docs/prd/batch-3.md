@@ -31,7 +31,7 @@ Out:
 | J10 Dashboard | Static read-only dashboard/report | `wiki-cli`, docs | Merged PR #14 |
 | J11 Strategy Suggestions | Explainable suggestions, no auto execution | `wiki-core`, `wiki-kernel`, `wiki-cli` | Merged PR #16 |
 | J12 Tag Governance | Tags model + schema policy consumption | `wiki-core`, `wiki-kernel`, `wiki-cli` | Merged PR #13 |
-| J13 LongMemEval Auto Benchmark | Scheduled retrieval benchmark artifacts | `.github/workflows`, `scripts`, docs | Planned |
+| J13 LongMemEval Auto Benchmark | Scheduled `rust-mempalace` local retrieval baseline artifacts | `.github/workflows`, `scripts`, docs | Planned |
 
 ## Acceptance
 
@@ -39,7 +39,8 @@ Out:
 - dashboard/report summarizes health, metrics, backlog, and consumer state.
 - strategy/suggest emits at least 2 explainable suggestion types and is read-only by default.
 - Claim / Source / LlmClaimDraft tags are backward-compatible and schema policy is consumed.
-- LongMemEval scheduled workflow uploads markdown/json artifacts and is not a required PR check.
+- LongMemEval scheduled workflow uploads markdown/json artifacts for the
+  `rust-mempalace` local retrieval baseline and is not a required PR check.
 - `cargo fmt --all -- --check`, `cargo test --workspace`, and `cargo clippy --workspace --all-targets -- -D warnings` pass.
 
 ## Risks
@@ -49,6 +50,8 @@ Out:
 - Strategy suggestions causing noisy or unsafe recommendations.
 - Tags breaking old snapshots.
 - LongMemEval network/dataset drift causing noisy scheduled failures.
+- Semantic fusion benchmarking pulling external embedding cost, keys, and rate
+  limits into the J13 baseline. This is deferred to J14.
 
 ## Rollout
 
