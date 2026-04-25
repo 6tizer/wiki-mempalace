@@ -58,9 +58,13 @@ Out:
 
 ## Status
 
-- [ ] PRD approved
+- [x] PRD approved
 - [x] Specs created
 - [ ] Modules implemented
 - [ ] CI green
 - [ ] Merged
 - [x] Roadmap updated for completed M10/M11/M12/J12 status
+
+Batch-3 is partially complete: M10, M11, M12, and Schema T2 are merged. J13
+LongMemEval Auto Benchmark remains planned, so the overall PRD is not fully
+implemented, green, or merged yet.
