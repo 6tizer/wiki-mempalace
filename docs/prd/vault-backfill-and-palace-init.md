@@ -69,8 +69,11 @@ In:
   - wiki db: `/Users/mac-mini/Documents/wiki/.wiki/wiki.db`
   - palace db: `/Users/mac-mini/Documents/wiki/.wiki/palace.db`
   - default viewer/write scope: `shared:wiki`
-- B5 orphan-governance planning: use B1 output to define a later safe cleanup
-  path for orphan sources.
+- B5 orphan-governance: use the 2026-04-25 production B1 audit report to
+  produce a read-only governance report that classifies orphan candidates,
+  unsupported/missing frontmatter, pages missing `status`, and sources missing
+  `compiled_to_wiki` into report-only, future auto-fix, and human-required
+  lanes.
 
 Out:
 
@@ -89,7 +92,7 @@ Out:
 | B2 vault-backfill | Add stable IDs and import vault sources/pages into `wiki.db` with idempotency, dry-run, limit, reports, and outbox | `wiki-core`, `wiki-kernel`, `wiki-storage`, `wiki-cli` | Implemented, focused review addressed |
 | B3 palace-init | Consume generated outbox into `palace.db` and validate mempalace search/fusion paths | `wiki-mempalace-bridge`, `wiki-cli`, `rust-mempalace` | Implemented, focused review addressed |
 | B4 agent-runtime-defaults | Make shared vault-local paths and `shared:wiki` usable by normal CLI/MCP agent workflows | `wiki-cli`, docs, templates | Implemented, focused review addressed |
-| B5 orphan-governance | Plan and later implement safe orphan source cleanup from fresh B1 evidence | docs/specs follow-up | Deferred until B1 report |
+| B5 orphan-governance | Classify fresh production audit findings into safe governance lanes without mutating vault content | `wiki-cli`, audit/report docs | In progress on `codex/orphan-governance` |
 
 ## Acceptance
 
@@ -113,6 +116,10 @@ Out:
 - MCP-connected agents can read/write the shared corpus through `shared:wiki`.
 - Agent runbook gives exact default commands for audit, backfill dry-run,
   backfill apply, palace init, query, explain, metrics, and dashboard.
+- Orphan governance produces JSON as source of truth plus Markdown sibling
+  report under the vault reports directory.
+- Orphan governance v1 is read-only: no source/page rewrite, no
+  `compiled_to_wiki` flip, no `status` insertion, no archive moves.
 - Workspace checks pass before PR merge.
 
 ## Risks
@@ -128,6 +135,9 @@ Out:
 - Current scope defaults in CLI/MCP are not aligned with the desired multi-agent
   shared setup and may require explicit default-path/default-scope changes.
 - Existing orphan audit may be stale; fresh B1 output must drive B5.
+- The 2026-04-25 audit does not list every path for missing `status` and
+  missing `compiled_to_wiki`; B5 must classify counts conservatively and avoid
+  apply behavior until path-level evidence exists.
 
 ## Rollout
 
@@ -141,8 +151,8 @@ Out:
   - B2 identity/backfill/storage.
   - B3 palace consume/fusion validation.
   - B4 runtime defaults/docs.
-- B5 starts only after B1 produces a current orphan report and user confirms the
-  cleanup policy.
+- B5 starts only after B1 produces a current orphan report. Its first version is
+  report-only; future apply behavior needs a separate user approval gate.
 
 ## Status
 
@@ -158,5 +168,6 @@ Out:
 - [x] Integration review complete
 - [x] Draft PR opened
 - [x] CI green
-- [ ] Merged
-- [ ] Roadmap and lessons updated
+- [x] Merged
+- [x] Roadmap and lessons updated
+- [ ] B5 orphan governance complete

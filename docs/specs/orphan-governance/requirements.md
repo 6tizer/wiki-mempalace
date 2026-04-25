@@ -1,46 +1,98 @@
-# Requirements: Orphan Governance
+# Requirements: B5 Orphan Governance
 
 ## Goal
 
-- Define safe orphan source cleanup after B1 produces a fresh audit report.
+- Produce a read-only governance report from the fresh production
+  `vault-audit.json`.
+- Classify audit findings into action lanes without mutating the vault.
 
 ## Plain-Language Summary
 
-- What this module does: turns fresh orphan evidence into a cleanup plan.
-- Who it talks to: B1 audit output and vault Markdown.
-- What user decision it implements: do not mutate orphan links or
-  `compiled_to_wiki` until current evidence is reviewed.
+- What this module does: reads the audit report and says what kind of cleanup is
+  safe to discuss next.
+- Who it talks to: `vault-audit.json`; it does not edit Markdown files.
+- What user decision it implements: B5 reports and classifies only. It does not
+  clean, rewrite, move, or flip source/page metadata.
+
+## Current Production Evidence
+
+Input report:
+
+- `/Users/mac-mini/Documents/wiki/reports/vault-audit.json`
+- generated after the 2026-04-25 production backfill and palace init.
+
+Observed counts:
+
+- `orphan_candidates.total_files = 4`
+- `readiness.unsupported_frontmatter = 12`
+- `pages.missing_status = 5`
+- `sources.compiled_to_wiki.missing = 16`
+
+Current orphan samples:
+
+- `.wiki/orphan-audit-report.md`
+- `_archive/legacy-root/AGENTS md 5da673ca2377484498ec12f5679bfbf3.md`
+- `_archive/legacy-root/README.md`
+- `_archive/legacy-root/concepts/04ff4434.md`
 
 ## Functional Requirements
 
-- Consume B1 fresh orphan categories.
-- Separate at least:
-  - title/link matched but not linked
-  - compiled true but no page found
-  - compiled false
-  - missing `compiled_to_wiki`
-  - unsupported or malformed source
-- Produce a cleanup plan before implementation.
-- Require dry-run before any vault mutation.
-- Require user approval before any link rewrite or `compiled_to_wiki` change.
+- Add a read-only `wiki-cli orphan-governance` command.
+- Accept an audit JSON path with `--audit-report <PATH>`.
+- Default report directory:
+  - with `--wiki-dir`: `<wiki-dir>/reports/`
+  - without `--wiki-dir`: audit report parent directory.
+- Emit JSON as source of truth plus Markdown sibling report.
+- Classify findings into these lanes:
+  - `report_only`
+  - `future_auto_fix`
+  - `agent_review`
+  - `human_required`
+- For the 2026-04-25 report, classify:
+  - 4 orphan candidates: `human_required`, because all samples are old
+    `.wiki`/`_archive` or unclassified Markdown and deletion/move would be
+    irreversible.
+  - 12 unsupported frontmatter files: `agent_review`, because the audit only
+    exposes the count as readiness data in this report; path-level evidence is
+    required before any fix.
+  - 5 pages missing `status`: `future_auto_fix`, but report-only in v1. Future
+    dry-run may propose `status: draft` only after exact page paths are listed.
+  - 16 sources missing `compiled_to_wiki`: `agent_review`, because setting
+    `true` can hide uncompiled work and setting `false` can trigger unwanted
+    recompile.
+- Include explicit mutation policy:
+  - v1 writes reports only.
+  - no vault Markdown mutation.
+  - no DB mutation.
+  - no outbox emission.
+  - no palace write.
+- Include source audit report metadata and counts in output.
 
 ## Non-Goals
 
-- Do not run before B1 report exists.
-- Do not block B1-B4 completion.
-- Do not auto-rerun LLM for all orphan sources.
+- Do not clean vault files.
+- Do not move files out of `_archive`.
+- Do not delete old reports.
+- Do not add `status`.
+- Do not add or flip `compiled_to_wiki`.
+- Do not rerun LLM.
+- Do not require `wiki.db` or `palace.db`.
 
 ## Inputs / Outputs
 
-- Input: B1 audit report.
-- Output: orphan cleanup requirements/design/tasks update or follow-up PRD if
-  scope grows.
+- Input: `vault-audit.json`.
+- Output:
+  - `orphan-governance-report.json`
+  - `orphan-governance-report.md`
 
 ## Acceptance Criteria
 
-- B5 starts only after B1 report.
-- Cleanup categories and mutation policy are explicit.
-- User approves before apply mode exists.
+- Command succeeds against `/Users/mac-mini/Documents/wiki/reports/vault-audit.json`.
+- Output JSON includes the 4/12/5/16 counts from the audit report.
+- Output Markdown states which findings are report-only, future auto-fix,
+  agent-review, and human-required.
+- Running the command does not change any vault Markdown outside `reports/`.
+- Tests cover classification and read-only report writing.
 
 ## Checklist
 
@@ -51,5 +103,7 @@
 
 ## User / Agent Gates
 
-- User approval needed: all cleanup policy and apply behavior.
-- Agent can automate: report reading and proposed plan.
+- User approval needed: any future apply mode, archive move, deletion,
+  frontmatter mutation, or LLM recompile.
+- Agent can automate: report reading, classification, report writing, tests,
+  and code review.

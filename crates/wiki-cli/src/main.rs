@@ -32,6 +32,7 @@ mod banner;
 mod dashboard;
 mod llm;
 mod mcp;
+mod orphan_governance;
 mod palace_init;
 mod vault_audit;
 mod vault_backfill;
@@ -238,6 +239,15 @@ enum Cmd {
         #[arg(long)]
         vault: PathBuf,
         /// Report directory. Must be inside <vault>/reports.
+        #[arg(long)]
+        report_dir: Option<PathBuf>,
+    },
+    /// Classify vault audit findings into read-only governance lanes.
+    OrphanGovernance {
+        /// Path to vault-audit.json.
+        #[arg(long)]
+        audit_report: PathBuf,
+        /// Report directory. With --wiki-dir, must be under <wiki-dir>/reports.
         #[arg(long)]
         report_dir: Option<PathBuf>,
     },
@@ -1578,6 +1588,29 @@ fn run_with_engine(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
 
+    if let Cmd::OrphanGovernance {
+        audit_report,
+        report_dir,
+    } = &cli.cmd
+    {
+        let (report, files) = orphan_governance::run_orphan_governance(
+            audit_report,
+            report_dir.clone(),
+            cli.wiki_dir.as_deref(),
+        )
+        .map_err(|e| -> Box<dyn std::error::Error> { e.to_string().into() })?;
+        println!(
+            "orphan_governance orphan_candidates={} unsupported_frontmatter={} pages_missing_status={} sources_missing_compiled_to_wiki={}",
+            report.counts.orphan_candidates,
+            report.counts.unsupported_frontmatter,
+            report.counts.pages_missing_status,
+            report.counts.sources_missing_compiled_to_wiki,
+        );
+        println!("json_report_file={}", files.json_path.display());
+        println!("markdown_report_file={}", files.markdown_path.display());
+        return Ok(());
+    }
+
     if let Cmd::VaultBackfill {
         vault,
         scope,
@@ -2530,7 +2563,9 @@ fn run_with_engine(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         Cmd::Automation {
             cmd: AutomationCmd::ListJobs,
         } => unreachable!(),
-        Cmd::VaultAudit { .. } | Cmd::VaultBackfill { .. } => unreachable!(),
+        Cmd::VaultAudit { .. } | Cmd::OrphanGovernance { .. } | Cmd::VaultBackfill { .. } => {
+            unreachable!()
+        }
         // SchemaValidate 已在 main() 中短路，此处不可达
         Cmd::SchemaValidate { .. } => unreachable!(),
     }
