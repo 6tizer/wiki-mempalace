@@ -48,6 +48,10 @@ live bank 由 `--viewer-scope` 派生：
 
 这保证默认 `private:cli` 事件不会被写入错误 bank 后又被 ack。
 
+当前 live sink 默认写入 `PageWritten` 的高质量页面和 claim/supersede 事件。
+`SourceIngested` 默认 no-op；source 仍写入 `wiki.db`，但不默认写入 palace drawer。
+若 resolver 无法解析 required event，消费者必须报错停止，不能 ack 跳过。
+
 ## 幂等建议
 
 消费端应以 `wiki_outbox.id` 或事件 payload 的稳定 key 做幂等，不应假设事件只投递一次。

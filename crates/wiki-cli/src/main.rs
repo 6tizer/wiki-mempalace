@@ -32,6 +32,9 @@ mod banner;
 mod dashboard;
 mod llm;
 mod mcp;
+mod palace_init;
+mod vault_audit;
+mod vault_backfill;
 
 const DEFAULT_MEMPALACE_CONSUMER_TAG: &str = "mempalace";
 const DEFAULT_DASHBOARD_OUTPUT: &str = "wiki/reports/dashboard.html";
@@ -228,6 +231,48 @@ enum Cmd {
         /// 用于 outbox ack / progress 跟踪的 consumer tag。
         #[arg(long, default_value = "mempalace")]
         consumer_tag: String,
+    },
+    /// Read-only audit of an Obsidian vault before historical backfill.
+    VaultAudit {
+        /// Vault root directory.
+        #[arg(long)]
+        vault: PathBuf,
+        /// Report directory. Must be inside <vault>/reports.
+        #[arg(long)]
+        report_dir: Option<PathBuf>,
+    },
+    /// Backfill historical vault sources/pages into wiki.db.
+    VaultBackfill {
+        /// Vault root directory.
+        #[arg(long)]
+        vault: PathBuf,
+        /// Scope to assign to imported records.
+        #[arg(long, default_value = "shared:wiki")]
+        scope: String,
+        /// Dry-run only. This is also the default when --apply is absent.
+        #[arg(long, default_value_t = false)]
+        dry_run: bool,
+        /// Apply frontmatter ID and DB/outbox changes.
+        #[arg(long, default_value_t = false)]
+        apply: bool,
+        /// Limit the number of vault records processed.
+        #[arg(long)]
+        limit: Option<usize>,
+        /// Report directory. Defaults to <vault>/reports.
+        #[arg(long)]
+        report_dir: Option<PathBuf>,
+    },
+    /// Initialize palace.db from wiki.db outbox.
+    PalaceInit {
+        /// Minimum outbox id; effective start also respects consumer progress.
+        #[arg(long, default_value_t = 0)]
+        last_id: i64,
+        /// Consumer tag used for outbox ack / progress.
+        #[arg(long, default_value = "mempalace")]
+        consumer_tag: String,
+        /// Report directory. Defaults to <wiki-dir>/reports or ./reports.
+        #[arg(long)]
+        report_dir: Option<PathBuf>,
     },
     /// Collect read-only wiki metrics.
     Metrics {
@@ -1513,6 +1558,73 @@ fn run_with_engine(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
 
+    if let Cmd::VaultAudit { vault, report_dir } = &cli.cmd {
+        let report = vault_audit::scan_vault(vault)?;
+        let files = match report_dir {
+            Some(dir) => vault_audit::write_json_and_markdown(&report, dir)
+                .map_err(|e| -> Box<dyn std::error::Error> { e.to_string().into() })?,
+            None => vault_audit::write_json_and_markdown_in_vault_reports(&report)
+                .map_err(|e| -> Box<dyn std::error::Error> { e.to_string().into() })?,
+        };
+        println!(
+            "vault_audit sources={} pages={} ready_sources={} ready_pages={}",
+            report.sources.total,
+            report.pages.total,
+            report.readiness.ready_sources,
+            report.readiness.ready_pages,
+        );
+        println!("json_report_file={}", files.json_path.display());
+        println!("markdown_report_file={}", files.markdown_path.display());
+        return Ok(());
+    }
+
+    if let Cmd::VaultBackfill {
+        vault,
+        scope,
+        dry_run,
+        apply,
+        limit,
+        report_dir,
+    } = &cli.cmd
+    {
+        if *dry_run && *apply {
+            return Err("--dry-run and --apply cannot be used together".into());
+        }
+        let mode = if *apply {
+            vault_backfill::BackfillMode::Apply
+        } else {
+            vault_backfill::BackfillMode::DryRun
+        };
+        let report_dir = report_dir.clone().unwrap_or_else(|| vault.join("reports"));
+        let report = vault_backfill::backfill_vault(vault_backfill::VaultBackfillOptions {
+            vault_path: vault.clone(),
+            db_path: cli.db.clone(),
+            scope: vault_backfill::parse_scope(scope)?,
+            mode,
+            limit: *limit,
+            report_dir: report_dir.clone(),
+        })?;
+        println!(
+            "vault_backfill mode={} sources_imported={} sources_updated={} pages_imported={} pages_updated={} page_written_events={} skipped={}",
+            report.mode,
+            report.sources_imported,
+            report.sources_updated,
+            report.pages_imported,
+            report.pages_updated,
+            report.page_written_events,
+            report.skipped.len(),
+        );
+        println!(
+            "json_report_file={}",
+            report_dir.join("vault-backfill-report.json").display()
+        );
+        println!(
+            "markdown_report_file={}",
+            report_dir.join("vault-backfill-report.md").display()
+        );
+        return Ok(());
+    }
+
     let viewer = parse_scope(&cli.viewer_scope);
     let wiki_root = cli.wiki_dir.clone();
     let sync_wiki = cli.sync_wiki;
@@ -2095,6 +2207,58 @@ fn run_with_engine(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                 dispatch.unresolved,
             );
         }
+        Cmd::PalaceInit {
+            last_id,
+            consumer_tag,
+            report_dir,
+        } => {
+            let palace_path = cli
+                .palace
+                .as_deref()
+                .ok_or("--palace is required for palace-init")?;
+            let resolver = EngineResolver { store: &eng.store };
+            let report = palace_init::run_live_palace_init(
+                &repo,
+                &resolver,
+                palace_path,
+                &cli.viewer_scope,
+                &consumer_tag,
+                last_id,
+            )?;
+            let report_dir = report_dir
+                .map(|path| resolve_wiki_relative_path(wiki_root.as_deref(), path))
+                .unwrap_or_else(|| {
+                    wiki_root
+                        .as_deref()
+                        .map(|root| root.join("reports"))
+                        .unwrap_or_else(|| PathBuf::from("reports"))
+                });
+            let files = palace_init::write_report_files(&report_dir, &report)?;
+            println!(
+                "palace_init seen={} dispatched={} ignored={} filtered={} unresolved={} start_id={} acked={} consumer_tag={} drawers={} kg_facts={}",
+                report.dispatch.lines_seen,
+                report.dispatch.dispatched,
+                report.dispatch.ignored,
+                report.dispatch.filtered,
+                report.dispatch.unresolved,
+                report.start_id,
+                report.acked,
+                report.consumer_tag,
+                report.drawer_count.unwrap_or_default(),
+                report.kg_fact_count.unwrap_or_default(),
+            );
+            if let Some(validation) = &report.validation {
+                println!(
+                    "validation query_ok={} explain_ok={} fusion_ok={} sample_query={}",
+                    validation.query_ok,
+                    validation.explain_ok,
+                    validation.fusion_ok,
+                    validation.sample_query,
+                );
+            }
+            println!("json_report_file={}", files.json_path.display());
+            println!("markdown_report_file={}", files.markdown_path.display());
+        }
         Cmd::Metrics {
             consumer_tag,
             low_coverage_threshold,
@@ -2379,6 +2543,7 @@ fn run_with_engine(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         Cmd::Automation {
             cmd: AutomationCmd::ListJobs,
         } => unreachable!(),
+        Cmd::VaultAudit { .. } | Cmd::VaultBackfill { .. } => unreachable!(),
         // SchemaValidate 已在 main() 中短路，此处不可达
         Cmd::SchemaValidate { .. } => unreachable!(),
     }
@@ -3859,6 +4024,13 @@ fn run_consume_to_mempalace_job(
     } else {
         consume_outbox_ndjson_with_resolver_and_stats(&CliMempalaceSink, &resolver, &ndjson)?
     };
+    if dispatch.unresolved > 0 {
+        return Err(format!(
+            "consume-to-mempalace unresolved required events: unresolved={}",
+            dispatch.unresolved
+        )
+        .into());
+    }
     let acked = repo.mark_outbox_processed(stats.head_id, consumer_tag)?;
     Ok((dispatch, start_id, acked))
 }
@@ -4009,6 +4181,10 @@ impl<'a> OutboxResolver for EngineResolver<'a> {
 
     fn source_scope(&self, id: wiki_core::SourceId) -> Option<Scope> {
         self.store.sources.get(&id).map(|s| s.scope.clone())
+    }
+
+    fn page(&self, id: wiki_core::PageId) -> Option<wiki_core::WikiPage> {
+        self.store.pages.get(&id).cloned()
     }
 }
 

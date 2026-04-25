@@ -28,7 +28,7 @@ pub use tools::{make_tools, MempalaceTools, NoopMempalaceTools};
 
 use std::collections::BTreeMap;
 use wiki_core::WikiEvent;
-use wiki_core::{Claim, ClaimId, Scope, SourceId};
+use wiki_core::{Claim, ClaimId, PageId, Scope, SourceId, WikiPage};
 
 /// 写入外部「记忆宫殿」引擎的最小事件面（ingest / reinforce / 淘汰）。
 pub trait MempalaceWikiSink: Send + Sync {
@@ -42,6 +42,10 @@ pub trait MempalaceWikiSink: Send + Sync {
     ) -> Result<(), MempalaceError>;
     /// 原始资料入库（无 claim 关联时）；默认忽略。
     fn on_source_ingested(&self, _source_id: SourceId) -> Result<(), MempalaceError> {
+        Ok(())
+    }
+    /// 页面写入后可作为 palace drawer；默认忽略。
+    fn on_page_written(&self, _page: &WikiPage) -> Result<(), MempalaceError> {
         Ok(())
     }
     fn scope_filter(&self, scope: &Scope) -> bool;
@@ -170,6 +174,9 @@ fn wiki_event_name(event: &WikiEvent) -> &'static str {
 pub trait OutboxResolver {
     fn claim(&self, id: ClaimId) -> Option<Claim>;
     fn source_scope(&self, id: SourceId) -> Option<Scope>;
+    fn page(&self, _id: PageId) -> Option<WikiPage> {
+        None
+    }
     /// 默认按 `claim(id)` 取 claim 的 scope；实现可覆写以处理已删除 claim 的遗留事件。
     fn claim_scope(&self, id: ClaimId) -> Option<Scope> {
         self.claim(id).map(|c| c.scope)
@@ -200,6 +207,7 @@ pub fn consume_outbox_ndjson_with_stats<S: MempalaceWikiSink>(
 /// - `ClaimUpserted(id)` → 查 claim → `sink.scope_filter` 过滤 → `on_claim_upserted(&claim)`；
 ///   resolver 返回 `None` 时回退到 `on_claim_event(id)`，并**不**计入 count（视为悬挂事件）。
 /// - `SourceIngested(id)` → 查 source scope → scope filter 过滤 → `on_source_ingested(id)`。
+/// - `PageWritten(id)` → 查 page → scope filter 过滤 → `on_page_written(&page)`。
 /// - `ClaimSuperseded { old, new }` → 如能解析 new 的 scope，经 filter 后再 `on_claim_superseded`。
 ///
 /// 返回值为**被实际派发**（即 sink 接受）的事件数。过滤掉的事件不计入。
@@ -265,18 +273,23 @@ where
                     stats.record_dispatched(event_name);
                 }
             },
-            WikiEvent::ClaimSuperseded { old, new, .. } => {
-                let allow = match resolver.and_then(|r| r.claim_scope(new)) {
-                    Some(scope) => sink.scope_filter(&scope),
-                    None => true, // 无 resolver 或已不可解析：保持旧行为放行
-                };
-                if allow {
+            WikiEvent::ClaimSuperseded { old, new, .. } => match resolver {
+                Some(r) => match r.claim_scope(new) {
+                    Some(scope) => {
+                        if sink.scope_filter(&scope) {
+                            sink.on_claim_superseded(old, new)?;
+                            stats.record_dispatched(event_name);
+                        } else {
+                            stats.record_filtered(event_name);
+                        }
+                    }
+                    None => stats.record_unresolved(event_name),
+                },
+                None => {
                     sink.on_claim_superseded(old, new)?;
                     stats.record_dispatched(event_name);
-                } else {
-                    stats.record_filtered(event_name);
                 }
-            }
+            },
             WikiEvent::SourceIngested { source_id, .. } => {
                 let allow = match resolver.and_then(|r| r.source_scope(source_id)) {
                     Some(scope) => sink.scope_filter(&scope),
@@ -287,6 +300,19 @@ where
                     stats.record_dispatched(event_name);
                 } else {
                     stats.record_filtered(event_name);
+                }
+            }
+            WikiEvent::PageWritten { page_id, .. } => {
+                match resolver.and_then(|r| r.page(page_id)) {
+                    Some(page) => {
+                        if sink.scope_filter(&page.scope) {
+                            sink.on_page_written(&page)?;
+                            stats.record_dispatched(event_name);
+                        } else {
+                            stats.record_filtered(event_name);
+                        }
+                    }
+                    None => stats.record_unresolved(event_name),
                 }
             }
             _ => stats.record_ignored(event_name),
@@ -302,6 +328,9 @@ impl OutboxResolver for NoResolver {
         None
     }
     fn source_scope(&self, _id: SourceId) -> Option<Scope> {
+        None
+    }
+    fn page(&self, _id: PageId) -> Option<WikiPage> {
         None
     }
 }
@@ -393,6 +422,7 @@ mod tests {
     struct InMemResolver {
         claims: std::collections::HashMap<ClaimId, Claim>,
         source_scopes: std::collections::HashMap<SourceId, Scope>,
+        pages: std::collections::HashMap<wiki_core::PageId, wiki_core::WikiPage>,
     }
     impl OutboxResolver for InMemResolver {
         fn claim(&self, id: ClaimId) -> Option<Claim> {
@@ -401,11 +431,15 @@ mod tests {
         fn source_scope(&self, id: SourceId) -> Option<Scope> {
             self.source_scopes.get(&id).cloned()
         }
+        fn page(&self, id: wiki_core::PageId) -> Option<wiki_core::WikiPage> {
+            self.pages.get(&id).cloned()
+        }
     }
 
     #[derive(Default)]
     struct FullSink {
         upserted_ids: std::sync::Mutex<Vec<ClaimId>>,
+        page_ids: std::sync::Mutex<Vec<wiki_core::PageId>>,
         filter_bank: String,
     }
     impl MempalaceWikiSink for FullSink {
@@ -420,6 +454,10 @@ mod tests {
             Ok(())
         }
         fn on_source_linked(&self, _s: SourceId, _c: ClaimId) -> Result<(), MempalaceError> {
+            Ok(())
+        }
+        fn on_page_written(&self, page: &wiki_core::WikiPage) -> Result<(), MempalaceError> {
+            self.page_ids.lock().unwrap().push(page.id);
             Ok(())
         }
         fn scope_filter(&self, scope: &Scope) -> bool {
@@ -495,6 +533,81 @@ mod tests {
         assert_eq!(stats.by_event["ClaimUpserted"].seen, 2);
         assert_eq!(stats.by_event["ClaimUpserted"].dispatched, 1);
         assert_eq!(stats.by_event["ClaimUpserted"].filtered, 1);
+    }
+
+    #[test]
+    fn resolver_path_materializes_page_written_and_enforces_scope() {
+        use wiki_core::{Scope, WikiPage};
+
+        let allowed_page = WikiPage::new(
+            "Shared Page",
+            "# Shared Page\n\nbody",
+            Scope::Shared {
+                team_id: "wiki".into(),
+            },
+        );
+        let filtered_page = WikiPage::new(
+            "Other Page",
+            "# Other Page\n\nbody",
+            Scope::Shared {
+                team_id: "other".into(),
+            },
+        );
+        let allowed_id = allowed_page.id;
+        let filtered_id = filtered_page.id;
+
+        let mut resolver = InMemResolver::default();
+        resolver.pages.insert(allowed_id, allowed_page);
+        resolver.pages.insert(filtered_id, filtered_page);
+
+        let sink = FullSink {
+            filter_bank: "wiki".into(),
+            ..Default::default()
+        };
+        let lines = [
+            serde_json::to_string(&WikiEvent::PageWritten {
+                page_id: allowed_id,
+                at: time::OffsetDateTime::now_utc(),
+            })
+            .unwrap(),
+            serde_json::to_string(&WikiEvent::PageWritten {
+                page_id: filtered_id,
+                at: time::OffsetDateTime::now_utc(),
+            })
+            .unwrap(),
+        ]
+        .join("\n");
+
+        let stats =
+            consume_outbox_ndjson_with_resolver_and_stats(&sink, &resolver, &lines).unwrap();
+        assert_eq!(stats.lines_seen, 2);
+        assert_eq!(stats.dispatched, 1);
+        assert_eq!(stats.filtered, 1);
+        assert_eq!(stats.unresolved, 0);
+        assert_eq!(stats.by_event["PageWritten"].dispatched, 1);
+        assert_eq!(stats.by_event["PageWritten"].filtered, 1);
+        assert_eq!(*sink.page_ids.lock().unwrap(), vec![allowed_id]);
+    }
+
+    #[test]
+    fn unresolved_supersede_scope_is_not_dispatched() {
+        let old = ClaimId(uuid::Uuid::new_v4());
+        let new = ClaimId(uuid::Uuid::new_v4());
+        let sink = CountingSink::default();
+        let resolver = InMemResolver::default();
+        let line = serde_json::to_string(&WikiEvent::ClaimSuperseded {
+            old,
+            new,
+            at: time::OffsetDateTime::now_utc(),
+        })
+        .unwrap();
+
+        let stats = consume_outbox_ndjson_with_resolver_and_stats(&sink, &resolver, &line).unwrap();
+
+        assert_eq!(stats.dispatched, 0);
+        assert_eq!(stats.unresolved, 1);
+        assert_eq!(sink.superseded.load(Ordering::SeqCst), 0);
+        assert_eq!(stats.by_event["ClaimSuperseded"].unresolved, 1);
     }
 
     #[test]

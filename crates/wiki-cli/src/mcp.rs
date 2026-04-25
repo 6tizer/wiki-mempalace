@@ -131,7 +131,7 @@ fn tools_list() -> Value {
                 "inputSchema": {"type":"object","properties":{
                     "uri":{"type":"string","description":"Source URI"},
                     "body":{"type":"string","description":"Source text body"},
-                    "scope":{"type":"string","description":"Scope: private:<agent> or shared:<team>"},
+                    "scope":{"type":"string","description":"Scope: private:<agent> or shared:<team>. Defaults to server --viewer-scope."},
                     "tags":{"type":"array","items":{"type":"string"},"description":"Optional source tags"}
                 },"required":["uri","body"]}
             },
@@ -140,7 +140,7 @@ fn tools_list() -> Value {
                 "description": "Create a new knowledge claim with tier and scope",
                 "inputSchema": {"type":"object","properties":{
                     "text":{"type":"string","description":"Claim text"},
-                    "scope":{"type":"string","description":"Scope: private:<agent> or shared:<team>"},
+                    "scope":{"type":"string","description":"Scope: private:<agent> or shared:<team>. Defaults to server --viewer-scope."},
                     "tier":{"type":"string","description":"Memory tier: working|episodic|semantic|procedural"},
                     "tags":{"type":"array","items":{"type":"string"},"description":"Optional claim tags"}
                 },"required":["text"]}
@@ -151,7 +151,7 @@ fn tools_list() -> Value {
                 "inputSchema": {"type":"object","properties":{
                     "old_claim_id":{"type":"string","description":"UUID of the old claim"},
                     "new_text":{"type":"string","description":"New claim text"},
-                    "scope":{"type":"string","description":"Scope"},
+                    "scope":{"type":"string","description":"Scope. Defaults to server --viewer-scope."},
                     "tier":{"type":"string","description":"Memory tier"}
                 },"required":["old_claim_id","new_text"]}
             },
@@ -211,7 +211,7 @@ fn tools_list() -> Value {
                 "inputSchema": {"type":"object","properties":{
                     "uri":{"type":"string","description":"Source URI"},
                     "body":{"type":"string","description":"Source text body"},
-                    "scope":{"type":"string","description":"Scope"},
+                    "scope":{"type":"string","description":"Scope. Defaults to server --viewer-scope."},
                     "dry_run":{"type":"boolean","description":"If true, return plan without committing"}
                 },"required":["uri","body"]}
             },
@@ -333,13 +333,10 @@ fn call_tool(
                 .get("body")
                 .and_then(Value::as_str)
                 .ok_or("missing body")?;
-            let scope = args
-                .get("scope")
-                .and_then(Value::as_str)
-                .unwrap_or("private:mcp");
+            let scope = resolve_write_scope(&args, viewer);
             let tags = tags_arg_from_value(&args, "tags")?;
             let sid = eng
-                .ingest_raw_with_tags(uri.to_string(), body, parse_scope(scope), "mcp", &tags)
+                .ingest_raw_with_tags(uri.to_string(), body, scope, "mcp", &tags)
                 .map_err(|e| e.to_string())?;
             save_and_flush(eng, repo).map_err(|e| e.to_string())?;
             if vectors {
@@ -353,10 +350,7 @@ fn call_tool(
                 .get("text")
                 .and_then(Value::as_str)
                 .ok_or("missing text")?;
-            let scope = args
-                .get("scope")
-                .and_then(Value::as_str)
-                .unwrap_or("private:mcp");
+            let scope = resolve_write_scope(&args, viewer);
             let tier = args
                 .get("tier")
                 .and_then(Value::as_str)
@@ -364,7 +358,7 @@ fn call_tool(
             let tier = parse_tier(tier).map_err(|e| e.to_string())?;
             let tags = tags_arg_from_value(&args, "tags")?;
             let cid = eng
-                .file_claim_with_tags(text.to_string(), parse_scope(scope), tier, "mcp", &tags)
+                .file_claim_with_tags(text.to_string(), scope, tier, "mcp", &tags)
                 .map_err(|e| e.to_string())?;
             save_and_flush(eng, repo).map_err(|e| e.to_string())?;
             Ok(json!({"claim_id": cid.0.to_string()}))
@@ -378,10 +372,7 @@ fn call_tool(
                 .get("new_text")
                 .and_then(Value::as_str)
                 .ok_or("missing new_text")?;
-            let scope = args
-                .get("scope")
-                .and_then(Value::as_str)
-                .unwrap_or("private:mcp");
+            let scope = resolve_write_scope(&args, viewer);
             let tier = args
                 .get("tier")
                 .and_then(Value::as_str)
@@ -389,7 +380,7 @@ fn call_tool(
             let old = ClaimId(uuid::Uuid::parse_str(old_id_str).map_err(|e| e.to_string())?);
             let tier = parse_tier(tier).map_err(|e| e.to_string())?;
             let new_id = eng
-                .supersede(old, new_text.to_string(), parse_scope(scope), tier, "mcp")
+                .supersede(old, new_text.to_string(), scope, tier, "mcp")
                 .map_err(|e| e.to_string())?;
             save_and_flush(eng, repo).map_err(|e| e.to_string())?;
             Ok(json!({"new_claim_id": new_id.0.to_string()}))
@@ -628,10 +619,7 @@ fn call_tool(
                 .get("body")
                 .and_then(Value::as_str)
                 .ok_or("missing body")?;
-            let scope = args
-                .get("scope")
-                .and_then(Value::as_str)
-                .unwrap_or("private:mcp");
+            let scope = resolve_write_scope(&args, viewer);
             let dry_run = args
                 .get("dry_run")
                 .and_then(Value::as_bool)
@@ -659,12 +647,11 @@ fn call_tool(
                 return Ok(json!({"plan": serde_json::to_value(&plan).unwrap_or(Value::Null)}));
             }
             preflight_llm_plan_tags(&plan, &plan.tags, &eng.schema).map_err(|e| e.to_string())?;
-            let sc = parse_scope(scope);
             let sid = eng
                 .ingest_raw_with_tags(
                     uri.to_string(),
                     body,
-                    sc.clone(),
+                    scope.clone(),
                     "mcp",
                     plan.tags.iter().map(String::as_str),
                 )
@@ -674,7 +661,7 @@ fn call_tool(
                 let cid = eng
                     .file_claim_with_tags(
                         c.text.clone(),
-                        sc.clone(),
+                        scope.clone(),
                         tier,
                         "mcp",
                         c.tags.iter().map(String::as_str),
@@ -700,7 +687,7 @@ fn call_tool(
                 };
                 let md = plan.to_five_section_summary_body(Some(uri));
                 let status = initial_status_for(Some(&EntryType::Summary), &eng.schema.clone());
-                let page = wiki_core::WikiPage::new(title, md, sc.clone())
+                let page = wiki_core::WikiPage::new(title, md, scope.clone())
                     .with_entry_type(EntryType::Summary)
                     .with_status(status);
                 summary_page_id = Some(page.id.0.to_string());
@@ -737,6 +724,13 @@ fn tags_arg_from_value(args: &Value, key: &str) -> Result<Vec<String>, String> {
                 .ok_or_else(|| format!("{key}[{idx}] must be a string"))
         })
         .collect()
+}
+
+fn resolve_write_scope(args: &Value, viewer: &Scope) -> Scope {
+    args.get("scope")
+        .and_then(Value::as_str)
+        .map(parse_scope)
+        .unwrap_or_else(|| viewer.clone())
 }
 
 fn preflight_llm_plan_tags(
@@ -939,6 +933,100 @@ mod tests {
             .expect_err("non-string item should fail");
 
         assert_eq!(err, "tags[1] must be a string");
+    }
+
+    #[test]
+    fn mcp_write_scope_defaults_to_server_viewer_scope() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let repo = SqliteRepository::open(tmp.path().join("wiki.db")).expect("repo");
+        let schema = DomainSchema::permissive_default();
+        let mut eng = LlmWikiEngine::load_from_repo(schema, &repo, NoopWikiHook).expect("engine");
+        let viewer = Scope::Shared {
+            team_id: "wiki".into(),
+        };
+        let text = "b4 runtime default shared scope sentinel";
+
+        let claim_resp = handle_request(
+            "tools/call",
+            json!({
+                "name": "wiki_file_claim",
+                "arguments": {
+                    "text": text,
+                    "tier": "semantic"
+                }
+            }),
+            json!(1),
+            &mut eng,
+            &repo,
+            &viewer,
+            std::path::Path::new("llm-config.toml"),
+            false,
+            None,
+            None,
+        );
+        assert!(claim_resp.get("error").is_none(), "{claim_resp}");
+        let claim_id = claim_resp
+            .pointer("/result/claim_id")
+            .and_then(Value::as_str)
+            .expect("claim_id");
+        let claim_uuid = uuid::Uuid::parse_str(claim_id).expect("uuid");
+        assert_eq!(
+            eng.store.claims[&ClaimId(claim_uuid)].scope,
+            Scope::Shared {
+                team_id: "wiki".into()
+            }
+        );
+
+        let query_resp = handle_request(
+            "tools/call",
+            json!({
+                "name": "wiki_query",
+                "arguments": {
+                    "query": text,
+                    "per_stream_limit": 10
+                }
+            }),
+            json!(2),
+            &mut eng,
+            &repo,
+            &viewer,
+            std::path::Path::new("llm-config.toml"),
+            false,
+            None,
+            None,
+        );
+        assert!(query_resp.get("error").is_none(), "{query_resp}");
+        let expected_doc = format!("claim:{claim_id}");
+        let visible = query_resp
+            .pointer("/result/results")
+            .and_then(Value::as_array)
+            .expect("results")
+            .iter()
+            .any(|r| r.get("doc_id").and_then(Value::as_str) == Some(expected_doc.as_str()));
+        assert!(
+            visible,
+            "shared:wiki query should see default-scoped write: {query_resp}"
+        );
+    }
+
+    #[test]
+    fn mcp_explicit_scope_overrides_server_viewer_scope() {
+        let viewer = Scope::Shared {
+            team_id: "wiki".into(),
+        };
+
+        assert_eq!(
+            resolve_write_scope(&json!({}), &viewer),
+            Scope::Shared {
+                team_id: "wiki".into()
+            }
+        );
+        assert_eq!(
+            resolve_write_scope(&json!({"scope": "private:mcp"}), &viewer),
+            Scope::Private {
+                agent_id: "mcp".into()
+            }
+        );
     }
 
     #[test]
