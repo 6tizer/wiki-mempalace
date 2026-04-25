@@ -23,6 +23,8 @@
 - spec 和代码冲突时，先修 spec，再修代码。PRD 范围变化必须让用户决定。
 - subagent 任务要有 owner files，避免并行写同一文件。
 - 每个模块完成后写 handoff，比把完整对话历史带到下一轮更稳。
+- Agent-facing CLI 默认值不要依赖 cwd；只要语义属于 vault 输出，相对路径应在
+  `--wiki-dir` 存在时解析为 vault-relative，并用测试固定。
 
 ## 2026-04-25 / PR #16 M12 Strategy Suggestions
 

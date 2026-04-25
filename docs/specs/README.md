@@ -19,3 +19,4 @@
 - [m12-strategy/](m12-strategy/) — M12 strategy suggestions. Merged PR #16。
 - [schema-t2-tags/](schema-t2-tags/) — Schema T2 tag governance. Merged PR #13。
 - [longmemeval-auto/](longmemeval-auto/) — J13 LongMemEval `rust-mempalace` local retrieval baseline artifacts. Merged PR #19。
+- [vault-report-paths/](vault-report-paths/) — Vault-relative report output paths for dashboard, suggest, metrics, and automation health. Active branch `codex/vault-report-paths`。

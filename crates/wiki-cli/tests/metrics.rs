@@ -87,6 +87,35 @@ fn metrics_report_writes_markdown_file() {
 }
 
 #[test]
+fn metrics_relative_report_uses_wiki_dir() {
+    let db = tempfile::NamedTempFile::new().unwrap();
+    let db_path = db.path().to_owned();
+    let temp_dir = tempfile::tempdir().unwrap();
+    let wiki_dir = temp_dir.path().join("vault");
+    let report_path = wiki_dir.join("reports").join("metrics.md");
+
+    wiki_cli()
+        .current_dir(temp_dir.path())
+        .arg("--db")
+        .arg(&db_path)
+        .arg("--wiki-dir")
+        .arg(&wiki_dir)
+        .arg("metrics")
+        .arg("--report")
+        .arg("reports/metrics.md")
+        .assert()
+        .success()
+        .stdout(contains(format!("report_file={}", report_path.display())));
+
+    let markdown = std::fs::read_to_string(&report_path).unwrap();
+    assert!(markdown.contains("# Wiki Metrics Report"));
+    assert!(
+        !temp_dir.path().join("reports/metrics.md").exists(),
+        "relative metrics report must be vault-relative when --wiki-dir is set"
+    );
+}
+
+#[test]
 fn metrics_respects_viewer_scope_for_content_counts() {
     let db = tempfile::NamedTempFile::new().unwrap();
     let db_path = db.path().to_owned();

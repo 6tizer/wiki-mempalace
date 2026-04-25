@@ -482,6 +482,44 @@ fn automation_health_red_on_stale_heartbeat_and_writes_summary() {
 }
 
 #[test]
+fn automation_health_relative_summary_file_uses_wiki_dir() {
+    let db = tempfile::NamedTempFile::new().unwrap();
+    let db_path = db.path().to_owned();
+    let _repo = SqliteRepository::open(&db_path).unwrap();
+    let temp_dir = tempfile::tempdir().unwrap();
+    let wiki_dir = temp_dir.path().join("vault");
+    let summary_path = wiki_dir.join("reports").join("automation-health.txt");
+
+    wiki_cli()
+        .current_dir(temp_dir.path())
+        .arg("--db")
+        .arg(&db_path)
+        .arg("--wiki-dir")
+        .arg(&wiki_dir)
+        .arg("automation")
+        .arg("health")
+        .arg("--summary-file")
+        .arg("reports/automation-health.txt")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("automation health: status=green"))
+        .stdout(predicate::str::contains(format!(
+            "summary_file={}",
+            summary_path.display()
+        )));
+
+    let summary_body = std::fs::read_to_string(&summary_path).unwrap();
+    assert!(summary_body.contains("automation health: status=green"));
+    assert!(
+        !temp_dir
+            .path()
+            .join("reports/automation-health.txt")
+            .exists(),
+        "relative automation health summary must be vault-relative when --wiki-dir is set"
+    );
+}
+
+#[test]
 fn automation_health_red_on_consecutive_failures() {
     let db = tempfile::NamedTempFile::new().unwrap();
     let db_path = db.path().to_owned();

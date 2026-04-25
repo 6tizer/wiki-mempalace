@@ -34,6 +34,10 @@ mod llm;
 mod mcp;
 
 const DEFAULT_MEMPALACE_CONSUMER_TAG: &str = "mempalace";
+const DEFAULT_DASHBOARD_OUTPUT: &str = "wiki/reports/dashboard.html";
+const VAULT_DASHBOARD_OUTPUT: &str = "reports/dashboard.html";
+const DEFAULT_SUGGEST_REPORT_DIR: &str = "wiki/reports/suggestions";
+const VAULT_SUGGEST_REPORT_DIR: &str = "reports/suggestions";
 
 #[derive(Parser)]
 #[command(name = "wiki")]
@@ -243,8 +247,8 @@ enum Cmd {
     /// Generate a read-only static operations dashboard.
     Dashboard {
         /// HTML output path.
-        #[arg(long, default_value = "wiki/reports/dashboard.html")]
-        output: PathBuf,
+        #[arg(long)]
+        output: Option<PathBuf>,
         /// Consumer tag used for outbox ack / lag metrics.
         #[arg(long, default_value = DEFAULT_MEMPALACE_CONSUMER_TAG)]
         consumer_tag: String,
@@ -264,12 +268,8 @@ enum Cmd {
         #[arg(long, default_value_t = false)]
         json: bool,
         /// Also write timestamped JSON + Markdown reports to this directory.
-        #[arg(
-            long,
-            num_args = 0..=1,
-            default_missing_value = "wiki/reports/suggestions"
-        )]
-        report_dir: Option<PathBuf>,
+        #[arg(long, num_args = 0..=1)]
+        report_dir: Option<Option<PathBuf>>,
     },
     LlmSmoke {
         #[arg(long, default_value = "llm-config.toml")]
@@ -589,6 +589,39 @@ fn entry_type_name(entry_type: &EntryType) -> &'static str {
         EntryType::LintReport => "lint_report",
         EntryType::Index => "index",
     }
+}
+
+fn resolve_wiki_relative_path(wiki_root: Option<&Path>, path: PathBuf) -> PathBuf {
+    if path.is_absolute() {
+        path
+    } else if let Some(root) = wiki_root {
+        root.join(path)
+    } else {
+        path
+    }
+}
+
+fn default_dashboard_output(wiki_root: Option<&Path>) -> PathBuf {
+    if let Some(root) = wiki_root {
+        root.join(VAULT_DASHBOARD_OUTPUT)
+    } else {
+        PathBuf::from(DEFAULT_DASHBOARD_OUTPUT)
+    }
+}
+
+fn default_suggest_report_dir(wiki_root: Option<&Path>) -> PathBuf {
+    if let Some(root) = wiki_root {
+        root.join(VAULT_SUGGEST_REPORT_DIR)
+    } else {
+        PathBuf::from(DEFAULT_SUGGEST_REPORT_DIR)
+    }
+}
+
+fn ensure_parent_dir(path: &Path) -> std::io::Result<()> {
+    if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
+        std::fs::create_dir_all(parent)?;
+    }
+    Ok(())
 }
 
 fn render_metrics_text(report: &WikiMetricsReport) -> String {
@@ -2080,9 +2113,8 @@ fn run_with_engine(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                 OffsetDateTime::now_utc(),
             );
             if let Some(path) = report {
-                if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
-                    std::fs::create_dir_all(parent)?;
-                }
+                let path = resolve_wiki_relative_path(wiki_root.as_deref(), path);
+                ensure_parent_dir(&path)?;
                 std::fs::write(&path, render_metrics_markdown(&metrics))?;
                 if json {
                     println!("{}", serde_json::to_string_pretty(&metrics)?);
@@ -2120,9 +2152,10 @@ fn run_with_engine(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                 now,
             )?;
             let html = dashboard::render_dashboard_html(&health, &metrics, &consumer_tag);
-            if let Some(parent) = output.parent().filter(|p| !p.as_os_str().is_empty()) {
-                std::fs::create_dir_all(parent)?;
-            }
+            let output = output
+                .map(|path| resolve_wiki_relative_path(wiki_root.as_deref(), path))
+                .unwrap_or_else(|| default_dashboard_output(wiki_root.as_deref()));
+            ensure_parent_dir(&output)?;
             std::fs::write(&output, html)?;
             println!("dashboard_file={}", output.display());
         }
@@ -2158,6 +2191,12 @@ fn run_with_engine(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                     report_id,
                 },
             );
+
+            let report_dir = match report_dir {
+                Some(Some(dir)) => Some(resolve_wiki_relative_path(wiki_root.as_deref(), dir)),
+                Some(None) => Some(default_suggest_report_dir(wiki_root.as_deref())),
+                None => None,
+            };
 
             if let Some(dir) = report_dir {
                 std::fs::create_dir_all(&dir)?;
@@ -2304,6 +2343,8 @@ fn run_with_engine(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             let rendered = render_automation_health_report(&report, &consumer_tag);
             print!("{rendered}");
             if let Some(path) = summary_file {
+                let path = resolve_wiki_relative_path(wiki_root.as_deref(), path);
+                ensure_parent_dir(&path)?;
                 std::fs::write(&path, &rendered)?;
                 println!("summary_file={}", path.display());
             }

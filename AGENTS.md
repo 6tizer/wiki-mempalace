@@ -6,6 +6,9 @@
 > [docs/vault-standards.md](docs/vault-standards.md)（目录、命名、frontmatter、正文骨架）。
 > 引擎 `write_projection` 只维护 `pages/{entry_type}/`、`index.md`、`log.md`；
 > **不要**往 `sources/` 根或 `concepts/` 根写入文件。
+> 报告类输出（dashboard / suggest / metrics / automation health）在传入
+> `--wiki-dir` 时，相对输出路径按 vault 相对路径解析，默认写入
+> `<wiki-dir>/reports/`。
 
 ## 开发流程约束
 
