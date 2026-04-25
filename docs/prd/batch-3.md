@@ -31,7 +31,7 @@ Out:
 | J10 Dashboard | Static read-only dashboard/report | `wiki-cli`, docs | Merged PR #14 |
 | J11 Strategy Suggestions | Explainable suggestions, no auto execution | `wiki-core`, `wiki-kernel`, `wiki-cli` | Merged PR #16 |
 | J12 Tag Governance | Tags model + schema policy consumption | `wiki-core`, `wiki-kernel`, `wiki-cli` | Merged PR #13 |
-| J13 LongMemEval Auto Benchmark | Scheduled `rust-mempalace` local retrieval baseline artifacts | `.github/workflows`, `scripts`, docs | Planned |
+| J13 LongMemEval Auto Benchmark | Scheduled `rust-mempalace` local retrieval baseline artifacts | `.github/workflows`, `scripts`, docs | Merged PR #19 |
 
 ## Acceptance
 
@@ -63,11 +63,11 @@ Out:
 
 - [x] PRD approved
 - [x] Specs created
-- [ ] Modules implemented
-- [ ] CI green
-- [ ] Merged
-- [x] Roadmap updated for completed M10/M11/M12/J12 status
+- [x] Modules implemented
+- [x] CI green
+- [x] Merged
+- [x] Roadmap updated for completed M10/M11/M12/J12/J13 status
 
-Batch-3 is partially complete: M10, M11, M12, and Schema T2 are merged. J13
-LongMemEval Auto Benchmark remains planned, so the overall PRD is not fully
-implemented, green, or merged yet.
+Batch-3 P2 maturity is complete: M10, M11, M12, Schema T2, and J13 are merged.
+J14 Semantic Fusion Benchmark remains a future follow-up and is not part of
+Batch-3 acceptance.
