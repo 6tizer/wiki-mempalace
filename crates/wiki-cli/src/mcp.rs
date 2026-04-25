@@ -490,7 +490,7 @@ fn call_tool(
                 )
                 .map_err(|e| e.to_string())?;
             // crystallize 内部已经 insert page，此处覆盖 entry_type 和 status
-            let status = initial_status_for(entry_type.as_ref(), &eng.schema.clone());
+            let status = initial_status_for(entry_type.as_ref(), &eng.schema);
             if let Some(page) = eng.store.pages.get_mut(&draft.page.id) {
                 if let Some(et) = entry_type {
                     page.entry_type = Some(et);
@@ -593,8 +593,15 @@ fn call_tool(
         }
         "wiki_export_graph_dot" => {
             let mut dot = String::from("digraph wiki {\n  rankdir=LR;\n");
-            for e in eng.store.entities.values() {
-                if wiki_core::document_visible_to_viewer(&e.scope, viewer) {
+            let visible_entity_ids: std::collections::HashSet<_> = eng
+                .store
+                .entities
+                .values()
+                .filter(|e| wiki_core::document_visible_to_viewer(&e.scope, viewer))
+                .map(|e| e.id)
+                .collect();
+            for id in &visible_entity_ids {
+                if let Some(e) = eng.store.entities.get(id) {
                     dot.push_str(&format!(
                         "  \"{}\" [label=\"{} ({:?})\"];\n",
                         e.id.0, e.label, e.kind
@@ -602,10 +609,14 @@ fn call_tool(
                 }
             }
             for edge in &eng.store.edges {
-                dot.push_str(&format!(
-                    "  \"{}\" -> \"{}\" [label=\"{:?}\"];\n",
-                    edge.from.0, edge.to.0, edge.relation
-                ));
+                if visible_entity_ids.contains(&edge.from)
+                    && visible_entity_ids.contains(&edge.to)
+                {
+                    dot.push_str(&format!(
+                        "  \"{}\" -> \"{}\" [label=\"{:?}\"];\n",
+                        edge.from.0, edge.to.0, edge.relation
+                    ));
+                }
             }
             dot.push_str("}\n");
             Ok(json!({"dot": dot}))
@@ -669,10 +680,12 @@ fn call_tool(
                     .map_err(|e| e.to_string())?;
                 eng.attach_sources(cid, &[sid]).map_err(|e| e.to_string())?;
                 if vectors {
-                    // 对齐 CLI 的向量写入行为（best-effort）
+                    // Best-effort vector write; log errors instead of silently swallowing.
                     if let Ok(app) = crate::llm::load_app_config(llm_config_path) {
                         if let Ok(v) = crate::llm::embed_first(&app, &c.text) {
-                            let _ = repo.upsert_embedding(&format!("claim:{}", cid.0), &v);
+                            if let Err(e) = repo.upsert_embedding(&format!("claim:{}", cid.0), &v) {
+                                eprintln!("warning: embedding upsert failed for claim {}: {e}", cid.0);
+                            }
                         }
                     }
                 }
@@ -686,7 +699,7 @@ fn call_tool(
                     plan.summary_title.trim().to_string()
                 };
                 let md = plan.to_five_section_summary_body(Some(uri));
-                let status = initial_status_for(Some(&EntryType::Summary), &eng.schema.clone());
+                let status = initial_status_for(Some(&EntryType::Summary), &eng.schema);
                 let page = wiki_core::WikiPage::new(title, md, scope.clone())
                     .with_entry_type(EntryType::Summary)
                     .with_status(status);

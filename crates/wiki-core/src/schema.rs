@@ -42,6 +42,13 @@ pub enum SchemaValidationError {
     ParseEntryType(String),
     #[error("未知 EntryStatus 字面量：{0:?}")]
     ParseEntryStatus(String),
+    #[error("initial_status {0:?} 不在 promotion 图的任何节点中")]
+    UnreachableInitialStatus(EntryStatus),
+    #[error("schema 字段 {field} 值超出有效范围 {range}")]
+    OutOfRange {
+        field: String,
+        range: String,
+    },
 }
 
 /// 条目类型：允许一条规则同时作用于多种类型（如 concept + entity 共享同一生命周期）。
@@ -332,7 +339,9 @@ impl DomainSchema {
     ///
     /// 1. 任一 `EntryType` 最多出现在一条 `LifecycleRule.entry_types` 中；
     /// 2. 任一 `PromotionRule` 的 `from_status != to_status`（禁止自环）；
-    /// 3. 每条规则的 promotions 形成的有向图无环（DFS 检测）。
+    /// 3. 每条规则的 promotions 形成的有向图无环（DFS 检测）；
+    /// 4. `initial_status` 是 promotion 图中的可达起始节点（有出边或终端）；
+    /// 5. 数值范围约束（quality/confidence ∈ (0,1]，batch_size ≥ 1，half-life > 0）。
     pub fn validate(&self) -> Result<(), SchemaValidationError> {
         // --- 规则 1：EntryType 唯一性 ---
         let mut seen: HashSet<&EntryType> = HashSet::new();
@@ -346,7 +355,6 @@ impl DomainSchema {
 
         // --- 规则 2 & 3：逐条 rule 检查 promotion 图 ---
         for rule in &self.lifecycle_rules {
-            // 收集状态节点与有向边
             let mut adj: HashMap<EntryStatus, Vec<EntryStatus>> = HashMap::new();
             for p in &rule.promotions {
                 if p.from_status == p.to_status {
@@ -356,6 +364,48 @@ impl DomainSchema {
             }
             if has_cycle(&adj) {
                 return Err(SchemaValidationError::PromotionCycle);
+            }
+
+            // --- 规则 4：initial_status 应出现在 promotion 图中或有出边 ---
+            if !rule.promotions.is_empty() {
+                let mut all_nodes: HashSet<EntryStatus> = HashSet::new();
+                for p in &rule.promotions {
+                    all_nodes.insert(p.from_status);
+                    all_nodes.insert(p.to_status);
+                }
+                if !all_nodes.contains(&rule.initial_status) {
+                    return Err(SchemaValidationError::UnreachableInitialStatus(
+                        rule.initial_status,
+                    ));
+                }
+            }
+        }
+
+        // --- 规则 5：数值范围 ---
+        if !(0.0 < self.min_quality_to_crystallize && self.min_quality_to_crystallize <= 1.0) {
+            return Err(SchemaValidationError::OutOfRange {
+                field: "min_quality_to_crystallize".into(),
+                range: "(0, 1]".into(),
+            });
+        }
+        if !(0.0 < self.min_confidence_to_promote && self.min_confidence_to_promote <= 1.0) {
+            return Err(SchemaValidationError::OutOfRange {
+                field: "min_confidence_to_promote".into(),
+                range: "(0, 1]".into(),
+            });
+        }
+        if self.maintenance_batch_size == 0 {
+            return Err(SchemaValidationError::OutOfRange {
+                field: "maintenance_batch_size".into(),
+                range: ">= 1".into(),
+            });
+        }
+        for (tier, hl) in &self.tier_half_life_days {
+            if *hl <= 0.0 {
+                return Err(SchemaValidationError::OutOfRange {
+                    field: format!("tier_half_life_days.{tier:?}"),
+                    range: "> 0".into(),
+                });
             }
         }
 
@@ -545,6 +595,53 @@ mod tests {
             ],
         )];
         assert!(schema.validate().is_ok());
+    }
+
+    #[test]
+    fn validate_rejects_unreachable_initial_status() {
+        let mut schema = DomainSchema::permissive_default();
+        let mut rule = make_rule(
+            vec![EntryType::Concept],
+            vec![(EntryStatus::Draft, EntryStatus::Approved)],
+        );
+        rule.initial_status = EntryStatus::NeedsUpdate;
+        schema.lifecycle_rules = vec![rule];
+        assert!(matches!(
+            schema.validate(),
+            Err(SchemaValidationError::UnreachableInitialStatus(
+                EntryStatus::NeedsUpdate
+            ))
+        ));
+    }
+
+    #[test]
+    fn validate_rejects_out_of_range_quality() {
+        let mut schema = DomainSchema::permissive_default();
+        schema.min_quality_to_crystallize = 1.5;
+        assert!(matches!(
+            schema.validate(),
+            Err(SchemaValidationError::OutOfRange { field, .. }) if field == "min_quality_to_crystallize"
+        ));
+    }
+
+    #[test]
+    fn validate_rejects_zero_batch_size() {
+        let mut schema = DomainSchema::permissive_default();
+        schema.maintenance_batch_size = 0;
+        assert!(matches!(
+            schema.validate(),
+            Err(SchemaValidationError::OutOfRange { field, .. }) if field == "maintenance_batch_size"
+        ));
+    }
+
+    #[test]
+    fn validate_rejects_negative_half_life() {
+        let mut schema = DomainSchema::permissive_default();
+        schema.tier_half_life_days.insert(MemoryTier::Working, -1.0);
+        assert!(matches!(
+            schema.validate(),
+            Err(SchemaValidationError::OutOfRange { .. })
+        ));
     }
 
     #[test]

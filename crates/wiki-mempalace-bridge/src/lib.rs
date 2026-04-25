@@ -262,9 +262,8 @@ where
                         }
                     }
                     None => {
-                        // 悬挂事件：claim 已被 GC 或 snapshot 落后；保持旧行为调用 on_claim_event
-                        // 但不 count，避免 "consumed=N" 统计失真。
-                        sink.on_claim_event(claim_id)?;
+                        // 悬挂事件：claim 已被 GC 或 snapshot 落后。
+                        // 不调用 sink（与 ClaimSuperseded 行为一致），避免向 palace 注入无法解析的 claim。
                         stats.record_unresolved(event_name);
                     }
                 },
@@ -291,8 +290,11 @@ where
                 }
             },
             WikiEvent::SourceIngested { source_id, .. } => {
-                let allow = match resolver.and_then(|r| r.source_scope(source_id)) {
-                    Some(scope) => sink.scope_filter(&scope),
+                let allow = match resolver {
+                    Some(r) => match r.source_scope(source_id) {
+                        Some(scope) => sink.scope_filter(&scope),
+                        None => false,
+                    },
                     None => true,
                 };
                 if allow {
@@ -665,7 +667,7 @@ mod tests {
         assert_eq!(stats.dispatched, 0);
         assert_eq!(stats.unresolved, 1);
         assert_eq!(stats.ignored, 2);
-        assert_eq!(sink.upserted.load(Ordering::SeqCst), 1);
+        assert_eq!(sink.upserted.load(Ordering::SeqCst), 0);
         assert_eq!(stats.by_event["ClaimUpserted"].unresolved, 1);
         assert_eq!(stats.by_event["QueryServed"].ignored, 1);
         assert_eq!(stats.by_event["LintRunFinished"].ignored, 1);
