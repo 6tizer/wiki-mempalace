@@ -2,8 +2,8 @@
 
 ## Checklist
 
-- [ ] Requirements approved
-- [ ] Design approved
+- [x] Requirements approved
+- [x] Design approved
 - [x] Plan approved
 - [x] Branch created
 - [x] Subagent tasks assigned
@@ -13,10 +13,10 @@
 - [x] Docs updated
 - [x] Integration review complete
 - [x] PR opened
-- [ ] Codex/GitHub review addressed
+- [x] Codex/GitHub review addressed
 - [x] CI green
-- [ ] Merged
-- [ ] Roadmap/PRD updated
+- [x] Merged
+- [x] Roadmap/PRD updated
 
 ## Subtasks
 
@@ -31,7 +31,7 @@
 - J10 / M11 Dashboard is implemented on `codex/m11-dashboard`.
 - Focused tests passing: `cargo test -p wiki-cli dashboard`, `cargo test -p wiki-cli --test dashboard`, `cargo fmt --check -p wiki-cli`.
 - Integration gate passing: `cargo fmt --all -- --check`, `cargo test --workspace`, `cargo clippy --workspace --all-targets -- -D warnings`.
-- Draft PR #14 is open and CI quick is green. Merge is still pending.
+- PR #14 is merged into main.
 
 ## Verification
 

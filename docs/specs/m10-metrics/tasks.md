@@ -15,7 +15,7 @@
 - [x] PR opened
 - [x] Codex/GitHub review addressed
 - [x] CI green
-- [ ] Merged
+- [x] Merged
 - [x] Roadmap/PRD updated
 
 ## Subtasks
@@ -31,8 +31,8 @@
 
 - 2026-04-24: M10 实现进入 In Review。已看到 `wiki-cli metrics`、`--json`、`--report <PATH>`、`--consumer-tag`、`--low-coverage-threshold`，以及 core/kernel/cli metrics 测试补强。
 - 2026-04-24: Integration review 完成；P1 为新增文件未跟踪，随提交纳入分支解决。补充 CLI no-side-effect / custom consumer backlog 测试。
-- 2026-04-24: Draft PR #12 已打开，GitHub `quick` CI 初次通过。
-- Merge 尚未完成。
+- 2026-04-24: PR #12 已打开，GitHub `quick` CI 初次通过，随后合入 main。
+- 2026-04-24: PR #12 已合入 main。
 
 ## Verification
 
