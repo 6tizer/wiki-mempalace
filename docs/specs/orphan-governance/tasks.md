@@ -17,7 +17,7 @@
 - [x] Integration review complete
 - [x] PR opened
 - [ ] Codex/GitHub review addressed
-- [ ] CI green
+- [x] CI green
 - [ ] Merged
 - [ ] Roadmap/PRD updated
 
@@ -32,6 +32,7 @@
 | Focused review | Agent | Review subagent | spec + touched code | Implementation | Done |
 | Status backfill | Script | Main | `docs/specs/orphan-governance/tasks.md`, `docs/specs/README.md`, `docs/roadmap.md`, `docs/LESSONS.md` | Review | Done |
 | Draft PR | Skill | Main | GitHub PR #28 | Gate pass | Done |
+| GitHub CI quick | Skill | Main | PR #28 `quick` check | Draft PR | Done |
 
 ## Review Notes
 
