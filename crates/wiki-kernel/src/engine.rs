@@ -768,10 +768,9 @@ impl<H: WikiHook> LlmWikiEngine<H> {
     ) -> Result<usize, EngineError> {
         let mut n = 0usize;
         let size = batch_size.max(1);
-        let mut start = 0usize;
-        while start < self.outbox.len() {
-            let end = usize::min(start + size, self.outbox.len());
-            for event in &self.outbox[start..end] {
+        while n < self.outbox.len() {
+            let end = usize::min(n + size, self.outbox.len());
+            for event in &self.outbox[n..end] {
                 let mut last_err: Option<EngineError> = None;
                 for _ in 0..=retry_count {
                     match repo.append_outbox(event) {
@@ -785,11 +784,12 @@ impl<H: WikiHook> LlmWikiEngine<H> {
                     }
                 }
                 if let Some(err) = last_err {
+                    // Trim successfully flushed events so a retry won't re-append them.
+                    self.outbox.drain(..n);
                     return Err(err);
                 }
-                n += 1;
             }
-            start = end;
+            n = end;
         }
         self.outbox.clear();
         Ok(n)
@@ -975,11 +975,7 @@ fn rank_fused_with_retention(
             (d.id.clone(), d.rrf_score * bonus)
         })
         .collect();
-    out.sort_by(|a, b| {
-        b.1.partial_cmp(&a.1)
-            .unwrap_or(std::cmp::Ordering::Equal)
-            .then_with(|| a.0.cmp(&b.0))
-    });
+    out.sort_by(|a, b| a.1.total_cmp(&b.1).reverse().then_with(|| a.0.cmp(&b.0)));
     out
 }
 

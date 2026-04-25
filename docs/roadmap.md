@@ -29,6 +29,7 @@
 3. 观察 J13 scheduled artifacts：先积累至少 7 份 nightly report 和 1 份 weekly full report，确认 artifact 稳定和 full run 真实耗时。
 4. J14 Semantic Fusion Benchmark：只有在 J13 报告显示同义表达/词面不匹配是主要错因，且运行预算明确后，再评估 `wiki-cli --vectors --palace-db` 语义融合 lane。
 5. M12 后续 operator/executor、dashboard latest suggestion report、QueryServed scope/hash schema 改进单独规划，不混入首版 suggest。
+6. **C16 存储/向量续作**（PRD: [storage-embeddings-followup](prd/storage-embeddings-followup.md)）：(a) [persist-snapshot-outbox](specs/persist-snapshot-outbox/) — 快照与 outbox 同一事务落库；(b) [embedding-ann-index](specs/embedding-ann-index/) — 大规模语料下 `wiki_embedding` 的 ANN/扩展路径与回退。实现前需用户确认 `WikiRepository` / `SqliteRepository` API 与扩展分发策略。
 
 执行计划见 [automation-issue-batch-3.md](automation-issue-batch-3.md)。开发流程见
 [dev-workflow.md](dev-workflow.md)，batch-3 PRD 见 [prd/batch-3.md](prd/batch-3.md)。

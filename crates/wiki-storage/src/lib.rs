@@ -300,7 +300,7 @@ CREATE INDEX IF NOT EXISTS wiki_automation_run_job_status_id_idx
             Err(e) => return Err(StorageError::Db(e)),
         };
         let backlog_events = match acked_up_to_id {
-            Some(id) => (stats.head_id - id).max(0),
+            Some(id) => stats.head_id.saturating_sub(id),
             None => stats.head_id,
         };
         Ok(OutboxConsumerProgress {
@@ -355,9 +355,19 @@ CREATE INDEX IF NOT EXISTS wiki_automation_run_job_status_id_idx
             let dim: i32 = r.get(1)?;
             let blob: Vec<u8> = r.get(2)?;
             let Some(v) = try_blob_to_f32(&blob, dim as usize) else {
+                eprintln!(
+                    "warning: wiki_embedding row doc_id={doc_id} blob length mismatch (expected {} bytes, got {})",
+                    dim as usize * 4,
+                    blob.len()
+                );
                 continue;
             };
             if v.len() != query.len() {
+                eprintln!(
+                    "warning: wiki_embedding row doc_id={doc_id} dim mismatch (expected {}, got {})",
+                    query.len(),
+                    v.len()
+                );
                 continue;
             }
             let vn = l2_norm(&v);
@@ -366,13 +376,12 @@ CREATE INDEX IF NOT EXISTS wiki_automation_run_job_status_id_idx
             }
             let dot: f32 = query.iter().zip(v.iter()).map(|(a, b)| a * b).sum();
             let c = dot / (qn * vn);
+            if c.is_nan() {
+                continue;
+            }
             scored.push((doc_id, c));
         }
-        scored.sort_by(|a, b| {
-            b.1.partial_cmp(&a.1)
-                .unwrap_or(std::cmp::Ordering::Equal)
-                .then_with(|| a.0.cmp(&b.0))
-        });
+        scored.sort_by(|a, b| a.1.total_cmp(&b.1).reverse().then_with(|| a.0.cmp(&b.0)));
         scored.truncate(limit);
         Ok(scored)
     }
@@ -525,6 +534,52 @@ CREATE INDEX IF NOT EXISTS wiki_automation_run_job_status_id_idx
             Err(e) => Err(StorageError::Db(e)),
         }
     }
+
+    fn mark_outbox_processed_inner(
+        &self,
+        up_to_id: i64,
+        consumer_tag: &str,
+    ) -> Result<usize, StorageError> {
+        let previous_ack = self
+            .conn
+            .query_row(
+                "SELECT acked_up_to_id
+                 FROM wiki_outbox_consumer_progress
+                 WHERE consumer_tag = ?1",
+                params![consumer_tag],
+                |row| row.get::<_, i64>(0),
+            )
+            .optional()?
+            .unwrap_or(0);
+        if up_to_id <= previous_ack {
+            return Ok(0);
+        }
+
+        let newly_acked: i64 = self.conn.query_row(
+            "SELECT COUNT(*)
+             FROM wiki_outbox
+             WHERE id > ?1 AND id <= ?2 AND processed_at IS NULL",
+            params![previous_ack, up_to_id],
+            |row| row.get(0),
+        )?;
+
+        self.conn.execute(
+            "INSERT INTO wiki_outbox_consumer_progress(consumer_tag, acked_up_to_id, acked_at)
+             VALUES(?1, ?2, datetime('now'))
+             ON CONFLICT(consumer_tag) DO UPDATE SET
+               acked_up_to_id = excluded.acked_up_to_id,
+               acked_at = excluded.acked_at",
+            params![consumer_tag, up_to_id],
+        )?;
+
+        self.conn.execute(
+            "UPDATE wiki_outbox
+             SET processed_at = datetime('now'), consumer_tag = ?2
+             WHERE id <= ?1 AND processed_at IS NULL",
+            params![up_to_id, consumer_tag],
+        )?;
+        Ok(newly_acked as usize)
+    }
 }
 
 fn try_blob_to_f32(blob: &[u8], expected_len: usize) -> Option<Vec<f32>> {
@@ -661,45 +716,15 @@ impl WikiRepository for SqliteRepository {
         up_to_id: i64,
         consumer_tag: &str,
     ) -> Result<usize, StorageError> {
-        let previous_ack = self
-            .conn
-            .query_row(
-                "SELECT acked_up_to_id
-                 FROM wiki_outbox_consumer_progress
-                 WHERE consumer_tag = ?1",
-                params![consumer_tag],
-                |row| row.get::<_, i64>(0),
-            )
-            .optional()?
-            .unwrap_or(0);
-        if up_to_id <= previous_ack {
-            return Ok(0);
+        self.conn.execute_batch("BEGIN IMMEDIATE")?;
+        let result = self.mark_outbox_processed_inner(up_to_id, consumer_tag);
+        match result {
+            Ok(_) => self.conn.execute_batch("COMMIT")?,
+            Err(_) => {
+                let _ = self.conn.execute_batch("ROLLBACK");
+            }
         }
-
-        let newly_acked: i64 = self.conn.query_row(
-            "SELECT COUNT(*)
-             FROM wiki_outbox
-             WHERE id > ?1 AND id <= ?2",
-            params![previous_ack, up_to_id],
-            |row| row.get(0),
-        )?;
-
-        self.conn.execute(
-            "INSERT INTO wiki_outbox_consumer_progress(consumer_tag, acked_up_to_id, acked_at)
-             VALUES(?1, ?2, datetime('now'))
-             ON CONFLICT(consumer_tag) DO UPDATE SET
-               acked_up_to_id = excluded.acked_up_to_id,
-               acked_at = excluded.acked_at",
-            params![consumer_tag, up_to_id],
-        )?;
-
-        self.conn.execute(
-            "UPDATE wiki_outbox
-             SET processed_at = datetime('now'), consumer_tag = ?2
-             WHERE id <= ?1 AND processed_at IS NULL",
-            params![up_to_id, consumer_tag],
-        )?;
-        Ok(newly_acked as usize)
+        result
     }
 }
 
@@ -919,7 +944,7 @@ mod tests {
         }
 
         assert_eq!(repo.mark_outbox_processed(2, "mempalace").unwrap(), 2);
-        assert_eq!(repo.mark_outbox_processed(3, "archive").unwrap(), 3);
+        assert_eq!(repo.mark_outbox_processed(3, "archive").unwrap(), 1);
 
         let mempalace = repo.get_outbox_consumer_progress("mempalace").unwrap();
         let archive = repo.get_outbox_consumer_progress("archive").unwrap();
@@ -928,7 +953,7 @@ mod tests {
         assert_eq!(archive.acked_up_to_id, Some(3));
         assert_eq!(archive.backlog_events, 1);
 
-        assert_eq!(repo.mark_outbox_processed(4, "mempalace").unwrap(), 2);
+        assert_eq!(repo.mark_outbox_processed(4, "mempalace").unwrap(), 1);
         assert_eq!(repo.mark_outbox_processed(3, "archive").unwrap(), 0);
 
         let mempalace = repo.get_outbox_consumer_progress("mempalace").unwrap();
