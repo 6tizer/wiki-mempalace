@@ -1,0 +1,60 @@
+[
+  {
+    "question_id": "q1",
+    "question_type": "single-session-user",
+    "question": "Project Atlas Postgres consistency",
+    "haystack_session_ids": ["s1", "s2"],
+    "haystack_dates": ["2024-01-01", "2024-01-02"],
+    "haystack_sessions": [
+      [
+        {"role": "user", "content": "Project Atlas chose Postgres for strong consistency."},
+        {"role": "assistant", "content": "Remember Atlas database choice."}
+      ],
+      [
+        {"role": "user", "content": "Project Boreal picked SQLite for a local prototype."}
+      ]
+    ],
+    "answer_session_ids": ["s1"]
+  },
+  {
+    "question_id": "q2",
+    "question_type": "single-session-assistant",
+    "question": "amber token refresh incident outage",
+    "haystack_session_ids": ["s3", "s4"],
+    "haystack_dates": ["2024-02-01", "2024-02-02"],
+    "haystack_sessions": [
+      [
+        {"role": "user", "content": "The amber token refresh incident caused a short outage."}
+      ],
+      [
+        {"role": "assistant", "content": "Blue deployment notes only mention logging cleanup."}
+      ]
+    ],
+    "answer_session_ids": ["s3"]
+  },
+  {
+    "question_id": "q3",
+    "question_type": "single-session-user",
+    "question": "missing nebula launch memo",
+    "haystack_session_ids": ["s5", "s6"],
+    "haystack_dates": ["2024-03-01", "2024-03-02"],
+    "haystack_sessions": [
+      [
+        {"role": "user", "content": "Gardening notes about soil sensors and watering cadence."}
+      ],
+      [
+        {"role": "assistant", "content": "Travel notes about train tickets and hotel receipts."}
+      ]
+    ],
+    "answer_session_ids": ["s5"]
+  },
+  {
+    "question_id": "q4_abs",
+    "question_type": "abstention",
+    "question": "This abstention case should be skipped by default.",
+    "haystack_session_ids": ["s7"],
+    "haystack_dates": ["2024-04-01"],
+    "haystack_sessions": [[{"role": "user", "content": "No answer here."}]],
+    "answer_session_ids": []
+  }
+]

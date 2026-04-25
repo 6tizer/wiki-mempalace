@@ -1,0 +1,122 @@
+name: LongMemEval
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "Benchmark mode"
+        required: true
+        default: "nightly"
+        type: choice
+        options:
+          - nightly
+          - weekly
+          - manual
+          - fixture
+      sample-size:
+        description: "Sample size; use 0 for full dataset"
+        required: true
+        default: "50"
+  schedule:
+    - cron: "0 19 * * *"
+    - cron: "0 20 * * 6"
+
+jobs:
+  longmemeval:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      LONGMEMEVAL_CACHE_DIR: .cache/longmemeval
+      LONGMEMEVAL_ARTIFACT_DIR: artifacts/longmemeval
+      LONGMEMEVAL_FAIL_ON_LOW_SCORE: "false"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Resolve run config
+        id: config
+        shell: bash
+        run: |
+          set -euo pipefail
+          mode="${{ github.event.inputs.mode || 'nightly' }}"
+          sample_size="${{ github.event.inputs['sample-size'] || '50' }}"
+
+          if [[ "${{ github.event_name }}" == "schedule" ]]; then
+            case "${{ github.event.schedule }}" in
+              "0 19 * * *")
+                mode="nightly"
+                sample_size="50"
+                ;;
+              "0 20 * * 6")
+                mode="weekly"
+                sample_size="0"
+                ;;
+              *)
+                echo "unknown schedule: ${{ github.event.schedule }}" >&2
+                exit 1
+                ;;
+            esac
+          fi
+
+          if [[ "$mode" == "weekly" && "$sample_size" == "50" ]]; then
+            sample_size="0"
+          fi
+
+          echo "mode=$mode" >> "$GITHUB_OUTPUT"
+          echo "sample_size=$sample_size" >> "$GITHUB_OUTPUT"
+
+      - name: Fetch LongMemEval dataset
+        id: fetch
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${{ steps.config.outputs.mode }}" == "fixture" ]]; then
+            dataset_path="tests/fixtures/longmemeval_tiny.json"
+          else
+            scripts/longmemeval_fetch.sh | tee fetch.out
+            dataset_path="$(sed -n 's/^DATASET_PATH=//p' fetch.out | tail -n 1)"
+          fi
+          test -n "$dataset_path"
+          test -s "$dataset_path"
+          echo "dataset_path=$dataset_path" >> "$GITHUB_OUTPUT"
+
+      - name: Compile runner
+        run: python3 -m py_compile scripts/longmemeval_run.py
+
+      - name: Build rust-mempalace binary
+        run: |
+          cargo build -p rust-mempalace
+          echo "LONGMEMEVAL_MEMPALACE_BIN=$PWD/target/debug/rust-mempalace" >> "$GITHUB_ENV"
+
+      - name: Run LongMemEval benchmark
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$LONGMEMEVAL_ARTIFACT_DIR"
+          args=(
+            --dataset "${{ steps.fetch.outputs.dataset_path }}"
+            --mode "${{ steps.config.outputs.mode }}"
+            --out-dir "$LONGMEMEVAL_ARTIFACT_DIR"
+          )
+          if [[ "${{ steps.config.outputs.sample_size }}" != "0" ]]; then
+            args+=(--sample-size "${{ steps.config.outputs.sample_size }}")
+          fi
+          python3 scripts/longmemeval_run.py "${args[@]}"
+          test -s "$LONGMEMEVAL_ARTIFACT_DIR/longmemeval-report.json"
+          test -s "$LONGMEMEVAL_ARTIFACT_DIR/longmemeval-report.md"
+          test -s "$LONGMEMEVAL_ARTIFACT_DIR/run-config.json"
+
+      - name: Upload LongMemEval artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: longmemeval-${{ steps.config.outputs.mode }}-${{ github.run_id }}
+          path: artifacts/longmemeval/
+          if-no-files-found: warn
+          retention-days: 30
