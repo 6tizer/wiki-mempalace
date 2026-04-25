@@ -8,15 +8,20 @@
 - Requirements:
 - Design:
 - Tasks:
+- Handoff:
 
 ## Module Status
 
+- [ ] Plain architecture approved
 - [ ] Spec trio approved
 - [ ] Plan approved
-- [ ] Subagent implementation complete
+- [ ] Tasks graded as Script / Skill / Agent
+- [ ] Subagent implementation complete where needed
+- [ ] Handoff written where needed
 - [ ] Module review complete
 - [ ] Integration review complete
 - [ ] Roadmap/PRD updated
+- [ ] LESSONS updated after merge, or not needed:
 
 ## Verification
 

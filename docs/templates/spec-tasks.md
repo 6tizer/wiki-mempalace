@@ -4,11 +4,14 @@
 
 - [ ] Requirements approved
 - [ ] Design approved
+- [ ] Plain architecture approved
 - [ ] Plan approved
 - [ ] Branch created
-- [ ] Subagent tasks assigned
+- [ ] Tasks graded as Script / Skill / Agent
+- [ ] Subagent tasks assigned where needed
 - [ ] Implementation complete
 - [ ] Module review complete
+- [ ] Module handoff written
 - [ ] Tests added/updated
 - [ ] Docs updated
 - [ ] Integration review complete
@@ -20,13 +23,19 @@
 
 ## Subtasks
 
-| Task | Owner | Files | Status |
-| --- | --- | --- | --- |
-|  |  |  | Planned |
+| Task | Grade | Owner | Files | Depends on | Status |
+| --- | --- | --- | --- | --- | --- |
+|  | Script / Skill / Agent |  |  |  | Planned |
 
 ## Review Notes
 
 -
+
+## Stop Conditions
+
+- Stop and ask user if PRD scope changes.
+- Stop and update spec first if implementation needs a different interface.
+- Stop after 3 failed attempts at the same compile/test error and summarize evidence.
 
 ## Verification
 
