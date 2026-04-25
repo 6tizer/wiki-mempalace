@@ -56,9 +56,13 @@ consume-to-mempalace
 
 当前正式消费到 mempalace 的事件：
 
-- `SourceIngested`
+- `PageWritten`
 - `ClaimUpserted`
 - `ClaimSuperseded`
+
+`SourceIngested` 仍可进入 outbox，但 live sink 默认 no-op；历史 backfill 只把 source 写入
+`wiki.db`，不默认把 source 原文塞进 palace。`PageWritten` 只把 summary / concept /
+entity / synthesis / qa 等高质量页面写入 `wiki_pages` drawer。
 
 其他 `WikiEvent` 保留在 outbox 中，bridge 统计为 `ignored`，不派发到 mempalace。
 
@@ -94,7 +98,12 @@ wiki 内部检索提供 BM25 / vector / graph 三路候选。传入 `--palace-db
 启动方式：
 
 ```bash
-cargo run -p wiki-cli -- --db wiki.db mcp --palace ~/.mempalace-rs
+cargo run -p wiki-cli -- \
+  --db /Users/mac-mini/Documents/wiki/.wiki/wiki.db \
+  --wiki-dir /Users/mac-mini/Documents/wiki \
+  --viewer-scope shared:wiki \
+  --palace /Users/mac-mini/Documents/wiki/.wiki/palace.db \
+  mcp
 ```
 
 ## 7. 当前架构债

@@ -45,9 +45,36 @@
 
 ```bash
 cargo run -p wiki-cli -- \
-  --db wiki.db --wiki-dir wiki --sync-wiki --viewer-scope private:agent1 \
+  --db /Users/mac-mini/Documents/wiki/.wiki/wiki.db \
+  --wiki-dir /Users/mac-mini/Documents/wiki --sync-wiki \
+  --viewer-scope shared:wiki \
   <SUBCOMMAND> <ARGS...>
 ```
+
+共享 vault-local 默认路径：
+
+```bash
+cargo run -p wiki-cli -- \
+  --db /Users/mac-mini/Documents/wiki/.wiki/wiki.db \
+  --wiki-dir /Users/mac-mini/Documents/wiki --sync-wiki \
+  --viewer-scope shared:wiki \
+  --palace /Users/mac-mini/Documents/wiki/.wiki/palace.db \
+  <SUBCOMMAND> <ARGS...>
+```
+
+MCP 日常启动：
+
+```bash
+cargo run -p wiki-cli -- \
+  --db /Users/mac-mini/Documents/wiki/.wiki/wiki.db \
+  --wiki-dir /Users/mac-mini/Documents/wiki --sync-wiki \
+  --viewer-scope shared:wiki \
+  --palace /Users/mac-mini/Documents/wiki/.wiki/palace.db \
+  mcp
+```
+
+MCP 写工具未显式传 `scope` 时使用 `--viewer-scope`；需要私域时显式传
+`scope: private:<agent>`。
 
 > 所有"写入"子命令（`ingest` / `ingest-llm` / `file-claim` / `supersede-claim` /
 > `query --write-page` / `lint` / `promote` / `promote-page` / `crystallize` /
@@ -57,8 +84,11 @@ cargo run -p wiki-cli -- \
 ## 1. Ingest
 
 ```bash
-cargo run -p wiki-cli -- --db wiki.db --wiki-dir wiki --sync-wiki ingest \
-  "file:///notes/a.md" "source body text" --scope private:cli
+cargo run -p wiki-cli -- \
+  --db /Users/mac-mini/Documents/wiki/.wiki/wiki.db \
+  --wiki-dir /Users/mac-mini/Documents/wiki --sync-wiki \
+  --viewer-scope shared:wiki \
+  ingest "file:///notes/a.md" "source body text" --scope shared:wiki
 ```
 
 可选：`--vectors --llm-config llm-config.toml` 在 ingest 后写入 embedding 行（需 `[embed]`）。
@@ -71,8 +101,10 @@ cargo run -p wiki-cli -- --db wiki.db --wiki-dir wiki --sync-wiki ingest \
 ## 2. Query 与结果沉淀
 
 ```bash
-cargo run -p wiki-cli -- --db wiki.db --wiki-dir wiki --sync-wiki \
-  --viewer-scope private:agent1 \
+cargo run -p wiki-cli -- \
+  --db /Users/mac-mini/Documents/wiki/.wiki/wiki.db \
+  --wiki-dir /Users/mac-mini/Documents/wiki --sync-wiki \
+  --viewer-scope shared:wiki \
   query "what changed?" --write-page --page-title "analysis-change-log"
 ```
 
@@ -88,7 +120,11 @@ cargo run -p wiki-cli -- --db wiki.db --wiki-dir wiki --sync-wiki \
 ## 3. Lint 与健康检查
 
 ```bash
-cargo run -p wiki-cli -- --db wiki.db --wiki-dir wiki --sync-wiki lint
+cargo run -p wiki-cli -- \
+  --db /Users/mac-mini/Documents/wiki/.wiki/wiki.db \
+  --wiki-dir /Users/mac-mini/Documents/wiki --sync-wiki \
+  --viewer-scope shared:wiki \
+  lint
 ```
 
 `lint` 与 `promote` / `promote-page` 同样遵循顶层 `--viewer-scope`，与 `query` 一致。
@@ -103,7 +139,9 @@ cargo run -p wiki-cli -- --db wiki.db --wiki-dir wiki --sync-wiki lint
 导出增量事件：
 
 ```bash
-cargo run -p wiki-cli -- --db wiki.db export-outbox-ndjson-from --last-id 100
+cargo run -p wiki-cli -- \
+  --db /Users/mac-mini/Documents/wiki/.wiki/wiki.db \
+  export-outbox-ndjson-from --last-id 100
 ```
 
 （如需不带游标的一次性全量导出，可用 `export-outbox-ndjson`。）
@@ -111,13 +149,20 @@ cargo run -p wiki-cli -- --db wiki.db export-outbox-ndjson-from --last-id 100
 消费确认：
 
 ```bash
-cargo run -p wiki-cli -- --db wiki.db ack-outbox --up-to-id 120 --consumer-tag mempalace
+cargo run -p wiki-cli -- \
+  --db /Users/mac-mini/Documents/wiki/.wiki/wiki.db \
+  ack-outbox --up-to-id 120 --consumer-tag mempalace
 ```
 
 桥接消费（最小实现）：
 
 ```bash
-cargo run -p wiki-cli -- --db wiki.db consume-to-mempalace --last-id 100
+cargo run -p wiki-cli -- \
+  --db /Users/mac-mini/Documents/wiki/.wiki/wiki.db \
+  --wiki-dir /Users/mac-mini/Documents/wiki \
+  --viewer-scope shared:wiki \
+  --palace /Users/mac-mini/Documents/wiki/.wiki/palace.db \
+  consume-to-mempalace --last-id 100
 ```
 
 ## 5. Supersede 策略
@@ -125,9 +170,11 @@ cargo run -p wiki-cli -- --db wiki.db consume-to-mempalace --last-id 100
 - 新结论优先通过 `supersede-claim` 替换旧 claim：
 
   ```bash
-  cargo run -p wiki-cli -- --db wiki.db \
+  cargo run -p wiki-cli -- \
+    --db /Users/mac-mini/Documents/wiki/.wiki/wiki.db \
+    --viewer-scope shared:wiki \
     supersede-claim <old_claim_id> "新版结论" \
-    --scope private:cli --tier semantic
+    --scope shared:wiki --tier semantic
   ```
 
 - 旧 claim 被标记为过期（lint 中以 `claim.stale` 呈现）后**不删除**，保留审计与可回溯性。
@@ -137,8 +184,11 @@ cargo run -p wiki-cli -- --db wiki.db consume-to-mempalace --last-id 100
 ## 6. LLM 结构化 ingest（可选）
 
 ```bash
-cargo run -p wiki-cli -- --db wiki.db --llm-config llm-config.toml \
-  ingest-llm "file:///notes/a.md" "正文……" --scope private:cli
+cargo run -p wiki-cli -- \
+  --db /Users/mac-mini/Documents/wiki/.wiki/wiki.db \
+  --wiki-dir /Users/mac-mini/Documents/wiki --sync-wiki \
+  --viewer-scope shared:wiki --llm-config llm-config.toml \
+  ingest-llm "file:///notes/a.md" "正文……" --scope shared:wiki
 ```
 
 `--dry-run` 仅打印模型 JSON，不落库。失败时不写入 claim（可结合日志排查）。
@@ -148,8 +198,11 @@ ingest-llm 产出的 summary page 自 M7 起固定为 `EntryType::Summary`，遵
 批量处理 vault 中 `compiled_to_wiki: false` 的 source：
 
 ```bash
-cargo run -p wiki-cli -- --db wiki.db --wiki-dir ~/Documents/wiki --sync-wiki \
-  batch-ingest --vault ~/Documents/wiki --delay-secs 1
+cargo run -p wiki-cli -- \
+  --db /Users/mac-mini/Documents/wiki/.wiki/wiki.db \
+  --wiki-dir /Users/mac-mini/Documents/wiki --sync-wiki \
+  --viewer-scope shared:wiki \
+  batch-ingest --vault /Users/mac-mini/Documents/wiki --delay-secs 1
 # 可选：--dry-run 只扫描不编译；--limit N 限制处理条数。
 ```
 

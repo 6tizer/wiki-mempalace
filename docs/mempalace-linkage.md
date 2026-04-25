@@ -11,7 +11,7 @@
 | `RawArtifact`                | `drawers` 行             | 原始资料正文进入 drawer content             |
 | `Claim`                      | `kg_facts`              | 可映射为 `(subject, predicate, object)` |
 | `Claim.supersedes` / `stale` | `kg_facts.valid_to`     | 新结论写入后，旧事实 `kg_invalidate`          |
-| `WikiEvent::SourceIngested`  | `mine_path` / 入库流程触发    | 写侧事件驱动                              |
+| `WikiEvent::PageWritten`     | `mine_text` / drawer upsert   | 页面写侧事件驱动                          |
 | `WikiEvent::QueryServed`     | benchmark / telemetry   | 可用于检索效果观测                           |
 | `Entity` / `TypedEdge`       | `kg_query` + `traverse` | 图路召回来源                              |
 
@@ -37,18 +37,26 @@
 consumer（哪怕是别的语言写的）消费：
 
 ```bash
-cargo run -p wiki-cli -- --db wiki.db export-outbox-ndjson-from --last-id 0 > events.ndjson
-cargo run -p wiki-cli -- --db wiki.db ack-outbox --up-to-id 999 --consumer-tag my-consumer
+cargo run -p wiki-cli -- \
+  --db /Users/mac-mini/Documents/wiki/.wiki/wiki.db \
+  export-outbox-ndjson-from --last-id 0 > events.ndjson
+cargo run -p wiki-cli -- \
+  --db /Users/mac-mini/Documents/wiki/.wiki/wiki.db \
+  ack-outbox --up-to-id 999 --consumer-tag my-consumer
 ```
 
 事件格式：每行一个 JSON 对象，`type` 字段区分类型。完整事件集合、生产者与消费策略见
 [docs/outbox-event-matrix.md](outbox-event-matrix.md)。
 
-当前 mempalace 正式消费的只有 3 类事件：
+当前 mempalace 正式消费的事件：
 
-- `source_ingested`
+- `page_written`
 - `claim_upserted`
 - `claim_superseded`
+
+`SourceIngested` 仍保留 outbox 与 bridge hook，但 live sink 默认 no-op；v1 不默认把 source
+原文全文塞进 palace。`PageWritten` 只写 summary / concept / entity / synthesis / qa 等
+知识页面。
 
 其余事件会继续保留在 outbox 中，bridge 只做 `ignored` 统计，不派发到 mempalace。
 
@@ -64,8 +72,8 @@ cargo run -p wiki-cli -- --db wiki.db ack-outbox --up-to-id 999 --consumer-tag m
 ## 5) 最小落地流程
 
 1. `wiki-cli` ingest → `wiki-kernel` 写入 sources / claims / pages → flush outbox
-2. bridge live sink（或外部 consumer）按 outbox 顺序处理 `ClaimUpserted` /
-  `ClaimSuperseded` / `SourceIngested`；其中 `ClaimUpserted` 先还原完整 claim 并走
+2. bridge live sink（或外部 consumer）按 outbox 顺序处理 `PageWritten` /
+  `ClaimUpserted` / `ClaimSuperseded`；其中 `ClaimUpserted` 先还原完整 claim 并走
   `on_claim_upserted`，只有无 resolver 或悬挂事件时才兼容回退到 `on_claim_event`
 3. 非 mempalace 消费事件继续保留在 outbox，中间层只把它们计为 `ignored`
 4. 在 mempalace 侧写 `drawers` / `kg_facts`，必要时执行 `kg_invalidate`

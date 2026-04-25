@@ -20,3 +20,8 @@
 - [schema-t2-tags/](schema-t2-tags/) — Schema T2 tag governance. Merged PR #13。
 - [longmemeval-auto/](longmemeval-auto/) — J13 LongMemEval `rust-mempalace` local retrieval baseline artifacts. Merged PR #19。
 - [vault-report-paths/](vault-report-paths/) — Vault-relative report output paths for dashboard, suggest, metrics, and automation health. Active branch `codex/vault-report-paths`。
+- [vault-audit/](vault-audit/) — B1 read-only vault audit and report model. Active branch `codex/vault-backfill-palace-init`。
+- [vault-backfill/](vault-backfill/) — B2 stable IDs and vault-to-`wiki.db` backfill. Active branch `codex/vault-backfill-palace-init`。
+- [palace-init/](palace-init/) — B3 `palace.db` initialization from wiki outbox and fusion validation. Active branch `codex/vault-backfill-palace-init`。
+- [agent-runtime-defaults/](agent-runtime-defaults/) — B4 shared vault-local CLI/MCP defaults. Active branch `codex/vault-backfill-palace-init`。
+- [orphan-governance/](orphan-governance/) — B5 orphan cleanup planning after fresh B1 audit. Deferred until B1 report。

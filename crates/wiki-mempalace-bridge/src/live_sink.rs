@@ -4,7 +4,7 @@ use rusqlite::{params, Connection, OptionalExtension};
 use rust_mempalace::{db, service};
 use sha2::{Digest, Sha256};
 use std::sync::Mutex;
-use wiki_core::{Claim, ClaimId, Scope, SourceId};
+use wiki_core::{Claim, ClaimId, EntryType, Scope, SourceId, WikiPage};
 
 pub struct LiveMempalaceSink {
     conn: Mutex<Connection>,
@@ -113,14 +113,22 @@ impl MempalaceWikiSink for LiveMempalaceSink {
     }
 
     fn on_source_ingested(&self, source_id: SourceId) -> Result<(), MempalaceError> {
-        let source_path = format!("wiki://source/{}", source_id.0);
-        let room = short_id_raw(source_id.0);
+        let _ = source_id;
+        Ok(())
+    }
+
+    fn on_page_written(&self, page: &WikiPage) -> Result<(), MempalaceError> {
+        if !is_palace_eligible_page(page.entry_type.as_ref()) {
+            return Ok(());
+        }
+        let room = short_id_raw(page.id.0);
+        let source_path = format!("wiki://page/{}", page.id.0);
         self.insert_drawer(
-            "wiki_sources",
-            "hall_events",
+            "wiki_pages",
+            "hall_pages",
             &room,
             &source_path,
-            &format!("Source ingested: {}", source_id.0),
+            &page.markdown,
         )
     }
 
@@ -130,6 +138,19 @@ impl MempalaceWikiSink for LiveMempalaceSink {
             Scope::Shared { team_id } => team_id == &self.bank_id,
         }
     }
+}
+
+fn is_palace_eligible_page(entry_type: Option<&EntryType>) -> bool {
+    matches!(
+        entry_type,
+        Some(
+            EntryType::Summary
+                | EntryType::Concept
+                | EntryType::Entity
+                | EntryType::Synthesis
+                | EntryType::Qa
+        )
+    )
 }
 
 fn sha256_hex(path: &str, content: &str) -> String {
