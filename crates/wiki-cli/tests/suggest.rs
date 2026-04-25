@@ -146,6 +146,78 @@ fn suggest_report_dir_without_value_uses_default_directory() {
 }
 
 #[test]
+fn suggest_report_dir_without_value_uses_wiki_dir_reports() {
+    let db = tempfile::NamedTempFile::new().unwrap();
+    let db_path = db.path().to_owned();
+    let temp_dir = tempfile::tempdir().unwrap();
+    let wiki_dir = temp_dir.path().join("vault");
+    let report_dir = wiki_dir.join("reports").join("suggestions");
+
+    wiki_cli()
+        .current_dir(temp_dir.path())
+        .arg("--db")
+        .arg(&db_path)
+        .arg("--wiki-dir")
+        .arg(&wiki_dir)
+        .arg("suggest")
+        .arg("--report-dir")
+        .assert()
+        .success()
+        .stdout(contains(format!(
+            "json_report_file={}/",
+            report_dir.display()
+        )))
+        .stdout(contains(format!(
+            "markdown_report_file={}/",
+            report_dir.display()
+        )));
+
+    assert!(report_dir.exists());
+    assert_eq!(
+        std::fs::read_dir(&report_dir)
+            .unwrap()
+            .filter_map(Result::ok)
+            .count(),
+        2
+    );
+    assert!(
+        !temp_dir.path().join("wiki/reports/suggestions").exists(),
+        "suggest default must follow --wiki-dir, not cwd wiki/reports"
+    );
+}
+
+#[test]
+fn suggest_relative_report_dir_uses_wiki_dir() {
+    let db = tempfile::NamedTempFile::new().unwrap();
+    let db_path = db.path().to_owned();
+    let temp_dir = tempfile::tempdir().unwrap();
+    let wiki_dir = temp_dir.path().join("vault");
+    let report_dir = wiki_dir.join("reports").join("custom-suggestions");
+
+    wiki_cli()
+        .current_dir(temp_dir.path())
+        .arg("--db")
+        .arg(&db_path)
+        .arg("--wiki-dir")
+        .arg(&wiki_dir)
+        .arg("suggest")
+        .arg("--report-dir")
+        .arg("reports/custom-suggestions")
+        .assert()
+        .success()
+        .stdout(contains(format!(
+            "json_report_file={}/",
+            report_dir.display()
+        )));
+
+    assert!(report_dir.exists());
+    assert!(
+        !temp_dir.path().join("reports/custom-suggestions").exists(),
+        "relative suggest report dir must be vault-relative when --wiki-dir is set"
+    );
+}
+
+#[test]
 fn suggest_report_files_preserve_history_when_run_twice() {
     let db = tempfile::NamedTempFile::new().unwrap();
     let db_path = db.path().to_owned();

@@ -151,3 +151,33 @@ fn dashboard_default_output_is_wiki_report_path() {
         std::fs::read_to_string(temp_dir.path().join("wiki/reports/dashboard.html")).unwrap();
     assert!(html.contains("Wiki Dashboard"));
 }
+
+#[test]
+fn dashboard_default_output_uses_wiki_dir_reports() {
+    let db = tempfile::NamedTempFile::new().unwrap();
+    let db_path = db.path().to_owned();
+    let temp_dir = tempfile::tempdir().unwrap();
+    let wiki_dir = temp_dir.path().join("vault");
+    let dashboard_path = wiki_dir.join("reports").join("dashboard.html");
+
+    wiki_cli()
+        .current_dir(temp_dir.path())
+        .arg("--db")
+        .arg(&db_path)
+        .arg("--wiki-dir")
+        .arg(&wiki_dir)
+        .arg("dashboard")
+        .assert()
+        .success()
+        .stdout(contains(format!(
+            "dashboard_file={}",
+            dashboard_path.display()
+        )));
+
+    let html = std::fs::read_to_string(&dashboard_path).unwrap();
+    assert!(html.contains("Wiki Dashboard"));
+    assert!(
+        !temp_dir.path().join("wiki/reports/dashboard.html").exists(),
+        "dashboard default must follow --wiki-dir, not cwd wiki/reports"
+    );
+}
