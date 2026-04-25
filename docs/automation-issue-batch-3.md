@@ -15,7 +15,7 @@
 | 模块 | 状态 | 当前证据 | batch-3 要补什么 |
 | --- | --- | --- | --- |
 | M10 指标与评估 | ✅ Draft PR #12 / CI green | 已有 `wiki-cli metrics`，支持 `--consumer-tag`、`--low-coverage-threshold`、`--json`、`--report <PATH>`；覆盖 content/lint/gaps/outbox/lifecycle 5 组指标；core/kernel/cli metrics 测试已补；GitHub `quick` CI 已通过 | 等待 review / merge |
-| M11 运维控制台 | ⏳ 未完成 | 只有 CLI 运维面，无 dashboard | 最小只读 dashboard / HTML report |
+| M11 运维控制台 | ✅ Draft PR #14 / CI green | 已新增 `wiki-cli dashboard`，默认输出 `wiki/reports/dashboard.html`，支持 `--output <PATH>`、`--consumer-tag <TAG>`、`--low-coverage-threshold <N>`；生成静态自包含 HTML；workspace fmt/test/clippy 与 GitHub `quick` CI 已通过 | 等待 review / merge |
 | M12 策略层增强 | ⏳ 未完成 | 只有 lint/gap/fix 基础链路 | 自动 supersede / crystallize / stale 建议，不自动执行高风险写入 |
 | Schema T2 标签治理 | 🟡 本分支已实现 / integration gate 通过 | `Claim/Source/LlmClaimDraft` tags 已落地；CLI/MCP/batch ingest 已接 tags；`deprecated_tags` 与 `max_new_tags_per_ingest` 已拦截；workspace fmt/test/clippy 已通过 | 开 draft PR，等 CI |
 | LongMemEval 自动评测 | ⏳ 未完成 | 当前文档策略是不进必跑 CI，尚无自动 workflow / artifact 报告 | scheduled benchmark workflow、retrieval-only runner、artifact 报告 |
@@ -158,10 +158,12 @@ CLI 已能查看 health / doctor，但非开发者或长期运行时需要一个
 
 ### 交付物
 
-- dashboard 命令。
-- 一个可打开的 HTML 或 Markdown 文件。
-- 输出路径参数：`--output <PATH>`。
-- CLI 集成测试。
+- `wiki-cli dashboard` 顶层命令：本分支已实现。
+- 静态自包含 HTML 文件：本分支已实现，默认输出 `wiki/reports/dashboard.html`。
+- 输出路径参数 `--output <PATH>`：本分支已实现。
+- `--consumer-tag <TAG>`：本分支已实现，默认 `mempalace`。
+- `--low-coverage-threshold <N>`：本分支已实现，默认 `2`。
+- CLI 集成测试：focused tests passing，workspace integration gate passed。
 
 ### 测试
 
@@ -176,9 +178,10 @@ CLI 已能查看 health / doctor，但非开发者或长期运行时需要一个
 
 ### 验收标准
 
-- 不进数据库也能快速判断系统健康。
-- dashboard 默认只读。
-- 没有新常驻服务依赖。
+- 不进 palace DB 也能快速判断系统健康：本分支已实现。
+- dashboard 默认只读：除写 dashboard 文件外，不写 DB、不 flush outbox、不写 projection。
+- 没有新常驻服务依赖：生成静态自包含 HTML，无 web server、无外部 CSS/JS。
+- 当前状态：Draft PR #14 已开，workspace gate 与 GitHub `quick` CI 已通过，等待 review / merge。
 
 ### 风险
 

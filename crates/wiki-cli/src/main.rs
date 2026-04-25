@@ -27,6 +27,7 @@ use wiki_storage::{
 };
 
 mod banner;
+mod dashboard;
 mod llm;
 mod mcp;
 
@@ -236,6 +237,18 @@ enum Cmd {
         /// Also write a Markdown report to this path.
         #[arg(long)]
         report: Option<PathBuf>,
+    },
+    /// Generate a read-only static operations dashboard.
+    Dashboard {
+        /// HTML output path.
+        #[arg(long, default_value = "wiki/reports/dashboard.html")]
+        output: PathBuf,
+        /// Consumer tag used for outbox ack / lag metrics.
+        #[arg(long, default_value = DEFAULT_MEMPALACE_CONSUMER_TAG)]
+        consumer_tag: String,
+        /// Low coverage threshold used by gap scan.
+        #[arg(long, default_value_t = 2)]
+        low_coverage_threshold: usize,
     },
     LlmSmoke {
         #[arg(long, default_value = "llm-config.toml")]
@@ -1265,7 +1278,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     if !matches!(
         &cli.cmd,
-        Cmd::Mcp { .. } | Cmd::SchemaValidate { .. } | Cmd::Metrics { .. }
+        Cmd::Mcp { .. } | Cmd::SchemaValidate { .. } | Cmd::Metrics { .. } | Cmd::Dashboard { .. }
     ) {
         banner::print_startup_banner();
     }
@@ -1932,6 +1945,36 @@ fn run_with_engine(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             } else {
                 print!("{}", render_metrics_text(&metrics));
             }
+        }
+        Cmd::Dashboard {
+            output,
+            consumer_tag,
+            low_coverage_threshold,
+        } => {
+            let outbox_stats = repo.get_outbox_stats()?;
+            let outbox_progress = repo.get_outbox_consumer_progress(&consumer_tag)?;
+            let now = OffsetDateTime::now_utc();
+            let metrics = collect_wiki_metrics(
+                &eng.store,
+                &schema,
+                Some(&viewer),
+                Some(&outbox_stats),
+                Some(&outbox_progress),
+                low_coverage_threshold,
+                now,
+            );
+            let health = collect_automation_health_report(
+                &repo,
+                &automation_all_jobs(),
+                &consumer_tag,
+                now,
+            )?;
+            let html = dashboard::render_dashboard_html(&health, &metrics, &consumer_tag);
+            if let Some(parent) = output.parent().filter(|p| !p.as_os_str().is_empty()) {
+                std::fs::create_dir_all(parent)?;
+            }
+            std::fs::write(&output, html)?;
+            println!("dashboard_file={}", output.display());
         }
         Cmd::LlmSmoke { config, prompt } => {
             let cfg = llm::load_llm_config(&config)?;
