@@ -242,14 +242,10 @@ enum Cmd {
         #[arg(long)]
         report_dir: Option<PathBuf>,
     },
-    /// Classify vault audit findings into read-only governance lanes.
+    /// Plan/apply orphan governance from a timestamped vault audit.
     OrphanGovernance {
-        /// Path to vault-audit.json.
-        #[arg(long)]
-        audit_report: PathBuf,
-        /// Report directory. With --wiki-dir, must be under <wiki-dir>/reports.
-        #[arg(long)]
-        report_dir: Option<PathBuf>,
+        #[command(subcommand)]
+        command: OrphanGovernanceCmd,
     },
     /// Backfill historical vault sources/pages into wiki.db.
     VaultBackfill {
@@ -363,6 +359,28 @@ enum Cmd {
     Automation {
         #[command(subcommand)]
         cmd: AutomationCmd,
+    },
+}
+
+#[derive(Subcommand)]
+enum OrphanGovernanceCmd {
+    /// Ask LLM for a validated governance plan.
+    Plan {
+        /// Path to reports/vault-audit-<timestamp>.json.
+        #[arg(long)]
+        audit_report: PathBuf,
+        /// Report directory. With --wiki-dir, must be under <wiki-dir>/reports.
+        #[arg(long)]
+        report_dir: Option<PathBuf>,
+    },
+    /// Apply executable actions from a validated governance plan. Defaults to dry-run.
+    Apply {
+        /// Path to reports/orphan-governance-plan-<timestamp>.json.
+        #[arg(long)]
+        plan: PathBuf,
+        /// Mutate vault files. Without this flag, dry-run only.
+        #[arg(long, default_value_t = false)]
+        apply: bool,
     },
 }
 
@@ -1588,26 +1606,67 @@ fn run_with_engine(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
 
-    if let Cmd::OrphanGovernance {
-        audit_report,
-        report_dir,
-    } = &cli.cmd
-    {
-        let (report, files) = orphan_governance::run_orphan_governance(
-            audit_report,
-            report_dir.clone(),
-            cli.wiki_dir.as_deref(),
-        )
-        .map_err(|e| -> Box<dyn std::error::Error> { e.to_string().into() })?;
-        println!(
-            "orphan_governance orphan_candidates={} unsupported_frontmatter={} pages_missing_status={} sources_missing_compiled_to_wiki={}",
-            report.counts.orphan_candidates,
-            report.counts.unsupported_frontmatter,
-            report.counts.pages_missing_status,
-            report.counts.sources_missing_compiled_to_wiki,
-        );
-        println!("json_report_file={}", files.json_path.display());
-        println!("markdown_report_file={}", files.markdown_path.display());
+    if let Cmd::OrphanGovernance { command } = &cli.cmd {
+        match command {
+            OrphanGovernanceCmd::Plan {
+                audit_report,
+                report_dir,
+            } => {
+                let llm_config_path = cli.llm_config.clone();
+                let (plan, files) = orphan_governance::run_plan_with_llm(
+                    audit_report,
+                    report_dir.clone(),
+                    cli.wiki_dir.as_deref(),
+                    move |system, user, max_tokens| {
+                        let cfg = llm::load_llm_config(&llm_config_path).map_err(
+                            |e| -> Box<dyn std::error::Error + Send + Sync> {
+                                e.to_string().into()
+                            },
+                        )?;
+                        llm::complete_chat(&cfg, system, user, max_tokens).map_err(
+                            |e| -> Box<dyn std::error::Error + Send + Sync> {
+                                e.to_string().into()
+                            },
+                        )
+                    },
+                )
+                .map_err(|e| -> Box<dyn std::error::Error> { e.to_string().into() })?;
+                println!(
+                    "orphan_governance_plan actions={} executable_actions={}",
+                    plan.actions.len(),
+                    plan.actions
+                        .iter()
+                        .filter(|action| matches!(
+                            action.action_type.as_str(),
+                            "insert_page_status"
+                                | "insert_source_compiled_to_wiki"
+                                | "delete_cleanup_path"
+                        ))
+                        .count(),
+                );
+                println!("json_report_file={}", files.json_path.display());
+                println!("markdown_report_file={}", files.markdown_path.display());
+            }
+            OrphanGovernanceCmd::Apply { plan, apply } => {
+                let wiki_dir = cli.wiki_dir.as_deref().ok_or_else(|| {
+                    "--wiki-dir is required for orphan-governance apply".to_string()
+                })?;
+                let report = orphan_governance::run_apply(plan, wiki_dir, *apply)
+                    .map_err(|e| -> Box<dyn std::error::Error> { e.to_string().into() })?;
+                println!(
+                    "orphan_governance_apply mode={} actions_seen={} executable_actions={} page_status_insertions_planned={} source_compiled_to_wiki_insertions_planned={} cleanup_deletions_planned={} page_status_insertions_applied={} source_compiled_to_wiki_insertions_applied={} cleanup_deletions_applied={}",
+                    report.mode,
+                    report.actions_seen,
+                    report.executable_actions,
+                    report.page_status_insertions_planned,
+                    report.source_compiled_to_wiki_insertions_planned,
+                    report.cleanup_deletions_planned,
+                    report.page_status_insertions_applied,
+                    report.source_compiled_to_wiki_insertions_applied,
+                    report.cleanup_deletions_applied,
+                );
+            }
+        }
         return Ok(());
     }
 

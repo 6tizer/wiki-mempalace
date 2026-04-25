@@ -24,6 +24,6 @@
 - [vault-backfill/](vault-backfill/) — B2 stable IDs and vault-to-`wiki.db` backfill. Active branch `codex/vault-backfill-palace-init`。
 - [palace-init/](palace-init/) — B3 `palace.db` initialization from wiki outbox and fusion validation. Active branch `codex/vault-backfill-palace-init`。
 - [agent-runtime-defaults/](agent-runtime-defaults/) — B4 shared vault-local CLI/MCP defaults. Active branch `codex/vault-backfill-palace-init`。
-- [orphan-governance/](orphan-governance/) — B5 read-only orphan governance report from production `vault-audit.json`. Active branch `codex/orphan-governance`。
+- [orphan-governance/](orphan-governance/) — B5 follow-up: timestamped audit, LLM plan, Chinese report, and whitelist apply. Active branch `codex/orphan-governance-followup`。
 - [persist-snapshot-outbox/](persist-snapshot-outbox/) — C16a: `wiki_state` + outbox append in one SQLite transaction; replaces split `save_to_repo` / `flush_outbox` autocommit for crash-safety. Merged PR #25. PRD: [storage-embeddings-followup.md](../prd/storage-embeddings-followup.md).
 - [embedding-ann-index/](embedding-ann-index/) — C16b: bounded-work vector search for `wiki_embedding` (optional extension / ANN; fallback to full scan). PRD: [storage-embeddings-followup.md](../prd/storage-embeddings-followup.md)。
