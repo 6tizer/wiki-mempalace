@@ -15,7 +15,7 @@
 - [x] Tests added/updated
 - [x] Docs updated
 - [x] Integration review complete
-- [ ] PR opened
+- [x] PR opened
 - [ ] Codex/GitHub review addressed
 - [ ] CI green
 - [ ] Merged
@@ -31,6 +31,7 @@
 | Handoff | Script | Main / implementation subagent | `docs/handovers/orphan-governance/summary.md` | Tests | Done |
 | Focused review | Agent | Review subagent | spec + touched code | Implementation | Done |
 | Status backfill | Script | Main | `docs/specs/orphan-governance/tasks.md`, `docs/specs/README.md`, `docs/roadmap.md`, `docs/LESSONS.md` | Review | Done |
+| Draft PR | Skill | Main | GitHub PR #28 | Gate pass | Done |
 
 ## Review Notes
 
