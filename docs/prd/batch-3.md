@@ -29,7 +29,7 @@ Out:
 | --- | --- | --- | --- |
 | J9 Metrics Core | Unified metrics model, CLI, reports | `wiki-core`, `wiki-kernel`, `wiki-cli` | Merged PR #12 |
 | J10 Dashboard | Static read-only dashboard/report | `wiki-cli`, docs | Merged PR #14 |
-| J11 Strategy Suggestions | Explainable suggestions, no auto execution | `wiki-core`, `wiki-kernel`, `wiki-cli` | Implemented in branch |
+| J11 Strategy Suggestions | Explainable suggestions, no auto execution | `wiki-core`, `wiki-kernel`, `wiki-cli` | Merged PR #16 |
 | J12 Tag Governance | Tags model + schema policy consumption | `wiki-core`, `wiki-kernel`, `wiki-cli` | Merged PR #13 |
 | J13 LongMemEval Auto Benchmark | Scheduled retrieval benchmark artifacts | `.github/workflows`, `scripts`, docs | Planned |
 
@@ -63,4 +63,4 @@ Out:
 - [ ] Modules implemented
 - [ ] CI green
 - [ ] Merged
-- [x] Roadmap updated for completed M10/M11/J12 and in-branch M12 status
+- [x] Roadmap updated for completed M10/M11/M12/J12 status
