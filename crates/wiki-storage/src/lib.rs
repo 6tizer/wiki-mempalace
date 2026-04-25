@@ -81,6 +81,11 @@ pub trait WikiRepository {
     fn load_snapshot(&self) -> Result<StorageSnapshot, StorageError>;
     fn save_snapshot(&self, snapshot: &StorageSnapshot) -> Result<(), StorageError>;
     fn append_outbox(&self, event: &WikiEvent) -> Result<(), StorageError>;
+    fn save_snapshot_and_append_outbox(
+        &self,
+        snapshot: &StorageSnapshot,
+        events: &[WikiEvent],
+    ) -> Result<usize, StorageError>;
     fn export_outbox_ndjson(&self) -> Result<String, StorageError>;
     fn export_outbox_ndjson_from_id(&self, last_id: i64) -> Result<String, StorageError>;
     fn mark_outbox_processed(
@@ -580,6 +585,27 @@ CREATE INDEX IF NOT EXISTS wiki_automation_run_job_status_id_idx
         )?;
         Ok(newly_acked as usize)
     }
+
+    fn save_snapshot_and_append_outbox_inner(
+        &self,
+        snapshot: &StorageSnapshot,
+        events: &[WikiEvent],
+    ) -> Result<usize, StorageError> {
+        let payload = serde_json::to_string(snapshot)?;
+        self.conn.execute(
+            "INSERT INTO wiki_state(id, payload_json) VALUES(1, ?1)
+             ON CONFLICT(id) DO UPDATE SET payload_json=excluded.payload_json",
+            params![payload],
+        )?;
+        for event in events {
+            let payload = serde_json::to_string(event)?;
+            self.conn.execute(
+                "INSERT INTO wiki_outbox(event_json) VALUES(?1)",
+                params![payload],
+            )?;
+        }
+        Ok(events.len())
+    }
 }
 
 fn try_blob_to_f32(blob: &[u8], expected_len: usize) -> Option<Vec<f32>> {
@@ -675,12 +701,7 @@ impl WikiRepository for SqliteRepository {
     }
 
     fn save_snapshot(&self, snapshot: &StorageSnapshot) -> Result<(), StorageError> {
-        let payload = serde_json::to_string(snapshot)?;
-        self.conn.execute(
-            "INSERT INTO wiki_state(id, payload_json) VALUES(1, ?1)
-             ON CONFLICT(id) DO UPDATE SET payload_json=excluded.payload_json",
-            params![payload],
-        )?;
+        self.save_snapshot_and_append_outbox_inner(snapshot, &[])?;
         Ok(())
     }
 
@@ -691,6 +712,22 @@ impl WikiRepository for SqliteRepository {
             params![payload],
         )?;
         Ok(())
+    }
+
+    fn save_snapshot_and_append_outbox(
+        &self,
+        snapshot: &StorageSnapshot,
+        events: &[WikiEvent],
+    ) -> Result<usize, StorageError> {
+        self.conn.execute_batch("BEGIN IMMEDIATE")?;
+        let result = self.save_snapshot_and_append_outbox_inner(snapshot, events);
+        match result {
+            Ok(_) => self.conn.execute_batch("COMMIT")?,
+            Err(_) => {
+                let _ = self.conn.execute_batch("ROLLBACK");
+            }
+        }
+        result
     }
 
     fn export_outbox_ndjson(&self) -> Result<String, StorageError> {
@@ -962,6 +999,80 @@ mod tests {
         assert_eq!(mempalace.backlog_events, 0);
         assert_eq!(archive.acked_up_to_id, Some(3));
         assert_eq!(archive.backlog_events, 1);
+    }
+
+    #[test]
+    fn snapshot_and_outbox_commit_in_one_transaction() {
+        let dir = tempdir().unwrap();
+        let db = dir.path().join("wiki.db");
+        let repo = SqliteRepository::open(&db).unwrap();
+        let scope = Scope::Private {
+            agent_id: "cli".into(),
+        };
+        let source = RawArtifact::new("file:///a.md", "alpha", scope);
+        let source_id = source.id;
+        let snapshot = StorageSnapshot {
+            sources: vec![source],
+            ..StorageSnapshot::default()
+        };
+        let event = WikiEvent::SourceIngested {
+            source_id,
+            redacted: false,
+            at: OffsetDateTime::now_utc(),
+        };
+
+        let inserted = repo
+            .save_snapshot_and_append_outbox(&snapshot, &[event])
+            .unwrap();
+
+        assert_eq!(inserted, 1);
+        assert_eq!(repo.load_snapshot().unwrap().sources.len(), 1);
+        assert_eq!(repo.export_outbox_ndjson().unwrap().lines().count(), 1);
+    }
+
+    #[test]
+    fn snapshot_rolls_back_when_outbox_insert_fails() {
+        let dir = tempdir().unwrap();
+        let db = dir.path().join("wiki.db");
+        let repo = SqliteRepository::open(&db).unwrap();
+        let scope = Scope::Private {
+            agent_id: "cli".into(),
+        };
+        let old_snapshot = StorageSnapshot {
+            sources: vec![RawArtifact::new("file:///old.md", "old", scope.clone())],
+            ..StorageSnapshot::default()
+        };
+        repo.save_snapshot(&old_snapshot).unwrap();
+        repo.conn
+            .execute_batch(
+                "CREATE TRIGGER fail_outbox_insert
+                 BEFORE INSERT ON wiki_outbox
+                 BEGIN
+                   SELECT RAISE(FAIL, 'forced outbox failure');
+                 END;",
+            )
+            .unwrap();
+        let new_source = RawArtifact::new("file:///new.md", "new", scope);
+        let new_source_id = new_source.id;
+        let new_snapshot = StorageSnapshot {
+            sources: vec![new_source],
+            ..StorageSnapshot::default()
+        };
+        let event = WikiEvent::SourceIngested {
+            source_id: new_source_id,
+            redacted: false,
+            at: OffsetDateTime::now_utc(),
+        };
+
+        let err = repo
+            .save_snapshot_and_append_outbox(&new_snapshot, &[event])
+            .unwrap_err();
+
+        assert!(format!("{err}").contains("forced outbox failure"));
+        let restored = repo.load_snapshot().unwrap();
+        assert_eq!(restored.sources.len(), 1);
+        assert_eq!(restored.sources[0].uri, "file:///old.md");
+        assert_eq!(repo.export_outbox_ndjson().unwrap().lines().count(), 0);
     }
 
     #[test]

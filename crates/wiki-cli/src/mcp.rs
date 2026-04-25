@@ -863,8 +863,7 @@ fn save_and_flush(
     eng: &mut LlmWikiEngine<NoopWikiHook>,
     repo: &SqliteRepository,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    eng.save_to_repo(repo)?;
-    eng.flush_outbox_to_repo_with_policy(repo, 128, 3)?;
+    eng.save_to_repo_and_flush_outbox_with_policy(repo, 128, 3)?;
     Ok(())
 }
 

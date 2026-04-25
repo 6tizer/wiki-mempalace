@@ -9,17 +9,17 @@
 ## Constraints
 
 - `WikiRepository` is currently `&self` on all methods; `rusqlite::Connection::transaction`
-  requires `&mut self`. **Design choice** (pick one in implementation, document here):
+  requires `&mut self`. **Chosen design: A**.
 
-  - **A (preferred)**: Add `SqliteRepository::save_snapshot_and_outbox_in_transaction(
+- **A (implemented)**: Add `WikiRepository::save_snapshot_and_append_outbox(
     &self, snapshot, events: &[WikiEvent])` using `execute_batch` with
     `BEGIN IMMEDIATE` / `COMMIT` / `ROLLBACK` (same pattern as
-    `mark_outbox_processed`), keeping `&self` and avoiding a mutable
-    `Connection` handle if possible; or
-  - **B**: Expose a connection-scoped `with_sqlite_tx` only on `SqliteRepository`
-    (not on trait) and migrate call sites, or
-  - **C**: Extend `WikiRepository` with a default trait method that is only
-    implemented for SQLite with interior mutability (not ideal).
+  `mark_outbox_processed`), keeping `&self` and avoiding a mutable
+  `Connection` handle.
+- B (`with_sqlite_tx`) was not chosen because it would leak SQLite-specific
+  transaction control into engine/CLI call sites.
+- C (default sequential trait method) was not chosen because it would allow
+  non-atomic implementations to satisfy the API silently.
 
 - **In-memory / mock repos**: `#[cfg(test)]` or `InMemoryStore` may implement
   “atomic” as sequential updates without a real DB; tests must assert behavior
@@ -28,8 +28,8 @@
 ## Interface Sketch (non-binding)
 
 ```text
-// SqliteRepository
-pub fn save_snapshot_and_append_outbox(
+// WikiRepository
+fn save_snapshot_and_append_outbox(
     &self,
     snapshot: &StorageSnapshot,
     events: &[WikiEvent],
@@ -41,17 +41,16 @@ pub fn save_snapshot_and_append_outbox(
 
 ## Engine Integration
 
-- Add `LlmWikiEngine::save_to_repo_with_outbox<R>` or reimplement
-  `save_to_repo` + `flush_outbox_to_repo_with_policy` as a single call into
-  `save_snapshot_and_append_outbox` when both are needed, **or** keep
-  `flush` logic but have it call the batched storage API with `&self.outbox[range]`
-  and clear in-memory outbox only after success.
+- Add `LlmWikiEngine::save_to_repo_and_flush_outbox_with_policy<R>` as the
+  production write path for callers that need snapshot + outbox. It serializes
+  the current snapshot, passes the full in-memory outbox to
+  `save_snapshot_and_append_outbox`, and clears the in-memory outbox only after
+  success.
 
-- **C15 fix preserved**: on partial `append` failure, engine must still trim
-  successfully written events; with a single transaction, “partial failure”
-  becomes “whole transaction failed” and nothing commits — **simpler** invariants,
-  but tests must check no duplicate on retry of the same in-memory outbox
-  (same as today).
+- **C15 compatibility**: legacy `flush_outbox_to_repo_with_policy` remains for
+  explicit outbox-only use, but CLI/MCP save+flush paths use the atomic method.
+  With a single transaction, “partial failure” becomes “whole transaction
+  failed” and nothing commits.
 
 ## Flow
 
@@ -74,9 +73,9 @@ sequenceDiagram
 
 - **Empty outbox, snapshot only**: still one transaction (snapshot-only) or
   allow fast path `save_snapshot` only — spec allows either; document choice.
-- **Very large outbox batch**: may need chunking with **one transaction per
-  chunk**; if so, R1 in requirements must be rephrased to “per chunk atomicity”
-  and document ordering across chunks.
+- **Very large outbox batch**: this implementation commits the full current
+  in-memory outbox in one transaction. If this becomes too large, a future spec
+  must explicitly weaken the contract to “per chunk atomicity”.
 - **WAL + readers**: `BEGIN IMMEDIATE` is appropriate to avoid write starvation.
 
 ## Compatibility
@@ -86,11 +85,9 @@ sequenceDiagram
 
 ## Test Strategy
 
-- Unit: mock failure after snapshot SQL, before first outbox insert → no row
-  in `wiki_state` from that attempt (or full rollback visible).
-- Integration: real temp `wiki.db`, `std::fs` / injected hook to fail second
-  `execute` if the codebase supports it; otherwise use SQLite
-  `PRAGMA compile_options` and savepoints in test-only code path.
+- Unit/integration: real temp `wiki.db` with a test trigger that fails
+  `wiki_outbox` insert after the snapshot upsert; assert the previous snapshot
+  remains visible and no outbox row is committed.
 
 ## Spec Sync Rules
 

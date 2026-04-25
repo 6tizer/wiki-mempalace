@@ -753,6 +753,35 @@ impl<H: WikiHook> LlmWikiEngine<H> {
         Ok(())
     }
 
+    pub fn save_to_repo_and_flush_outbox<R: WikiRepository>(
+        &mut self,
+        repo: &R,
+    ) -> Result<usize, EngineError> {
+        self.save_to_repo_and_flush_outbox_with_policy(repo, 128, 3)
+    }
+
+    pub fn save_to_repo_and_flush_outbox_with_policy<R: WikiRepository>(
+        &mut self,
+        repo: &R,
+        _batch_size: usize,
+        retry_count: usize,
+    ) -> Result<usize, EngineError> {
+        let snap = self.store.to_snapshot(&self.audits);
+        let mut last_err: Option<EngineError> = None;
+        for _ in 0..=retry_count {
+            match repo.save_snapshot_and_append_outbox(&snap, &self.outbox) {
+                Ok(n) => {
+                    self.outbox.clear();
+                    return Ok(n);
+                }
+                Err(err) => {
+                    last_err = Some(err.into());
+                }
+            }
+        }
+        Err(last_err.expect("retry loop runs at least once"))
+    }
+
     pub fn flush_outbox_to_repo<R: WikiRepository>(
         &mut self,
         repo: &R,
@@ -1352,8 +1381,7 @@ mod tests {
             None,
             None,
         );
-        eng.save_to_repo(&repo).unwrap();
-        let n = eng.flush_outbox_to_repo(&repo).unwrap();
+        let n = eng.save_to_repo_and_flush_outbox(&repo).unwrap();
         assert!(n > 0);
 
         let reloaded =

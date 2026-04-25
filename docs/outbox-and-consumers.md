@@ -17,11 +17,13 @@
 
 写入类 CLI 子命令完成后会自动：
 
-1. `save_to_repo()` 保存 snapshot。
-2. `flush_outbox_to_repo_with_policy()` 分批写入 outbox。
+1. 通过 `save_snapshot_and_append_outbox()` 在同一 SQLite `BEGIN IMMEDIATE`
+   / `COMMIT` 中保存 snapshot 与本次 outbox。
+2. 成功后清空引擎内存 outbox；失败则 rollback，内存 outbox 保留以便重试。
 3. 若启用 `--sync-wiki`，同步 Markdown projection。
 
 这个顺序保证主状态先落库，事件后追记，消费端通过 resolver 读取事件关联对象时不会读到空状态。
+自 C16A 起，snapshot 与本次 outbox 属于同一个 durability unit；崩溃或插入失败不会只提交其中一半。
 
 ## 消费者进度
 

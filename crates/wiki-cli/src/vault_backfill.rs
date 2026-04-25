@@ -651,12 +651,10 @@ fn apply_plan_to_repo<R: WikiRepository>(
         }
     }
 
-    if changed {
-        repo.save_snapshot(&snapshot)?;
-    }
-    for event in page_events {
-        repo.append_outbox(&event)?;
-        report.page_written_events += 1;
+    if changed || !page_events.is_empty() {
+        let page_event_count = page_events.len();
+        repo.save_snapshot_and_append_outbox(&snapshot, &page_events)?;
+        report.page_written_events += page_event_count;
     }
     Ok(())
 }

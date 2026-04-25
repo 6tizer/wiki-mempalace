@@ -52,5 +52,7 @@
 
 ## Status
 
-- **Draft** — spec trio written; implementation not started. User must confirm
-  architecture (trait changes vs connection-owned transaction API) before code.
+- **C16A in progress** — `persist-snapshot-outbox` implementation is on branch
+  `codex/persist-snapshot-outbox`; chosen architecture is `WikiRepository`
+  method + SQLite `BEGIN IMMEDIATE` transaction.
+- **C16B not started** — `embedding-ann-index` remains a separate follow-up.
