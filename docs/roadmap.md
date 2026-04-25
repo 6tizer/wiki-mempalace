@@ -21,17 +21,16 @@
 | Schema T2 tag governance | ✅ 已合入 | PR #13 已 merge；`Claim/Source/LlmClaimDraft` tags、tag normalize/validate、deprecated_tags 拦截、max_new_tags_per_ingest 限流、CLI/MCP/batch ingest tags 已实现 |
 | J13 LongMemEval auto benchmark | ✅ 已合入 | PR #19 已 merge；`rust-mempalace` 本地检索基线 runner、fetch/cache script、nightly/weekly workflow、30 天 artifact、fixture tests、review handoff 已实现；不进 PR 必跑 CI |
 | Vault Backfill + Palace Init | ✅ 已合入 | PR #23 已 merge；`vault-audit`、`vault-backfill`、`palace-init`、MCP `shared:wiki` runtime defaults 已实现；支持历史 vault 审计、回填、`palace.db` 初始化与验证 |
-| C16A Atomic snapshot + outbox | 🚧 开发中 | Branch `codex/persist-snapshot-outbox`；新增 `save_snapshot_and_append_outbox` 单事务持久化路径；待 PR/CI/merge |
-| C16B Embedding ANN index | 💤 未开始 | 仍保留在 [embedding-ann-index](specs/embedding-ann-index/)；等 C16A 合并后单独规划 |
+| C16A Atomic snapshot + outbox | ✅ 已合入 | PR #25 已 merge；新增 `save_snapshot_and_append_outbox` 单事务持久化路径；CLI/MCP/backfill 写路径已切到原子提交 |
+| C16B Embedding ANN index | 💤 未开始 | 仍保留在 [embedding-ann-index](specs/embedding-ann-index/)；可单独规划，不和存储一致性混在一个 PR |
 
 ## 当前下一阶段
 
-1. 完成 C16A Atomic snapshot + outbox 的 PR、CI、merge。
-2. C16A 合并后再单独启动 C16B Embedding ANN index；不要和存储一致性混在一个 PR。
-3. 运行生产 vault 的 B1 audit；B5 orphan governance 只基于这份新报告制定治理计划，不直接清理 vault。
-4. 观察 J13 scheduled artifacts：先积累至少 7 份 nightly report 和 1 份 weekly full report，确认 artifact 稳定和 full run 真实耗时。
-5. J14 Semantic Fusion Benchmark：只有在 J13 报告显示同义表达/词面不匹配是主要错因，且运行预算明确后，再评估 `wiki-cli --vectors --palace-db` 语义融合 lane。
-6. M12 后续 operator/executor、dashboard latest suggestion report、QueryServed scope/hash schema 改进单独规划，不混入首版 suggest。
+1. 运行生产 vault 的 B1 audit；B5 orphan governance 只基于这份新报告制定治理计划，不直接清理 vault。
+2. C16B Embedding ANN index 如需推进，单独从 PRD/spec 开新分支。
+3. 观察 J13 scheduled artifacts：先积累至少 7 份 nightly report 和 1 份 weekly full report，确认 artifact 稳定和 full run 真实耗时。
+4. J14 Semantic Fusion Benchmark：只有在 J13 报告显示同义表达/词面不匹配是主要错因，且运行预算明确后，再评估 `wiki-cli --vectors --palace-db` 语义融合 lane。
+5. M12 后续 operator/executor、dashboard latest suggestion report、QueryServed scope/hash schema 改进单独规划，不混入首版 suggest。
 
 执行计划见 [automation-issue-batch-3.md](automation-issue-batch-3.md)。开发流程见
 [dev-workflow.md](dev-workflow.md)，batch-3 PRD 见 [prd/batch-3.md](prd/batch-3.md)。
