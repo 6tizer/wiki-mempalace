@@ -12,7 +12,7 @@
 - [x] Tests added/updated
 - [x] Docs updated
 - [x] Integration review complete
-- [ ] PR opened
+- [x] PR opened
 - [ ] Codex/GitHub review addressed
 - [ ] CI green
 - [ ] Merged
@@ -70,3 +70,4 @@
 - `cargo fmt --all -- --check`
 - `cargo test --workspace`
 - `cargo clippy --workspace --all-targets -- -D warnings`
+- Draft PR #16 opened.
