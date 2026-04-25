@@ -45,10 +45,7 @@ pub enum SchemaValidationError {
     #[error("initial_status {0:?} 不在 promotion 图的任何节点中")]
     UnreachableInitialStatus(EntryStatus),
     #[error("schema 字段 {field} 值超出有效范围 {range}")]
-    OutOfRange {
-        field: String,
-        range: String,
-    },
+    OutOfRange { field: String, range: String },
 }
 
 /// 条目类型：允许一条规则同时作用于多种类型（如 concept + entity 共享同一生命周期）。

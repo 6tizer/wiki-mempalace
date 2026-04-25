@@ -975,9 +975,7 @@ fn rank_fused_with_retention(
             (d.id.clone(), d.rrf_score * bonus)
         })
         .collect();
-    out.sort_by(|a, b| {
-        a.1.total_cmp(&b.1).reverse().then_with(|| a.0.cmp(&b.0))
-    });
+    out.sort_by(|a, b| a.1.total_cmp(&b.1).reverse().then_with(|| a.0.cmp(&b.0)));
     out
 }
 

@@ -381,9 +381,7 @@ CREATE INDEX IF NOT EXISTS wiki_automation_run_job_status_id_idx
             }
             scored.push((doc_id, c));
         }
-        scored.sort_by(|a, b| {
-            a.1.total_cmp(&b.1).reverse().then_with(|| a.0.cmp(&b.0))
-        });
+        scored.sort_by(|a, b| a.1.total_cmp(&b.1).reverse().then_with(|| a.0.cmp(&b.0)));
         scored.truncate(limit);
         Ok(scored)
     }

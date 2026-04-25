@@ -609,8 +609,7 @@ fn call_tool(
                 }
             }
             for edge in &eng.store.edges {
-                if visible_entity_ids.contains(&edge.from)
-                    && visible_entity_ids.contains(&edge.to)
+                if visible_entity_ids.contains(&edge.from) && visible_entity_ids.contains(&edge.to)
                 {
                     dot.push_str(&format!(
                         "  \"{}\" -> \"{}\" [label=\"{:?}\"];\n",
@@ -684,7 +683,10 @@ fn call_tool(
                     if let Ok(app) = crate::llm::load_app_config(llm_config_path) {
                         if let Ok(v) = crate::llm::embed_first(&app, &c.text) {
                             if let Err(e) = repo.upsert_embedding(&format!("claim:{}", cid.0), &v) {
-                                eprintln!("warning: embedding upsert failed for claim {}: {e}", cid.0);
+                                eprintln!(
+                                    "warning: embedding upsert failed for claim {}: {e}",
+                                    cid.0
+                                );
                             }
                         }
                     }
