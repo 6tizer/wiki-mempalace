@@ -1,6 +1,6 @@
 # Schema 后续项开发路线图
 
-> 当前状态：T0/T1 已完成；T2 本分支已实现且 integration gate 通过，等待 draft PR / CI；T3 仍是活跃后续计划。本文保留 schema/tag 后续项，不归档。
+> 当前状态：T0/T1 已完成；T2 已通过 PR #13 合入 main；T3 仍是活跃后续计划。本文保留 schema/tag 后续项，不归档。
 
 ---
 
@@ -152,5 +152,5 @@ maintenance 调用 cleanup_expired_pages(now, schema)
 - ✅ T1.C promote_page 命令
 - ✅ T1.D stale_days 消费
 - ✅ T1.E auto_cleanup 消费
-- 🟡 T2 标签治理主线本分支已实现，workspace fmt/test/clippy 已通过；等待 draft PR 和 CI
+- ✅ T2 标签治理主线已通过 PR #13 合入 main
 - ⏳ T3 延后项未完成

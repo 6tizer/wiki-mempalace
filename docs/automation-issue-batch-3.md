@@ -14,10 +14,10 @@
 
 | 模块 | 状态 | 当前证据 | batch-3 要补什么 |
 | --- | --- | --- | --- |
-| M10 指标与评估 | ✅ Draft PR #12 / CI green | 已有 `wiki-cli metrics`，支持 `--consumer-tag`、`--low-coverage-threshold`、`--json`、`--report <PATH>`；覆盖 content/lint/gaps/outbox/lifecycle 5 组指标；core/kernel/cli metrics 测试已补；GitHub `quick` CI 已通过 | 等待 review / merge |
-| M11 运维控制台 | ✅ Draft PR #14 / CI green | 已新增 `wiki-cli dashboard`，默认输出 `wiki/reports/dashboard.html`，支持 `--output <PATH>`、`--consumer-tag <TAG>`、`--low-coverage-threshold <N>`；生成静态自包含 HTML；workspace fmt/test/clippy 与 GitHub `quick` CI 已通过 | 等待 review / merge |
-| M12 策略层增强 | ⏳ 未完成 | 只有 lint/gap/fix 基础链路 | 自动 supersede / crystallize / stale 建议，不自动执行高风险写入 |
-| Schema T2 标签治理 | 🟡 本分支已实现 / integration gate 通过 | `Claim/Source/LlmClaimDraft` tags 已落地；CLI/MCP/batch ingest 已接 tags；`deprecated_tags` 与 `max_new_tags_per_ingest` 已拦截；workspace fmt/test/clippy 已通过 | 开 draft PR，等 CI |
+| M10 指标与评估 | ✅ 已合入 PR #12 | 已有 `wiki-cli metrics`，支持 `--consumer-tag`、`--low-coverage-threshold`、`--json`、`--report <PATH>`；覆盖 content/lint/gaps/outbox/lifecycle 5 组指标 | 后续只消费接口 |
+| M11 运维控制台 | ✅ 已合入 PR #14 | 已新增 `wiki-cli dashboard`，默认输出 `wiki/reports/dashboard.html`，支持 `--output <PATH>`、`--consumer-tag <TAG>`、`--low-coverage-threshold <N>`；生成静态自包含 HTML | 后续只消费接口 |
+| M12 策略层增强 | 🚧 本分支已实现 | 新增 `wiki-cli suggest`，支持文本、`--json`、`--report-dir [PATH]`；JSON/Markdown 同源 report；默认只读，不写 DB/outbox/projection | PR/CI/merge |
+| Schema T2 标签治理 | ✅ 已合入 PR #13 | `Claim/Source/LlmClaimDraft` tags 已落地；CLI/MCP/batch ingest 已接 tags；`deprecated_tags` 与 `max_new_tags_per_ingest` 已拦截 | 后续 T3 单独规划 |
 | LongMemEval 自动评测 | ⏳ 未完成 | 当前文档策略是不进必跑 CI，尚无自动 workflow / artifact 报告 | scheduled benchmark workflow、retrieval-only runner、artifact 报告 |
 
 ## Batch-3 总览
@@ -181,7 +181,7 @@ CLI 已能查看 health / doctor，但非开发者或长期运行时需要一个
 - 不进 palace DB 也能快速判断系统健康：本分支已实现。
 - dashboard 默认只读：除写 dashboard 文件外，不写 DB、不 flush outbox、不写 projection。
 - 没有新常驻服务依赖：生成静态自包含 HTML，无 web server、无外部 CSS/JS。
-- 当前状态：Draft PR #14 已开，workspace gate 与 GitHub `quick` CI 已通过，等待 review / merge。
+- 当前状态：PR #14 已合入 main。
 
 ### 风险
 
@@ -202,7 +202,7 @@ CLI 已能查看 health / doctor，但非开发者或长期运行时需要一个
 
 ### 背景
 
-系统已有 lint / gap / fix，但它们多是局部修复动作。M12 要把这些信号组合成更高层建议，例如“哪些 claim 可能需要 supersede”“哪些查询值得 crystallize”。
+系统已有 lint / gap / fix，但它们多是局部修复动作。M12 要把这些信号组合成更高层建议报告，例如“哪些 claim 可能需要 supersede”“哪些查询值得 crystallize”，并标明建议由 Fixer、内部 operator agent，还是人处理。
 
 ### 目标
 
@@ -215,9 +215,14 @@ CLI 已能查看 health / doctor，但非开发者或长期运行时需要一个
   - `suggest.supersede_candidate`
   - `suggest.crystallize_candidate`
   - 可选：`suggest.stale_review`
-- 新增 CLI：`wiki-cli strategy` 或 `wiki-cli suggest`.
-- 输出 `code / severity / subject / reason / suggested_command`。
-- 可选 `--write-page` 将建议写为 `EntryType::Synthesis` 或 `EntryType::LintReport` 页面。
+- 新增 CLI：`wiki-cli suggest`.
+- 输出 `code / severity / subject / reason / suggested_command / execution_policy`。
+- 生成同源双格式 report：
+  - JSON 是机器真源。
+  - Markdown 是给人看的渲染视图。
+  - 两者共享 `report_id`、时间戳和文件名前缀。
+- report 默认保存在 `wiki/reports/suggestions/`，使用时间戳保留历史。
+- 首版不支持 `--write-page`，不把建议写成 wiki page。
 
 ### 建议 owner 范围
 
@@ -233,14 +238,22 @@ CLI 已能查看 health / doctor，但非开发者或长期运行时需要一个
 - page status / stale / NeedsUpdate。
 - claim supersede 链。
 - metrics report（若 J9 已完成）。
+- 信号采集必须只读：使用 collector / outbox export，不调用会写 audit/outbox 的运行路径。
+- query history 需要额外 scope 防护：当前 `QueryServed` 没有显式 scope，且
+  `query_fingerprint` 实际可能是原始 query 文本；无法通过 `top_doc_ids` 反解为当前
+  `--viewer-scope` 可见时，必须跳过该事件。
 
 ### 交付物
 
-- strategy suggestion 数据模型。
-- 至少 2 类策略规则。
-- CLI 命令。
-- 文本输出，建议命令只作为提示，不自动执行。
-- 测试覆盖每类规则。
+- strategy suggestion 数据模型：本分支已实现。
+- 至少 2 类策略规则：本分支已实现 `fix_auto_safe`、`supersede_candidate`、`crystallize_candidate`、`stale_review`。
+- CLI 命令：本分支已实现 `wiki-cli suggest`。
+- 文本输出与 JSON/Markdown report：本分支已实现；建议命令只作为提示，不自动执行。
+- 测试覆盖每类规则：本分支已补 core/kernel/cli focused tests。
+- `execution_policy` 与现有 Fixer 分层对齐：
+  - `FixActionType::Auto` -> `auto_safe`
+  - `FixActionType::Draft` -> `agent_review`
+  - `FixActionType::Manual` -> `agent_review` 或 `human_required`
 
 ### 测试
 
@@ -255,12 +268,15 @@ CLI 已能查看 health / doctor，但非开发者或长期运行时需要一个
 - 手工检查：
   - 建议不是噪音。
   - `suggested_command` 可复制执行。
+  - JSON 与 Markdown 来自同一份 report 数据，不产生双真源。
+  - query history 不泄漏不可见或无法反解 scope 的原始 query。
 
 ### 验收标准
 
-- 至少 2 类自动建议可进入日常使用。
-- 默认不执行 supersede / crystallize。
-- 输出足够解释“为什么建议做”。
+- 至少 2 类自动建议可进入日常使用：本分支已实现。
+- 默认不执行 supersede / crystallize：本分支已验证默认只读。
+- 输出足够解释“为什么建议做”：本分支已输出 `reason` 与 `suggested_command`。
+- report 可被 agent 读取，也可被人审阅：JSON 为真源，Markdown 为同源人读视图。
 
 ### 风险
 
@@ -329,7 +345,7 @@ CLI 已能查看 health / doctor，但非开发者或长期运行时需要一个
 - Claim / Source / LlmClaimDraft 都有 tags：本分支已实现。
 - `TagConfig.deprecated_tags` 和 `max_new_tags_per_ingest` 被真实消费：本分支已实现。
 - 旧数据兼容，不需要迁移命令：本分支已实现。
-- 当前状态：local focused tests passing，integration review 与全量 fmt/test/clippy 已通过，等待 draft PR 和 CI。
+- 当前状态：PR #13 已合入 main。
 
 ### 风险
 
@@ -439,11 +455,11 @@ LongMemEval 是长期对话记忆评测，覆盖 information extraction、multi-
 
 ## 推荐执行顺序
 
-1. J9 Metrics Core。
-2. J12 Tag Governance 可与 J9 并行。
-3. J10 Dashboard 等 J9 输出稳定后做。
-4. J11 Strategy Suggestions 等 J9 基础指标稳定后做；若依赖 tags 信号，则等 J12 合入。
-5. J13 LongMemEval Auto Benchmark 在 J9 report 口径稳定后启动；可先独立做 retrieval-only。
+1. J9 Metrics Core：已合入。
+2. J12 Tag Governance：已合入。
+3. J10 Dashboard：已合入。
+4. J11 Strategy Suggestions：本分支已实现，待 PR/CI/merge。
+5. J13 LongMemEval Auto Benchmark：M12 merge 后启动；可独立做 retrieval-only。
 
 ## Batch-3 完成标准
 

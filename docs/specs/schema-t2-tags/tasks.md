@@ -2,8 +2,8 @@
 
 ## Checklist
 
-- [ ] Requirements approved
-- [ ] Design approved
+- [x] Requirements approved
+- [x] Design approved
 - [x] Plan approved
 - [x] Branch created
 - [x] Subagent tasks assigned
@@ -12,11 +12,11 @@
 - [x] Tests added/updated
 - [x] Docs updated
 - [x] Integration review complete
-- [ ] PR opened
-- [ ] Codex/GitHub review addressed
-- [ ] CI green
-- [ ] Merged
-- [ ] Roadmap/PRD updated
+- [x] PR opened
+- [x] Codex/GitHub review addressed
+- [x] CI green
+- [x] Merged
+- [x] Roadmap/PRD updated
 
 ## Subtasks
 
@@ -25,7 +25,7 @@
 | Add model tags | Subagent | `crates/wiki-core/` | Done |
 | Add normalization/validation | Subagent | `crates/wiki-core/`, `crates/wiki-kernel/` | Done |
 | Wire ingest paths | Subagent | `crates/wiki-kernel/`, `crates/wiki-cli/` | Done |
-| Tests/docs | Subagent | tests, docs | Integration gate passed; draft PR/CI pending |
+| Tests/docs | Subagent | tests, docs | Done |
 
 ## Review Notes
 
@@ -34,7 +34,7 @@
 - Tag policy now normalizes tags, rejects `deprecated_tags`, and errors when `max_new_tags_per_ingest` is exceeded.
 - Kernel adds `ingest_raw_with_tags` and `file_claim_with_tags`; old APIs still write empty tags.
 - CLI/MCP/batch paths preserve source tags and claim tags, with preflight validation to avoid partial writes.
-- Focused core/kernel/CLI tests pass. Integration review and workspace fmt/test/clippy pass. Draft PR and CI remain pending.
+- Focused core/kernel/CLI tests pass. Integration review and workspace fmt/test/clippy pass. PR #13 is merged into main.
 
 ## Verification
 

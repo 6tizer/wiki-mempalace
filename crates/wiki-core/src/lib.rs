@@ -25,6 +25,7 @@ pub mod schema;
 pub mod scope_policy;
 pub mod search;
 pub mod search_ports;
+pub mod strategy;
 pub mod tags;
 
 pub use artifact::RawArtifact;
@@ -64,6 +65,7 @@ pub use schema::{
 pub use scope_policy::document_visible_to_viewer;
 pub use search::{reciprocal_rank_fusion, CompositeSearchPorts, FusionConfig, RankedDoc};
 pub use search_ports::SearchPorts;
+pub use strategy::{StrategyExecutionPolicy, StrategyReport, StrategySeverity, StrategySuggestion};
 pub use tags::{
     normalize_and_validate_tag_groups, normalize_and_validate_tags, normalize_tags,
     validate_tags_against_schema, TagPolicyError,

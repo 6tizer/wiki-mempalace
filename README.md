@@ -29,7 +29,7 @@ wiki-mempalace/
 │   └── backup.sh              # Dogfood 备份脚本（D4）
 ├── docs/
 │   ├── README.md              # 文档入口：当前事实 / 活跃计划 / 历史归档
-│   ├── roadmap.md             # 当前路线图（M1-M9 完成，M10-M12 待做）
+│   ├── roadmap.md             # 当前路线图（M12 / LongMemEval 为主要剩余项）
 │   ├── dev-workflow.md        # PRD/spec/branch/subagent/review/PR/CI 固定开发流程
 │   ├── LESSONS.md             # 每轮合并后的项目级经验
 │   ├── automation-issue-batch-3.md # 当前 batch-3 任务规划

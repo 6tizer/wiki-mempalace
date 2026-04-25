@@ -10,12 +10,14 @@ use wiki_core::{
     CompositeSearchPorts, Confidence, DomainSchema, Entity, EntityId, EntityKind, EntryStatus,
     EntryType, FixAction, FixActionType, FixPatch, FusionConfig, GapFinding, GapSeverity,
     LlmIngestPlanV1, MemoryTier, PageContract, PageId, QueryContext, RelationKind, Scope,
-    SessionCrystallizationInput, SourceId, TypedEdge, WikiMetricsReport, WikiPage,
+    SessionCrystallizationInput, SourceId, StrategyExecutionPolicy, StrategyReport,
+    StrategySeverity, TypedEdge, WikiEvent, WikiMetricsReport, WikiPage,
 };
 use wiki_kernel::{
     collect_wiki_metrics, finalize_consumed_page, format_claim_doc_id, initial_status_for,
-    map_findings_to_fixes, merge_graph_rankings, write_lint_report, write_projection,
-    InMemorySearchPorts, InMemoryStore, LlmWikiEngine, NoopWikiHook, SearchPorts,
+    map_findings_to_fixes, merge_graph_rankings, run_strategy_scan, write_lint_report,
+    write_projection, InMemorySearchPorts, InMemoryStore, LlmWikiEngine, NoopWikiHook, SearchPorts,
+    StrategyScanOptions,
 };
 use wiki_mempalace_bridge::{
     consume_outbox_ndjson_with_resolver_and_stats, LiveMempalaceSink, MempalaceError,
@@ -249,6 +251,25 @@ enum Cmd {
         /// Low coverage threshold used by gap scan.
         #[arg(long, default_value_t = 2)]
         low_coverage_threshold: usize,
+    },
+    /// Produce read-only strategy suggestions.
+    Suggest {
+        /// Consumer tag used for outbox ack / lag metrics.
+        #[arg(long, default_value = DEFAULT_MEMPALACE_CONSUMER_TAG)]
+        consumer_tag: String,
+        /// Low coverage threshold used by gap scan.
+        #[arg(long, default_value_t = 2)]
+        low_coverage_threshold: usize,
+        /// Print pretty JSON instead of text.
+        #[arg(long, default_value_t = false)]
+        json: bool,
+        /// Also write timestamped JSON + Markdown reports to this directory.
+        #[arg(
+            long,
+            num_args = 0..=1,
+            default_missing_value = "wiki/reports/suggestions"
+        )]
+        report_dir: Option<PathBuf>,
     },
     LlmSmoke {
         #[arg(long, default_value = "llm-config.toml")]
@@ -708,6 +729,131 @@ fn render_metrics_markdown(report: &WikiMetricsReport) -> String {
         page_status_rows,
         entry_type_rows,
     )
+}
+
+fn strategy_severity_name(severity: StrategySeverity) -> &'static str {
+    match severity {
+        StrategySeverity::Low => "low",
+        StrategySeverity::Medium => "medium",
+        StrategySeverity::High => "high",
+    }
+}
+
+fn strategy_execution_policy_name(policy: StrategyExecutionPolicy) -> &'static str {
+    match policy {
+        StrategyExecutionPolicy::AutoSafe => "auto_safe",
+        StrategyExecutionPolicy::AgentReview => "agent_review",
+        StrategyExecutionPolicy::HumanRequired => "human_required",
+    }
+}
+
+fn render_strategy_report_text(report: &StrategyReport) -> String {
+    let generated_at = report
+        .generated_at
+        .map(format_automation_time)
+        .unwrap_or_else(|| "unknown".to_string());
+    let viewer_scope = report.viewer_scope.as_deref().unwrap_or("none");
+    let mut out = format!(
+        "strategy suggestions: report_id={} generated_at={} viewer_scope={} suggestions={}\n",
+        report.report_id,
+        generated_at,
+        viewer_scope,
+        report.suggestions.len()
+    );
+    for suggestion in &report.suggestions {
+        out.push_str(&format!(
+            "- id={} code={} severity={} subject={} execution_policy={}\n  reason={}\n",
+            suggestion.suggestion_id,
+            suggestion.code,
+            strategy_severity_name(suggestion.severity),
+            suggestion.subject.as_deref().unwrap_or("none"),
+            strategy_execution_policy_name(suggestion.execution_policy),
+            suggestion.reason
+        ));
+        if let Some(command) = &suggestion.suggested_command {
+            out.push_str(&format!("  suggested_command={command}\n"));
+        }
+    }
+    out
+}
+
+fn render_strategy_report_markdown(report: &StrategyReport, sibling_json: &str) -> String {
+    let generated_at = report
+        .generated_at
+        .map(format_automation_time)
+        .unwrap_or_else(|| "unknown".to_string());
+    let viewer_scope = report.viewer_scope.as_deref().unwrap_or("none");
+    let mut out = format!(
+        concat!(
+            "# M12 Strategy Suggestions\n\n",
+            "- report_id: {}\n",
+            "- generated_at: {}\n",
+            "- viewer_scope: {}\n",
+            "- suggestion_count: {}\n",
+            "- source_of_truth: {}\n\n",
+            "> Sibling JSON `{}` is the source of truth. This Markdown is rendered from the same StrategyReport.\n\n",
+            "## Suggestions\n\n",
+        ),
+        report.report_id,
+        generated_at,
+        viewer_scope,
+        report.suggestions.len(),
+        sibling_json,
+        sibling_json
+    );
+    if report.suggestions.is_empty() {
+        out.push_str("No suggestions.\n");
+        return out;
+    }
+    for suggestion in &report.suggestions {
+        out.push_str(&format!(
+            concat!(
+                "### {}\n\n",
+                "- code: {}\n",
+                "- severity: {}\n",
+                "- subject: {}\n",
+                "- execution_policy: {}\n",
+                "- reason: {}\n",
+            ),
+            suggestion.suggestion_id,
+            suggestion.code,
+            strategy_severity_name(suggestion.severity),
+            suggestion.subject.as_deref().unwrap_or("none"),
+            strategy_execution_policy_name(suggestion.execution_policy),
+            suggestion.reason
+        ));
+        if let Some(command) = &suggestion.suggested_command {
+            out.push_str(&format!("- suggested_command: `{command}`\n"));
+        }
+        out.push('\n');
+    }
+    out
+}
+
+fn strategy_report_prefix(generated_at: OffsetDateTime) -> String {
+    format!(
+        "{:04}-{:02}-{:02}T{:02}{:02}{:02}.{:09}Z-m12-suggest",
+        generated_at.year(),
+        generated_at.month() as u8,
+        generated_at.day(),
+        generated_at.hour(),
+        generated_at.minute(),
+        generated_at.second(),
+        generated_at.nanosecond()
+    )
+}
+
+fn parse_outbox_events(ndjson: &str) -> Result<Vec<WikiEvent>, Box<dyn std::error::Error>> {
+    let mut events = Vec::new();
+    for (idx, line) in ndjson.lines().enumerate() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let event = serde_json::from_str::<WikiEvent>(line)
+            .map_err(|err| format!("outbox event JSON parse error at line {}: {err}", idx + 1))?;
+        events.push(event);
+    }
+    Ok(events)
 }
 
 fn format_duration_compact(duration: Duration) -> String {
@@ -1278,7 +1424,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     if !matches!(
         &cli.cmd,
-        Cmd::Mcp { .. } | Cmd::SchemaValidate { .. } | Cmd::Metrics { .. } | Cmd::Dashboard { .. }
+        Cmd::Mcp { .. }
+            | Cmd::SchemaValidate { .. }
+            | Cmd::Metrics { .. }
+            | Cmd::Dashboard { .. }
+            | Cmd::Suggest { .. }
     ) {
         banner::print_startup_banner();
     }
@@ -1975,6 +2125,63 @@ fn run_with_engine(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             }
             std::fs::write(&output, html)?;
             println!("dashboard_file={}", output.display());
+        }
+        Cmd::Suggest {
+            consumer_tag,
+            low_coverage_threshold,
+            json,
+            report_dir,
+        } => {
+            let now = OffsetDateTime::now_utc();
+            let outbox_stats = repo.get_outbox_stats()?;
+            let outbox_progress = repo.get_outbox_consumer_progress(&consumer_tag)?;
+            let metrics = collect_wiki_metrics(
+                &eng.store,
+                &schema,
+                Some(&viewer),
+                Some(&outbox_stats),
+                Some(&outbox_progress),
+                low_coverage_threshold,
+                now,
+            );
+            let query_events = parse_outbox_events(&repo.export_outbox_ndjson()?)?;
+            let report_id = strategy_report_prefix(now);
+            let report = run_strategy_scan(
+                &eng.store,
+                &schema,
+                &metrics,
+                &query_events,
+                StrategyScanOptions {
+                    viewer_scope: Some(&viewer),
+                    low_coverage_threshold,
+                    generated_at: now,
+                    report_id,
+                },
+            );
+
+            if let Some(dir) = report_dir {
+                std::fs::create_dir_all(&dir)?;
+                let json_name = format!("{}.json", report.report_id);
+                let markdown_name = format!("{}.md", report.report_id);
+                let json_path = dir.join(&json_name);
+                let markdown_path = dir.join(&markdown_name);
+                std::fs::write(&json_path, serde_json::to_string_pretty(&report)?)?;
+                std::fs::write(
+                    &markdown_path,
+                    render_strategy_report_markdown(&report, &json_name),
+                )?;
+                if json {
+                    println!("{}", serde_json::to_string_pretty(&report)?);
+                } else {
+                    print!("{}", render_strategy_report_text(&report));
+                    println!("json_report_file={}", json_path.display());
+                    println!("markdown_report_file={}", markdown_path.display());
+                }
+            } else if json {
+                println!("{}", serde_json::to_string_pretty(&report)?);
+            } else {
+                print!("{}", render_strategy_report_text(&report));
+            }
         }
         Cmd::LlmSmoke { config, prompt } => {
             let cfg = llm::load_llm_config(&config)?;

@@ -27,10 +27,10 @@ Out:
 
 | Module | Goal | Owner area | Status |
 | --- | --- | --- | --- |
-| J9 Metrics Core | Unified metrics model, CLI, reports | `wiki-core`, `wiki-kernel`, `wiki-cli` | Draft PR #12 / CI green |
-| J10 Dashboard | Static read-only dashboard/report | `wiki-cli`, docs | Draft PR #14 / CI green |
-| J11 Strategy Suggestions | Explainable suggestions, no auto execution | `wiki-core`, `wiki-kernel`, `wiki-cli` | Planned |
-| J12 Tag Governance | Tags model + schema policy consumption | `wiki-core`, `wiki-kernel`, `wiki-cli` | Implemented locally / integration gate passed / draft PR pending |
+| J9 Metrics Core | Unified metrics model, CLI, reports | `wiki-core`, `wiki-kernel`, `wiki-cli` | Merged PR #12 |
+| J10 Dashboard | Static read-only dashboard/report | `wiki-cli`, docs | Merged PR #14 |
+| J11 Strategy Suggestions | Explainable suggestions, no auto execution | `wiki-core`, `wiki-kernel`, `wiki-cli` | Implemented in branch |
+| J12 Tag Governance | Tags model + schema policy consumption | `wiki-core`, `wiki-kernel`, `wiki-cli` | Merged PR #13 |
 | J13 LongMemEval Auto Benchmark | Scheduled retrieval benchmark artifacts | `.github/workflows`, `scripts`, docs | Planned |
 
 ## Acceptance
@@ -63,4 +63,4 @@ Out:
 - [ ] Modules implemented
 - [ ] CI green
 - [ ] Merged
-- [x] Roadmap updated for J12 local status
+- [x] Roadmap updated for completed M10/M11/J12 and in-branch M12 status

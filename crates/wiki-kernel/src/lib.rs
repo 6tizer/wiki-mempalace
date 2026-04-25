@@ -8,6 +8,7 @@ mod hooks;
 mod memory;
 mod metrics;
 mod search_ports;
+mod strategy;
 mod wiki_writer;
 
 pub mod page_contract;
@@ -25,4 +26,5 @@ pub use search_ports::{
     format_claim_doc_id, format_entity_doc_id, format_page_doc_id, merge_graph_rankings,
     EmptySearchPorts, InMemorySearchPorts, SearchPorts,
 };
+pub use strategy::{run_strategy_scan, StrategyScanOptions};
 pub use wiki_writer::{write_lint_report, write_projection, ProjectionStats};

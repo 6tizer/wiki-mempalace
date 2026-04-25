@@ -15,18 +15,16 @@
 | M7 Fixer 工作流 | ✅ 已完成 | `wiki-cli fix`、`FixAction`、lint/gap finding 映射、低风险 auto fix |
 | M8 消费链产品化 | ✅ 已完成 | `PageContract`、`finalize_consumed_page`、`qa`/`synthesis`、统一 entry_type/status 骨架 |
 | M9 查询融合增强 | ✅ 已完成 | `query/explain --palace-db`、`MempalaceSearchPorts`、`CompositeSearchPorts`、scope 过滤与去重 |
-| M10 指标与评估 | ✅ Draft PR #12 / CI green | `wiki-cli metrics` 已实现；支持 `--consumer-tag`、`--low-coverage-threshold`、`--json`、`--report <PATH>`；覆盖 content/lint/gaps/outbox/lifecycle 5 组指标；core/kernel/cli metrics 测试通过；GitHub `quick` CI 已通过 |
-| M11 运维控制台 | ✅ Draft PR #14 / CI green | `wiki-cli dashboard` 已实现；默认输出 `wiki/reports/dashboard.html`，支持 `--output <PATH>`、`--consumer-tag <TAG>`、`--low-coverage-threshold <N>`；生成静态自包含 HTML，无 web server / 外部 CSS/JS；不依赖 palace DB；默认只读；GitHub `quick` CI 已通过 |
-| M12 策略层增强 | ⏳ 未完成 | 还没有自动 supersede/crystallize 建议层；当前只有规则维护、lint/gap/fix 基础链路 |
-| Schema T2 tag governance | 🟡 本分支已实现 / integration gate 通过 | `Claim/Source/LlmClaimDraft` tags、tag normalize/validate、deprecated_tags 拦截、max_new_tags_per_ingest 限流、CLI/MCP/batch ingest tags 已实现；workspace fmt/test/clippy 已通过，待 draft PR 和 CI |
+| M10 指标与评估 | ✅ 已合入 | PR #12 已 merge；`wiki-cli metrics` 已实现；支持 `--consumer-tag`、`--low-coverage-threshold`、`--json`、`--report <PATH>`；覆盖 content/lint/gaps/outbox/lifecycle 5 组指标 |
+| M11 运维控制台 | ✅ 已合入 | PR #14 已 merge；`wiki-cli dashboard` 已实现；默认输出 `wiki/reports/dashboard.html`，支持 `--output <PATH>`、`--consumer-tag <TAG>`、`--low-coverage-threshold <N>`；生成静态自包含 HTML；默认只读 |
+| M12 策略层增强 | 🚧 本分支已实现 | `wiki-cli suggest` 已实现；支持文本、`--json`、`--report-dir [PATH]`；timestamped JSON 为真源、Markdown 为同源人读视图；默认只读，不执行 supersede/crystallize/fix 写入 |
+| Schema T2 tag governance | ✅ 已合入 | PR #13 已 merge；`Claim/Source/LlmClaimDraft` tags、tag normalize/validate、deprecated_tags 拦截、max_new_tags_per_ingest 限流、CLI/MCP/batch ingest tags 已实现 |
 
 ## 当前下一阶段
 
-1. M10 指标与评估：Draft PR #12 已开且 CI green，等待 review / merge。
-2. M11 运维控制台：Draft PR #14 已开且 CI green，等待 review / merge。
-3. M12 策略层增强：基于 lint/gap/query history 输出自动 supersede/crystallize 候选，不直接执行高风险写入。
-4. Schema T2 tag governance：本分支已落地 tags 模型、deprecated_tags 拦截、max_new_tags_per_ingest 限流和 CLI/MCP/batch ingest 接线，integration gate 已通过，等待 draft PR / CI。
-5. LongMemEval auto benchmark：nightly / weekly 非阻塞自动评测，artifact 报告，不进 PR 必跑。
+1. M12 策略层增强：本分支已实现，下一步开 PR、跑 CI、merge 后回填 Lessons。
+2. LongMemEval auto benchmark：nightly / weekly 非阻塞自动评测，artifact 报告，不进 PR 必跑。
+3. M10/M11/Schema T2 已合入；后续只做消费对齐或回归修复，不重复开发。
 
 执行计划见 [automation-issue-batch-3.md](automation-issue-batch-3.md)。开发流程见
 [dev-workflow.md](dev-workflow.md)，batch-3 PRD 见 [prd/batch-3.md](prd/batch-3.md)。
