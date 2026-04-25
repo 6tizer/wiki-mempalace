@@ -15,9 +15,9 @@
 - [x] Tests added/updated
 - [x] Docs updated
 - [x] Integration review complete
-- [ ] PR opened
+- [x] PR opened
 - [ ] Codex/GitHub review addressed
-- [ ] CI green
+- [x] CI green
 - [ ] Merged
 - [ ] Roadmap/PRD updated
 

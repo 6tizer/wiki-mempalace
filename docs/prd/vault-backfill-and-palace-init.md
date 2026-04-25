@@ -156,6 +156,7 @@ Out:
 - [x] Modules implemented
 - [x] Focused reviews complete
 - [x] Integration review complete
-- [ ] CI green
+- [x] Draft PR opened
+- [x] CI green
 - [ ] Merged
 - [ ] Roadmap and lessons updated
