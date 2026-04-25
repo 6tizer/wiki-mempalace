@@ -20,13 +20,13 @@
 | M12 策略层增强 | ✅ 已合入 | PR #16 已 merge；`wiki-cli suggest` 已实现；支持文本、`--json`、`--report-dir [PATH]`；timestamped JSON 为真源、Markdown 为同源人读视图；默认只读，不执行 supersede/crystallize/fix 写入 |
 | Schema T2 tag governance | ✅ 已合入 | PR #13 已 merge；`Claim/Source/LlmClaimDraft` tags、tag normalize/validate、deprecated_tags 拦截、max_new_tags_per_ingest 限流、CLI/MCP/batch ingest tags 已实现 |
 | J13 LongMemEval auto benchmark | ✅ 已合入 | PR #19 已 merge；`rust-mempalace` 本地检索基线 runner、fetch/cache script、nightly/weekly workflow、30 天 artifact、fixture tests、review handoff 已实现；不进 PR 必跑 CI |
-| Vault Backfill + Palace Init | ✅ 已合入 | PR #23 已 merge；`vault-audit`、`vault-backfill`、`palace-init`、MCP `shared:wiki` runtime defaults 已实现；支持历史 vault 审计、回填、`palace.db` 初始化与验证 |
+| Vault Backfill + Palace Init | ✅ 已合入并已跑生产初始化 | PR #23 已 merge；`vault-audit`、`vault-backfill`、`palace-init`、MCP `shared:wiki` runtime defaults 已实现；2026-04-25 已对 `/Users/mac-mini/Documents/wiki` 完成生产 backfill + palace init |
 | C16A Atomic snapshot + outbox | ✅ 已合入 | PR #25 已 merge；新增 `save_snapshot_and_append_outbox` 单事务持久化路径；CLI/MCP/backfill 写路径已切到原子提交 |
 | C16B Embedding ANN index | 💤 未开始 | 仍保留在 [embedding-ann-index](specs/embedding-ann-index/)；可单独规划，不和存储一致性混在一个 PR |
 
 ## 当前下一阶段
 
-1. 运行生产 vault 的 B1 audit；B5 orphan governance 只基于这份新报告制定治理计划，不直接清理 vault。
+1. B5 orphan governance：基于 2026-04-25 生产 `vault-audit` 新报告制定治理计划，不直接清理 vault。
 2. C16B Embedding ANN index 如需推进，单独从 PRD/spec 开新分支。
 3. 观察 J13 scheduled artifacts：先积累至少 7 份 nightly report 和 1 份 weekly full report，确认 artifact 稳定和 full run 真实耗时。
 4. J14 Semantic Fusion Benchmark：只有在 J13 报告显示同义表达/词面不匹配是主要错因，且运行预算明确后，再评估 `wiki-cli --vectors --palace-db` 语义融合 lane。
