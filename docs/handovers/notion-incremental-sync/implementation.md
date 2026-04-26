@@ -3,7 +3,7 @@
 **Feature**: notion-incremental-sync  
 **Branch**: `cursor/notion-incremental-sync-3354`  
 **Date**: 2026-04-26  
-**Status**: PR 待 review
+**Status**: 已闭环（PR 已合并 + 后续回填）
 
 ---
 
@@ -74,7 +74,8 @@ fn insert_notion_page_index(notion_page_id: &str, db_id: &str, source_id: &Sourc
 ## 已知限制
 
 - **内容更新**：已存在 `notion_page_id` 的 source 在后续编辑时只 skip，不更新内容。需独立 PRD 实现 update 语义。
-- **automation job 速率限制不可配置**：`run_notion_sync_job` 传 hardcoded `request_delay_ms=350`，无法通过环境变量覆盖。P3 后续可加 `NOTION_SYNC_DELAY_MS` 环境变量。
+- **automation job 速率限制**：`run_notion_sync_job` 已修复为优先读取 `NOTION_SYNC_DELAY_MS`，未设置时回退到 350ms。  
+  该配置不再是 hardcoded（见后续回填 PR）。
 - **Writeback 默认关闭**：`--writeback-notion` 实现完整但默认 false；首版与现有流程行为一致。
 
 ---

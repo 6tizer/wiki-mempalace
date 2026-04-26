@@ -507,6 +507,7 @@ struct AutomationJobSpec {
     job: AutomationJob,
     in_daily: bool,
     requires_network: bool,
+    short_circuit: bool,
     description: &'static str,
 }
 
@@ -515,36 +516,42 @@ const AUTOMATION_JOB_SPECS: &[AutomationJobSpec] = &[
         job: AutomationJob::BatchIngest,
         in_daily: true,
         requires_network: true,
+        short_circuit: true,
         description: "Compile vault sources with compiled_to_wiki=false into wiki.db.",
     },
     AutomationJobSpec {
         job: AutomationJob::Lint,
         in_daily: true,
         requires_network: false,
+        short_circuit: true,
         description: "Run lint and write the latest report / projection outputs.",
     },
     AutomationJobSpec {
         job: AutomationJob::Maintenance,
         in_daily: true,
         requires_network: false,
+        short_circuit: true,
         description: "Apply decay, lint, and auto-promote qualified claims/pages.",
     },
     AutomationJobSpec {
         job: AutomationJob::ConsumeToMempalace,
         in_daily: true,
         requires_network: false,
+        short_circuit: true,
         description: "Replay outbox increments into palace.db and ack consumer progress.",
     },
     AutomationJobSpec {
         job: AutomationJob::LlmSmoke,
         in_daily: false,
         requires_network: true,
+        short_circuit: true,
         description: "Check the configured LLM endpoint with a minimal chat completion.",
     },
     AutomationJobSpec {
         job: AutomationJob::NotionSync,
         in_daily: true,
         requires_network: true,
+        short_circuit: false,
         description: "Incrementally sync Notion databases (X书签 and 微信文章) into wiki.db.",
     },
 ];
@@ -1270,12 +1277,33 @@ where
         return Ok(());
     }
 
+    let mut first_failure: Option<String> = None;
     for job in jobs {
         writeln!(out, "automation: running {}", automation_job_name(*job))?;
-        run_job(*job)?;
+        if let Err(err) = run_job(*job) {
+            let spec = automation_job_spec(*job);
+            let msg = err.to_string();
+            writeln!(
+                out,
+                "automation: failed {} with {}",
+                automation_job_name(*job),
+                msg
+            )?;
+            if spec.short_circuit {
+                return Err(err);
+            }
+            if first_failure.is_none() {
+                first_failure = Some(msg);
+            }
+            continue;
+        }
+
         writeln!(out, "automation: finished {}", automation_job_name(*job))?;
     }
 
+    if let Some(msg) = first_failure {
+        return Err(Box::new(std::io::Error::other(msg)));
+    }
     Ok(())
 }
 
@@ -4311,7 +4339,7 @@ fn dispatch_automation_job(
             println!("{out}");
             Ok(())
         }
-        AutomationJob::NotionSync => run_notion_sync_job(eng, repo, viewer, false, 350, false),
+        AutomationJob::NotionSync => run_notion_sync_job(eng, repo, viewer, false, 0, false),
     }
 }
 
@@ -4423,6 +4451,11 @@ fn run_notion_sync_job(
     request_delay_ms: u64,
     verbose: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    let request_delay_ms = if request_delay_ms > 0 {
+        request_delay_ms
+    } else {
+        env_or("NOTION_SYNC_DELAY_MS", 350)
+    };
     run_notion_sync_cmd(
         eng,
         repo,
