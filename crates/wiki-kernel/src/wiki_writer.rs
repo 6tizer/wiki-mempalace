@@ -51,6 +51,12 @@ pub fn write_projection(
 }
 
 fn cleanup_stale_managed_pages(pages_dir: &Path, store: &InMemoryStore) -> io::Result<()> {
+    // Only files with a valid UUID `id:` frontmatter that is NOT in the current in-memory store
+    // are removed. Files without an `id:` field or with an unparseable value are preserved.
+    // NOTE: Any markdown file placed manually under `pages/` that has an `id: <uuid>` frontmatter
+    // with a UUID not present in the engine store will be treated as stale and deleted.
+    // To preserve hand-authored files alongside engine-managed pages, omit the `id:` frontmatter
+    // or use a non-UUID value.
     let current_page_ids: HashSet<Uuid> = store.pages.keys().map(|id| id.0).collect();
     for path in markdown_files_under(pages_dir)? {
         let content = match fs::read_to_string(&path) {

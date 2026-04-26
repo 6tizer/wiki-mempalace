@@ -701,8 +701,15 @@ impl WikiRepository for SqliteRepository {
     }
 
     fn save_snapshot(&self, snapshot: &StorageSnapshot) -> Result<(), StorageError> {
-        self.save_snapshot_and_append_outbox_inner(snapshot, &[])?;
-        Ok(())
+        self.conn.execute_batch("BEGIN IMMEDIATE")?;
+        let result = self.save_snapshot_and_append_outbox_inner(snapshot, &[]);
+        match result {
+            Ok(_) => self.conn.execute_batch("COMMIT")?,
+            Err(_) => {
+                let _ = self.conn.execute_batch("ROLLBACK");
+            }
+        }
+        result.map(|_| ())
     }
 
     fn append_outbox(&self, event: &WikiEvent) -> Result<(), StorageError> {

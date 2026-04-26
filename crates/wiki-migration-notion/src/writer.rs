@@ -69,6 +69,8 @@ pub struct WriteStats {
     pub external_rewritten_to_source: usize,
     pub pseudo_urls_cleaned: usize,
     pub filename_collisions_resolved: usize,
+    /// 两个或更多页面共享同一标准化 `文章链接` URL 时的计数（每组额外重复计一次）。
+    pub duplicate_urls: usize,
 }
 
 /// 入口
@@ -88,8 +90,8 @@ pub fn write_all(pages: &[RawPage], opts: &WriteOptions) -> Result<WriteStats> {
     // --- 2. 预计算：被引用过的 source UUID 集合（用于 orphan 标记） ---
     let referenced_sources = compute_referenced_sources(pages, &locations);
 
-    // --- 3. 建 URL → location 索引（用于外部链接改写） ---
-    let mut url_index: HashMap<String, &PageLocation> = HashMap::new();
+    // --- 3. 建 URL → location 索引（用于外部链接改写）；检测重复 URL ---
+    let mut url_multi: HashMap<String, Vec<&PageLocation>> = HashMap::new();
     for p in pages {
         if !matches!(p.library, LibraryKind::XBookmark | LibraryKind::WeChat) {
             continue;
@@ -98,14 +100,22 @@ pub fn write_all(pages: &[RawPage], opts: &WriteOptions) -> Result<WriteStats> {
             let norm = normalize_url(url);
             if !norm.is_empty() {
                 if let Some(loc) = locations.get(&p.notion_uuid) {
-                    url_index.insert(norm, loc);
+                    url_multi.entry(norm).or_default().push(loc);
                 }
             }
         }
     }
+    // url_index: 每个 URL 取第一条（保留原有链接改写语义）
+    let url_index: HashMap<String, &PageLocation> =
+        url_multi.iter().map(|(k, v)| (k.clone(), v[0])).collect();
 
     // --- 4. 逐条写文件 ---
     let mut stats = WriteStats::default();
+    for v in url_multi.values() {
+        if v.len() > 1 {
+            stats.duplicate_urls += v.len() - 1;
+        }
+    }
     for p in pages {
         let Some(loc) = locations.get(&p.notion_uuid) else {
             continue;

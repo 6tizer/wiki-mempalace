@@ -106,6 +106,25 @@ pub fn migrate_schema(conn: &Connection) -> Result<()> {
             [],
         )?;
     }
+
+    // Add hits column to benchmark_runs if missing (existing DBs have hits = 0 for old rows)
+    let mut bstmt = conn.prepare("PRAGMA table_info(benchmark_runs)")?;
+    let mut has_hits = false;
+    let mut brows = bstmt.query([])?;
+    while let Some(r) = brows.next()? {
+        let name: String = r.get(1)?;
+        if name == "hits" {
+            has_hits = true;
+            break;
+        }
+    }
+    if !has_hits {
+        conn.execute(
+            "ALTER TABLE benchmark_runs ADD COLUMN hits INTEGER NOT NULL DEFAULT 0",
+            [],
+        )?;
+    }
+
     Ok(())
 }
 

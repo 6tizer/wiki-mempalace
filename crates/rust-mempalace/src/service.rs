@@ -887,8 +887,8 @@ pub fn benchmark_run(
         throughput_per_sec,
     };
     conn.execute(
-        "INSERT INTO benchmark_runs(mode, samples, top_k, recall, latency_ms, throughput_per_sec, created_at)
-         VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        "INSERT INTO benchmark_runs(mode, samples, top_k, recall, latency_ms, throughput_per_sec, hits, created_at)
+         VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
         params![
             out.mode,
             out.total as i64,
@@ -896,6 +896,7 @@ pub fn benchmark_run(
             out.recall,
             out.latency_ms as i64,
             out.throughput_per_sec,
+            out.hits as i64,
             Utc::now().to_rfc3339()
         ],
     )?;
@@ -915,7 +916,7 @@ pub struct BenchmarkResult {
 pub fn latest_benchmark(conn: &Connection) -> Result<Option<BenchmarkResult>> {
     let row = conn
         .query_row(
-            "SELECT mode, samples, top_k, recall, latency_ms, throughput_per_sec FROM benchmark_runs ORDER BY id DESC LIMIT 1",
+            "SELECT mode, samples, top_k, recall, latency_ms, throughput_per_sec, hits FROM benchmark_runs ORDER BY id DESC LIMIT 1",
             [],
             |r| {
                 Ok(BenchmarkResult {
@@ -925,7 +926,7 @@ pub fn latest_benchmark(conn: &Connection) -> Result<Option<BenchmarkResult>> {
                     recall: r.get(3)?,
                     latency_ms: r.get::<_, i64>(4)? as u64,
                     throughput_per_sec: r.get(5)?,
-                    hits: 0,
+                    hits: r.get::<_, i64>(6)? as usize,
                 })
             },
         )

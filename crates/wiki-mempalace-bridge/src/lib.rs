@@ -205,10 +205,13 @@ pub fn consume_outbox_ndjson_with_stats<S: MempalaceWikiSink>(
 /// 带 resolver 的 outbox 消费：
 ///
 /// - `ClaimUpserted(id)` → 查 claim → `sink.scope_filter` 过滤 → `on_claim_upserted(&claim)`；
-///   resolver 返回 `None` 时回退到 `on_claim_event(id)`，并**不**计入 count（视为悬挂事件）。
-/// - `SourceIngested(id)` → 查 source scope → scope filter 过滤 → `on_source_ingested(id)`。
-/// - `PageWritten(id)` → 查 page → scope filter 过滤 → `on_page_written(&page)`。
-/// - `ClaimSuperseded { old, new }` → 如能解析 new 的 scope，经 filter 后再 `on_claim_superseded`。
+///   resolver 返回 `None` 时记为 `unresolved`，不调用 sink。
+/// - `SourceIngested(id)` → 查 source scope → scope filter 过滤 → `on_source_ingested(id)`；
+///   resolver 返回 `None` 时记为 `unresolved`（不是 filtered），不调用 sink。
+/// - `PageWritten(id)` → 查 page → scope filter 过滤 → `on_page_written(&page)`；
+///   resolver 返回 `None` 时记为 `unresolved`。
+/// - `ClaimSuperseded { old, new }` → 如能解析 new 的 scope，经 filter 后再 `on_claim_superseded`；
+///   resolver 返回 `None` 时记为 `unresolved`。
 ///
 /// 返回值为**被实际派发**（即 sink 接受）的事件数。过滤掉的事件不计入。
 pub fn consume_outbox_ndjson_with_resolver<S, R>(
@@ -290,18 +293,23 @@ where
                 }
             },
             WikiEvent::SourceIngested { source_id, .. } => {
-                let allow = match resolver {
+                match resolver {
                     Some(r) => match r.source_scope(source_id) {
-                        Some(scope) => sink.scope_filter(&scope),
-                        None => false,
+                        Some(scope) => {
+                            if sink.scope_filter(&scope) {
+                                sink.on_source_ingested(source_id)?;
+                                stats.record_dispatched(event_name);
+                            } else {
+                                stats.record_filtered(event_name);
+                            }
+                        }
+                        // scope を解決できない場合は unresolved としてカウント（filtered ではない）
+                        None => stats.record_unresolved(event_name),
                     },
-                    None => true,
-                };
-                if allow {
-                    sink.on_source_ingested(source_id)?;
-                    stats.record_dispatched(event_name);
-                } else {
-                    stats.record_filtered(event_name);
+                    None => {
+                        sink.on_source_ingested(source_id)?;
+                        stats.record_dispatched(event_name);
+                    }
                 }
             }
             WikiEvent::PageWritten { page_id, .. } => {
@@ -589,6 +597,72 @@ mod tests {
         assert_eq!(stats.by_event["PageWritten"].dispatched, 1);
         assert_eq!(stats.by_event["PageWritten"].filtered, 1);
         assert_eq!(*sink.page_ids.lock().unwrap(), vec![allowed_id]);
+    }
+
+    #[test]
+    fn source_ingested_unresolved_scope_counted_as_unresolved() {
+        let sink = CountingSink::default();
+        let sid = SourceId(uuid::Uuid::new_v4());
+        let resolver = InMemResolver::default(); // source not registered → scope returns None
+        let line = serde_json::to_string(&WikiEvent::SourceIngested {
+            source_id: sid,
+            redacted: false,
+            at: time::OffsetDateTime::now_utc(),
+        })
+        .unwrap();
+
+        let stats = consume_outbox_ndjson_with_resolver_and_stats(&sink, &resolver, &line).unwrap();
+
+        assert_eq!(
+            stats.dispatched, 0,
+            "unresolved source should not be dispatched"
+        );
+        assert_eq!(
+            stats.filtered, 0,
+            "unresolved source must not be counted as filtered"
+        );
+        assert_eq!(
+            stats.unresolved, 1,
+            "unresolved source must be counted as unresolved"
+        );
+        assert_eq!(sink.sources.load(Ordering::SeqCst), 0);
+        assert_eq!(stats.by_event["SourceIngested"].unresolved, 1);
+    }
+
+    #[test]
+    fn source_ingested_filtered_scope_counted_as_filtered() {
+        let mut resolver = InMemResolver::default();
+        let sid = SourceId(uuid::Uuid::new_v4());
+        resolver.source_scopes.insert(
+            sid,
+            Scope::Private {
+                agent_id: "alice".into(),
+            },
+        );
+        let sink = CountingSink::default(); // scope_filter always returns true for CountingSink
+                                            // Use a FullSink that filters out alice
+        let full_sink = FullSink {
+            filter_bank: "bob".into(),
+            ..Default::default()
+        };
+        let line = serde_json::to_string(&WikiEvent::SourceIngested {
+            source_id: sid,
+            redacted: false,
+            at: time::OffsetDateTime::now_utc(),
+        })
+        .unwrap();
+        let _ = sink; // unused CountingSink
+
+        let stats =
+            consume_outbox_ndjson_with_resolver_and_stats(&full_sink, &resolver, &line).unwrap();
+
+        assert_eq!(stats.dispatched, 0);
+        assert_eq!(
+            stats.filtered, 1,
+            "scope-mismatched source must be counted as filtered"
+        );
+        assert_eq!(stats.unresolved, 0);
+        assert_eq!(stats.by_event["SourceIngested"].filtered, 1);
     }
 
     #[test]
