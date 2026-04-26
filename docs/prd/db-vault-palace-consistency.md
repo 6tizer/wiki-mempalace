@@ -82,6 +82,6 @@ Out:
 - [x] PRD drafted from approved implementation plan
 - [x] Spec trio complete
 - [x] Implementation complete
-- [ ] Review complete
-- [ ] CI green
-- [ ] Merged
+- [x] Review complete
+- [x] CI green
+- [x] Merged

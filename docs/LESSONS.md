@@ -74,8 +74,8 @@
 ## 2026-04-26 / DB/Vault/Palace Consistency Governance
 
 - Scope: 新增 `consistency-audit` / `consistency-plan` / `consistency-apply`，以 `wiki.db` 为原点审计 Vault 与 Mempalace page 镜像，再按白名单 dry-run/apply。
-- What worked: 先真实跑生产 audit/plan/dry-run，再 apply；可执行动作只有 2 个空文件清理和 Mempalace page replay，避免大规模 DB/Vault 改写。
-- What caused rework: 初版 audit 把所有 DB page 都要求进 Mempalace，误报 45 个 index/lint-report 等非 eligible page；应直接复用 sink eligibility 口径。
-- Spec changes needed: Mempalace audit 必须写清 “source drawers out of scope” 和 “只有 summary/concept/entity/synthesis/qa page 进入 palace”。
-- Tests or reviews that caught issues: 生产复查 audit 抓到 45 个误报；新增 ineligible page 不要求 palace drawer 的回归测试。
-- Next plan note: 旧 Notion URL 只应作为 report-only 来源脚印，不应标成 needs_human；真正需要人工判断的是旧导出文件名或无法证明目标的局部链接。
+- What worked: 先真实跑生产 audit/plan/dry-run，再在 Git 保护下 apply；最终 DB 应用 305 个旧 Notion 导出链接修复，Mempalace replay 189 个 page，后验 plan 可执行动作归零。
+- What caused rework: 初版 audit 把所有 DB page 都要求进 Mempalace，误报 index/lint-report 等非 eligible page；真实 apply 还暴露全量 Vault projection 会重写过多页面并丢迁移 frontmatter。后续 apply 类命令必须优先做 targeted projection，并保留现有 frontmatter。
+- Spec changes needed: Mempalace audit 必须写清 “source drawers out of scope” 和 “只有 summary/concept/entity/synthesis/qa page 进入 palace”；Vault projection 命名和 frontmatter 保留规则必须和生产迁移格式一致。
+- Tests or reviews that caught issues: 生产复查 audit 抓到 Mempalace eligibility 误报；真实 apply 抓到 projection 重写风险；新增 ineligible page、targeted projection 不新建缺失旧页、保留 frontmatter 的回归测试；本地 `cargo test -p wiki-cli --test consistency`、`cargo test -p wiki-kernel`、`cargo clippy --workspace --all-targets -- -D warnings`、`cargo test --workspace` 和 GitHub `quick` CI 通过。
+- Next plan note: Notion archived 状态还没有同步到本地退役流程；已知样本 `sources/wechat/微信公众号文章链接汇总.md` 在 Notion 为 `is_archived=true`，但本地仍在 `wiki.db.sources` 和 Vault。下一轮要做 DB-first archived source retirement，不要手删 Markdown。

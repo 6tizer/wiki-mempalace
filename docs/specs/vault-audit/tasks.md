@@ -16,10 +16,10 @@
 - [x] Docs updated
 - [x] Integration review complete
 - [x] PR opened
-- [ ] Codex/GitHub review addressed
+- [x] Codex/GitHub review addressed
 - [x] CI green
-- [ ] Merged
-- [ ] Roadmap/PRD updated
+- [x] Merged
+- [x] Roadmap/PRD updated
 
 ## Subtasks
 

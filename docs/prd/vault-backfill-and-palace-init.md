@@ -92,7 +92,7 @@ Out:
 | B2 vault-backfill | Add stable IDs and import vault sources/pages into `wiki.db` with idempotency, dry-run, limit, reports, and outbox | `wiki-core`, `wiki-kernel`, `wiki-storage`, `wiki-cli` | Implemented, focused review addressed |
 | B3 palace-init | Consume generated outbox into `palace.db` and validate mempalace search/fusion paths | `wiki-mempalace-bridge`, `wiki-cli`, `rust-mempalace` | Implemented, focused review addressed |
 | B4 agent-runtime-defaults | Make shared vault-local paths and `shared:wiki` usable by normal CLI/MCP agent workflows | `wiki-cli`, docs, templates | Implemented, focused review addressed |
-| B5 orphan-governance | Classify fresh production audit findings into safe governance lanes without mutating vault content | `wiki-cli`, audit/report docs | In progress on `codex/orphan-governance` |
+| B5 orphan-governance | Classify fresh production audit findings into safe governance lanes and run whitelist apply | `wiki-cli`, audit/report docs | Merged PR #28 / PR #30 |
 
 ## Acceptance
 
@@ -170,4 +170,4 @@ Out:
 - [x] CI green
 - [x] Merged
 - [x] Roadmap and lessons updated
-- [ ] B5 orphan governance complete
+- [x] B5 orphan governance complete
