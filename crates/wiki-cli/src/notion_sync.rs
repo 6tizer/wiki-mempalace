@@ -101,6 +101,7 @@ impl<'a> NotionSyncRunner<'a> {
             fetched: pages.len(),
             ..Default::default()
         };
+        let mut inserted_indexes: Vec<(String, String, wiki_core::SourceId)> = Vec::new();
 
         for page in &pages {
             let already_exists = self.repo.notion_page_exists(&page.id)?;
@@ -122,14 +123,12 @@ impl<'a> NotionSyncRunner<'a> {
 
             match self.ingest_page(db_id, page) {
                 Ok(source_id) => {
-                    self.repo
-                        .insert_notion_page_index(&page.id, db_id, &source_id)?;
-
                     if let Err(e) = writeback.mark_compiled(&page.id) {
                         eprintln!("notion-sync: writeback warn page_id={}: {e}", page.id);
                     }
 
                     result.new += 1;
+                    inserted_indexes.push((page.id.clone(), db_id.to_string(), source_id));
                     if self.verbose {
                         eprintln!(
                             "notion-sync: ingested page_id={} source_id={} title={}",
@@ -146,6 +145,7 @@ impl<'a> NotionSyncRunner<'a> {
 
         if !dry_run && result.errors == 0 {
             self.engine.save_to_repo_and_flush_outbox(self.repo)?;
+            self.repo.insert_notion_page_indexes(&inserted_indexes)?;
             self.repo
                 .upsert_notion_sync_cursor(db_id, sync_started_at, result.new as i64)?;
         }

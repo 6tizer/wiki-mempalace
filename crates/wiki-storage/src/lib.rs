@@ -115,6 +115,11 @@ pub trait WikiRepository {
         db_id: &str,
         source_id: &SourceId,
     ) -> Result<(), StorageError>;
+
+    fn insert_notion_page_indexes(
+        &self,
+        entries: &[(String, String, SourceId)],
+    ) -> Result<(), StorageError>;
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -859,6 +864,39 @@ impl WikiRepository for SqliteRepository {
             params![notion_page_id, db_id, source_id.0.to_string(), now_str],
         )?;
         Ok(())
+    }
+
+    fn insert_notion_page_indexes(
+        &self,
+        entries: &[(String, String, SourceId)],
+    ) -> Result<(), StorageError> {
+        let now_str = encode_time(OffsetDateTime::now_utc())?;
+        self.conn.execute_batch("BEGIN IMMEDIATE")?;
+        let result = {
+            let mut stmt = self.conn.prepare(
+                "INSERT OR IGNORE INTO notion_page_index(notion_page_id, db_id, source_id, synced_at)
+                 VALUES(?1, ?2, ?3, ?4)",
+            )?;
+            for (notion_page_id, db_id, source_id) in entries {
+                stmt.execute(params![
+                    notion_page_id,
+                    db_id,
+                    source_id.0.to_string(),
+                    now_str.clone()
+                ])?;
+            }
+            Ok::<(), StorageError>(())
+        };
+        match result {
+            Ok(_) => {
+                self.conn.execute_batch("COMMIT")?;
+                Ok(())
+            }
+            Err(error) => {
+                let _ = self.conn.execute_batch("ROLLBACK");
+                Err(error)
+            }
+        }
     }
 }
 

@@ -1,9 +1,9 @@
 # Handover: Notion Incremental Sync
 
 **Feature**: notion-incremental-sync  
-**Branch**: `cursor/notion-incremental-sync-3354`  
+**Branch**: `codex/notion-incremental-sync-postmerge-fix` 
 **Date**: 2026-04-26  
-**Status**: PR 待 review
+**Status**: 已闭环（PR 已合并 + 后续回填）
 
 ---
 
@@ -74,7 +74,7 @@ fn insert_notion_page_index(notion_page_id: &str, db_id: &str, source_id: &Sourc
 ## 已知限制
 
 - **内容更新**：已存在 `notion_page_id` 的 source 在后续编辑时只 skip，不更新内容。需独立 PRD 实现 update 语义。
-- **automation job 速率限制不可配置**：`run_notion_sync_job` 传 hardcoded `request_delay_ms=350`，无法通过环境变量覆盖。P3 后续可加 `NOTION_SYNC_DELAY_MS` 环境变量。
+- **post-merge 已闭环**：`run_notion_sync_job` 已修复为优先读取 `NOTION_SYNC_DELAY_MS`，未设置时回退到 350ms；相关回填文档已同步。
 - **Writeback 默认关闭**：`--writeback-notion` 实现完整但默认 false；首版与现有流程行为一致。
 
 ---
@@ -99,5 +99,4 @@ fn insert_notion_page_index(notion_page_id: &str, db_id: &str, source_id: &Sourc
 
 1. **立即可用**：合并后在生产环境运行 `wiki-cli notion-sync --db-id all`（不加 `--dry-run`）拉取 1264 条新 source，再运行 `batch-ingest` 做 LLM 编译。
 2. **后续跟进**：Notion Archived Source Retirement（roadmap 已有条目）— 识别 `is_archived=true` 页面并退役本地 source。
-3. **P3**：为 automation job 的 notion-sync 添加 `NOTION_SYNC_DELAY_MS` 环境变量覆盖。
-4. **P3**：实现 source 内容更新语义（`notion_page_id` 已存在但 `last_edited_time` 更新的情况）。
+3. **P3**：实现 source 内容更新语义（`notion_page_id` 已存在但 `last_edited_time` 更新的情况），评估是否加入增量重放策略。

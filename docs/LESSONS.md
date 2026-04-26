@@ -97,3 +97,12 @@
 - Spec changes needed: design.md §7 自动化 job 注册描述了 `short_circuit_on_failure` 字段，但实际 `AutomationJobSpec` 没有该字段（只有 `in_daily` + `requires_network`）；spec 描述比代码超前，以代码为准，spec 可在合并后修正。
 - Tests or reviews that caught issues: clippy `-D warnings` 抓到 dead_code 和 unused import 4 处；T4 dry_run 测试确认了 cursor 不更新的边界；integration review 确认了 `notion://` URI 与 `vault_audit`/`vault_backfill` 的 `file://` 路径完全隔离。smoke test 用真实 NOTION_TOKEN 验证了 dry-run 返回 782 + 482 = 1264 条。
 - Next plan note: PR 合并后在本地 Mac mini 执行首次真实同步（`notion-sync --db-id all`），再跑 `batch-ingest` 编译新文章。后续优先做 Notion Archived Source Retirement（识别本地已有但 Notion 已归档的 source，生成退役计划），再考虑 Scheduled Vault Reports。
+
+## 2026-04-26 / PR #38 Notion Incremental Sync Post-merge Cleanup
+
+- Scope: 对 PR #36 实现结果做补齐验收，修复文档与 automation 约束描述偏差（字段名、自动化 spec 字段、批量索引入库语义），并补全 post-merge 状态回填。
+- What worked: 先快速补齐 spec 与 code 的命名一致性，再一次性同步 `requirements/design/tasks/implementation/roadmap/lessons` 文档状态，避免生产实现与文档长期偏离。
+- What caused rework: PR #36 初稿留下 `notion_sync_state`、`run_in_daily_chain`、`short_circuit_on_failure` 等过时表述，触发回填工作；`branch` 记录也需更新为当前维护链路。
+- Spec changes needed: spec 层已改为与实现字段对齐；后续仅保留 `内容更新语义` 的产品化扩展，不再将已合并项作为未完成项。
+- Tests or reviews that caught issues: 专门 review 发现 spec 与代码字段偏差；`cargo fmt --all -- --check`、`cargo test --workspace`、`cargo clippy --workspace --all-targets -- -D warnings` 均已通过。
+- Next plan note: 未完成项优先转 `Notion Archived Source Retirement` 与 `Notion Incremental Sync` 续 PRD（更新语义），按 DB-first 治理链路推进。

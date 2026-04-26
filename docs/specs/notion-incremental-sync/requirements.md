@@ -2,7 +2,7 @@
 
 **Feature**: notion-incremental-sync  
 **PRD**: [docs/prd/notion-incremental-sync.md](../../prd/notion-incremental-sync.md)  
-**Status**: 草稿
+**Status**: 已完成
 
 ---
 
@@ -22,9 +22,10 @@
 
 ### FR-03 本地去重
 
-- 系统必须在 `wiki.db` 中维护 `notion_page_id → source_id` 映射（`notion_sync_state` 表的 `page_id` 列）。
+- 系统必须在 `wiki.db` 中维护 `notion_page_id → source_id` 映射（`notion_page_index` 表）。
 - 对于已存在 `notion_page_id` 的页面，跳过 ingest，记录 `skipped` 计数。
 - 跳过不报错，只在 `--verbose` 日志中打印。
+  - 注：实现使用 `notion_page_index` 表持久化 `notion_page_id` 与 `source_id` 映射（字段名在实现中已对齐数据库 DDL）。
 
 ### FR-04 Raw Ingest
 
@@ -36,6 +37,7 @@
 ### FR-05 速率限制
 
 - 相邻两次 Notion API 请求之间必须至少间隔 350ms（可通过 `--request-delay-ms` 覆盖，最小 100ms）。
+- automation 场景支持通过 `NOTION_SYNC_DELAY_MS` 覆盖请求间隔（CLI `--request-delay-ms` 仍按命令优先）。
 - 收到 HTTP 429 时，读取 `Retry-After` 响应头（秒数，默认 60），等待后重试，最多 3 次。
 - 3 次重试后仍 429，终止本次同步，标记 automation run 为 failed，输出 rate limit 错误。
 
@@ -55,8 +57,8 @@
 
 ### FR-07 Automation Job
 
-- `notion-sync` 必须注册到 `AUTOMATION_JOB_SPECS`，`run_in_daily_chain = true`，`job_name = "notion-sync"`。
-- job 执行时使用与 CLI 相同的 ingest 路径；job 失败不中断 automation chain 的后续 job（`short_circuit = false`）。
+- `notion-sync` 必须注册到 `AUTOMATION_JOB_SPECS`，`in_daily = true`、`requires_network = true`、`short_circuit = false`，`job_name = "notion-sync"`。
+- job 执行时使用与 CLI 相同的 ingest 路径；`short_circuit=false` 时失败后不应阻塞后续 `run-daily` 链继续执行。
 - job 必须通过 `start_automation_run` / `mark_automation_run_succeeded` / `mark_automation_run_failed` 记录状态。
 
 ### FR-08 Writeback 接口（首版关闭）
@@ -89,7 +91,7 @@
 ### NFR-04 向后兼容
 
 - 不改变现有子命令的行为。
-- 新增 `notion_sync_state` 表通过 `CREATE TABLE IF NOT EXISTS` 升级，不影响已有 wiki.db。
+- 新增 `notion_sync_cursors` 表通过 `CREATE TABLE IF NOT EXISTS` 升级，不影响已有 wiki.db。
 
 ---
 
