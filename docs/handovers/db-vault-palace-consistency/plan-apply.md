@@ -36,6 +36,12 @@
   evidence resolves them to a current Vault page path.
 - Plain Notion URLs and retired Notion system links are report-only deferred
   records; they are not treated as human review tasks.
+- Notion archived state is not yet part of this PR. Known follow-up:
+  `sources/wechat/微信公众号文章链接汇总.md` has
+  `notion_uuid=7cef8ca26f1645e49158e14520d96bf4`, Notion reports
+  `is_archived=true`, but the source still exists in `wiki.db.sources` and
+  Vault. Next module should retire archived Notion sources through DB-first
+  plan/apply, not by hand-deleting Markdown.
 - Source bodies are still not inserted into Mempalace.
 - Mempalace replay currently repairs page drawers only.
 
