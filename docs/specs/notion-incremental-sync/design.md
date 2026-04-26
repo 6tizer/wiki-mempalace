@@ -2,7 +2,7 @@
 
 **Feature**: notion-incremental-sync  
 **PRD**: [docs/prd/notion-incremental-sync.md](../../prd/notion-incremental-sync.md)  
-**Status**: 草稿
+**Status**: 已完成
 
 ---
 

@@ -1,8 +1,8 @@
 # PRD: Notion Incremental Sync
 
 **批次**: notion-incremental-sync  
-**状态**: 草稿 → 待用户确认  
-**关联 roadmap**: `Notion Incremental Sync 💤 未开始`  
+**状态**: 已完成  
+**关联 roadmap**: `Notion Incremental Sync ✅ 已合入`  
 **背景**: architecture.md §0 "C. 未来: Notion API 增量同步"
 
 ---
@@ -90,9 +90,9 @@ NOTION_TOKEN 已作为 secret 注入环境变量。
 
 ## 7. 状态
 
-- [ ] PRD 用户确认  
-- [ ] spec 三件套写完并确认  
+- [x] PRD 用户确认  
+- [x] spec 三件套写完并确认  
 - [x] 实现完成  
 - [x] CI 通过  
-- [ ] PR 合并  
-- [ ] roadmap 状态回填  
+- [x] PR 合并  
+- [x] roadmap 状态回填  
