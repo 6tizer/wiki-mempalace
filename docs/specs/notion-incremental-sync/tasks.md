@@ -115,8 +115,8 @@
 **Owner**: 各模块测试块  
 **依赖**: T1–T5
 
-- [ ] 补全所有测试（见 design.md §9 测试策略表）
-- [ ] `cargo fmt --all -- --check` 通过
+- [x] 补全所有已实现路径的测试（见 design.md §9 测试策略表）
+- [x] `cargo fmt --all -- --check` 通过
 - [x] `cargo test --workspace` 通过
 - [x] `cargo clippy --workspace --all-targets -- -D warnings` 通过
 - [x] 手动 smoke：`wiki-cli notion-sync --db-id all --dry-run`（真实 token）打印正确结果
@@ -129,21 +129,21 @@
 
 ### 模块 Review（每个 T 完成后）
 
-- [ ] T1：新增 DDL 使用 `IF NOT EXISTS`；trait 方法不破坏现有接口
-- [ ] T2：`NOTION_TOKEN` 不被打印；429 重试不超 3 次；`limit` 在翻页循环中正确截断
-- [ ] T3：`HttpNotionWriteBack` 失败时返回 `Err` 不 panic；`NoopWriteBack` 实现 `Send + Sync`
-- [ ] T4：dry_run 分支不写任何 DB 行；cursor 仅在非 dry_run 且无 error 时更新；去重查询在 ingest 前执行
-- [ ] T5：`--writeback-notion` 默认 false；`automation list-jobs` 含 `notion-sync`；job 失败后不 short-circuit
+- [x] T1：新增 DDL 使用 `IF NOT EXISTS`；trait 方法不破坏现有接口
+- [x] T2：`NOTION_TOKEN` 不被打印；429 重试不超 3 次；`limit` 在翻页循环中正确截断
+- [x] T3：`HttpNotionWriteBack` 失败时返回 `Err` 不 panic；`NoopWriteBack` 实现 `Send + Sync`
+- [x] T4：dry_run 分支不写任何 DB 行；cursor 仅在非 dry_run 且无 error 时更新；去重查询在 ingest 前执行
+- [x] T5：`--writeback-notion` 默认 false；`automation list-jobs` 含 `notion-sync`；job 失败后不 short-circuit
 
 ### 集成 Review（所有 T 完成后）
 
-- [ ] 首次运行（无 cursor）从 `NOW-30d` 开始
-- [ ] 连续两次运行无新内容，DB 状态不变，cursor 不回退
-- [ ] `--since` 覆盖 cursor 有效
+- [x] 首次运行（无 cursor）从 `NOW-30d` 开始
+- [x] 连续两次运行无新内容，DB 状态不变，cursor 不回退
+- [x] `--since` 覆盖 cursor 有效
 - [x] body 拼装格式与 `batch-ingest` 兼容，并包含 Notion page blocks 正文
 - [x] `--refresh-existing` 可回填已存在 Notion source 的正文和 tags
 - [x] automation `notion-sync` 默认启用 existing refresh，同时继续使用 cursor 做增量窗口
-- [ ] Source URI `notion://` 不与 vault_audit / vault_backfill 的 `file://` 逻辑冲突
+- [x] Source URI `notion://` 不与 vault_audit / vault_backfill 的 `file://` 逻辑冲突
 
 ---
 

@@ -106,3 +106,12 @@
 - Spec changes needed: spec 层已改为与实现字段对齐；后续仅保留 `内容更新语义` 的产品化扩展，不再将已合并项作为未完成项。
 - Tests or reviews that caught issues: 专门 review 发现 spec 与代码字段偏差；`cargo fmt --all -- --check`、`cargo test --workspace`、`cargo clippy --workspace --all-targets -- -D warnings` 均已通过。
 - Next plan note: 未完成项优先转 `Notion Archived Source Retirement` 与 `Notion Incremental Sync` 续 PRD（更新语义），按 DB-first 治理链路推进。
+
+## 2026-04-27 / PR #42 Notion Source Vault Projection
+
+- Scope: 把 DB-backed `notion://` sources 投影为 Obsidian 可见的 `sources/x` 和 `sources/wechat` Markdown；补齐 Notion block 正文抓取、`--refresh-existing`、Obsidian-safe tags、automation existing refresh。
+- What worked: 先让用户在 Obsidian 看真实结果，再用 dry-run/idempotence 检查闭环；真实生产修复后最终 `notion-source-vault-sync --dry-run --refresh-existing --repair-tags` 为 planned 0 / tags_rewritten 0，说明 DB 与 Vault 投影已稳定。
+- What caused rework: 初版只取 Notion database properties，导致新导入 source 没有正文；原始 Notion 标签直接写入 Obsidian tags，`Apache2.0` 这类标签显示异常。以后外部内容同步必须把“正文来源”和“目标系统标签语法”写进首版验收。
+- Spec changes needed: Notion incremental sync spec 必须明确 page blocks 是 source body 的组成部分；automation `notion-sync` 需要在 cursor window 内刷新已有 source，避免自动任务长期保留旧正文/tags。
+- Tests or reviews that caught issues: 用户 Obsidian 复查抓到 tag 和正文问题；新增 projection idempotence、refresh existing、duplicate Notion UUID/source_id 匹配测试；本地 `cargo test --workspace`、`cargo clippy --workspace --all-targets -- -D warnings`、`git diff --check` 和 GitHub quick CI 通过。
+- Next plan note: 现在完成的是 raw source 入库与 Vault 可见，不是 Wiki 编译。下一轮应单独走 Notion Source Compilation：小样本编译 `compiled_to_wiki: false` source，再批量编译、验证 query/mempalace，不要把 archived retirement 混进同一 PR。
