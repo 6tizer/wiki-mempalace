@@ -405,6 +405,9 @@ enum Cmd {
         /// Write back to Notion after sync (marks 已编译到Wiki checkbox)
         #[arg(long, default_value_t = false)]
         writeback_notion: bool,
+        /// Tag policy for this sync run. Notion AI auto-fill is treated as a trusted source by default.
+        #[arg(long, value_enum, default_value = "trusted-source")]
+        tag_policy: NotionSyncTagPolicy,
         /// Print per-page processing details
         #[arg(long, default_value_t = false)]
         verbose: bool,
@@ -497,6 +500,16 @@ enum NotionDbTarget {
     Wechat,
     #[value(name = "all")]
     All,
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq, ValueEnum)]
+enum NotionSyncTagPolicy {
+    #[value(name = "strict")]
+    Strict,
+    #[value(name = "trusted-source")]
+    TrustedSource,
+    #[value(name = "bootstrap")]
+    Bootstrap,
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, ValueEnum)]
@@ -2813,8 +2826,10 @@ fn run_with_engine(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             dry_run,
             request_delay_ms,
             writeback_notion,
+            tag_policy,
             verbose,
         } => {
+            apply_notion_sync_tag_policy(&mut eng.schema, tag_policy);
             run_notion_sync_cmd(
                 &mut eng,
                 &repo,
@@ -3171,6 +3186,28 @@ mod tests {
         let plan = tag_test_plan_with_claim_tags(vec!["known".to_string(), "New".to_string()]);
 
         preflight_llm_plan_tags(&plan, &source_tags, &schema).unwrap();
+    }
+
+    #[test]
+    fn notion_sync_strict_tag_policy_leaves_schema_unchanged() {
+        let mut schema = DomainSchema::permissive_default();
+        schema.tag_config.max_new_tags_per_ingest = 1;
+
+        apply_notion_sync_tag_policy(&mut schema, NotionSyncTagPolicy::Strict);
+
+        assert_eq!(schema.tag_config.max_new_tags_per_ingest, 1);
+    }
+
+    #[test]
+    fn notion_sync_trusted_source_tag_policy_allows_source_tags() {
+        let mut schema = DomainSchema::permissive_default();
+        schema.tag_config.max_new_tags_per_ingest = 1;
+        schema.tag_config.deprecated_tags = vec!["old".into()];
+
+        apply_notion_sync_tag_policy(&mut schema, NotionSyncTagPolicy::TrustedSource);
+
+        assert_eq!(schema.tag_config.max_new_tags_per_ingest, u32::MAX);
+        assert!(schema.tag_config.deprecated_tags.is_empty());
     }
 
     #[test]
@@ -4410,6 +4447,20 @@ fn run_single_automation_job<W: Write>(
     Ok(())
 }
 
+fn apply_notion_sync_tag_policy(schema: &mut DomainSchema, policy: NotionSyncTagPolicy) {
+    match policy {
+        NotionSyncTagPolicy::Strict => {}
+        NotionSyncTagPolicy::TrustedSource | NotionSyncTagPolicy::Bootstrap => {
+            schema.tag_config.max_new_tags_per_ingest = u32::MAX;
+            schema.tag_config.deprecated_tags.clear();
+            eprintln!(
+                "notion-sync: tag_policy={:?} max_new_tags_per_ingest=unlimited deprecated_tags=allow",
+                policy
+            );
+        }
+    }
+}
+
 /// Notion DB configurations: (slug, Notion DB UUID)
 const NOTION_DB_X_BOOKMARK: (&str, &str) = ("x_bookmark", "0d305291-2a5d-426c-8db8-903ed5bb7ddb");
 const NOTION_DB_WECHAT: (&str, &str) = ("wechat", "16470107-4b68-810a-bc81-f90795cc29ad");
@@ -4489,6 +4540,7 @@ fn run_notion_sync_job(
     } else {
         env_or("NOTION_SYNC_DELAY_MS", 350)
     };
+    apply_notion_sync_tag_policy(&mut eng.schema, NotionSyncTagPolicy::TrustedSource);
     run_notion_sync_cmd(
         eng,
         repo,
