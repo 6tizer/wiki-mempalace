@@ -20,10 +20,11 @@
 - [schema-t2-tags/](schema-t2-tags/) — Schema T2 tag governance. Merged PR #13。
 - [longmemeval-auto/](longmemeval-auto/) — J13 LongMemEval `rust-mempalace` local retrieval baseline artifacts. Merged PR #19。
 - [vault-report-paths/](vault-report-paths/) — Vault-relative report output paths for dashboard, suggest, metrics, and automation health. Active branch `codex/vault-report-paths`。
-- [vault-audit/](vault-audit/) — B1 read-only vault audit and report model. Active branch `codex/vault-backfill-palace-init`。
-- [vault-backfill/](vault-backfill/) — B2 stable IDs and vault-to-`wiki.db` backfill. Active branch `codex/vault-backfill-palace-init`。
-- [palace-init/](palace-init/) — B3 `palace.db` initialization from wiki outbox and fusion validation. Active branch `codex/vault-backfill-palace-init`。
-- [agent-runtime-defaults/](agent-runtime-defaults/) — B4 shared vault-local CLI/MCP defaults. Active branch `codex/vault-backfill-palace-init`。
-- [orphan-governance/](orphan-governance/) — B5 follow-up: timestamped audit, LLM plan, Chinese report, and whitelist apply. Active branch `codex/orphan-governance-followup`。
+- [vault-audit/](vault-audit/) — B1 read-only vault audit and report model. Merged PR #23。
+- [vault-backfill/](vault-backfill/) — B2 stable IDs and vault-to-`wiki.db` backfill. Merged PR #23。
+- [palace-init/](palace-init/) — B3 `palace.db` initialization from wiki outbox and fusion validation. Merged PR #23。
+- [agent-runtime-defaults/](agent-runtime-defaults/) — B4 shared vault-local CLI/MCP defaults. Merged PR #23。
+- [orphan-governance/](orphan-governance/) — B5 follow-up: timestamped audit, LLM plan, Chinese report, and whitelist apply. Merged PR #30。
+- [db-vault-palace-consistency/](db-vault-palace-consistency/) — DB/Vault/Palace consistency audit, plan, apply, and Mempalace page replay. Merged PR #32。
 - [persist-snapshot-outbox/](persist-snapshot-outbox/) — C16a: `wiki_state` + outbox append in one SQLite transaction; replaces split `save_to_repo` / `flush_outbox` autocommit for crash-safety. Merged PR #25. PRD: [storage-embeddings-followup.md](../prd/storage-embeddings-followup.md).
 - [embedding-ann-index/](embedding-ann-index/) — C16b: bounded-work vector search for `wiki_embedding` (optional extension / ANN; fallback to full scan). PRD: [storage-embeddings-followup.md](../prd/storage-embeddings-followup.md)。

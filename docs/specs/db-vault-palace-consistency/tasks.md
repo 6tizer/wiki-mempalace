@@ -8,8 +8,8 @@
 | DB/Vault source-link fixes | Agent | Subagent C | DB-backed link candidates/projection tests | Done |
 | Apply + palace replay integration | Agent | Main | apply path, CLI wiring, palace reuse | Done |
 | Focused review | Agent | Reviewer | diff vs spec | Done |
-| Integration review + CI | Skill/Script | Main | workspace | Done locally |
-| PR + merge follow-up | Skill | Main | roadmap, LESSONS, handoff | Pending merge |
+| Integration review + CI | Skill/Script | Main | workspace | Done |
+| PR + merge follow-up | Skill | Main | roadmap, LESSONS, handoff | Done |
 
 ## Checklist
 
