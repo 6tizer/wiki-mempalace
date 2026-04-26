@@ -31,8 +31,8 @@ NOTION_TOKEN 已作为 secret 注入环境变量。
 ### 3.1 In Scope（本 PRD）
 
 1. **增量拉取**：按 `last_edited_time` 游标，仅取上次同步之后新增/变更的页面。  
-2. **本地去重**：`notion_page_id` 首次出现新建 source，已存在跳过（不重复插入）；更新检测留为 future follow-up。  
-3. **Raw ingest**：提取 `标题 + 文章链接 + 标签 + 来源 + 备注` 拼成 body，调用 `LlmWikiEngine::ingest_raw`，写入 `wiki.db`。无 LLM，不生成 claim/page（与现有 `batch-ingest` 配合，后续由 LLM 编译）。  
+2. **本地去重与刷新**：`notion_page_id` 首次出现新建 source；已存在页面默认跳过，显式 `--refresh-existing` 或 automation 路径会刷新已有 source 的正文与 tags。
+3. **Raw ingest**：提取 `标题 + 文章链接 + 标签 + 来源 + 备注 + Notion page blocks` 拼成 body，调用 `LlmWikiEngine::ingest_raw`，写入 `wiki.db`。无 LLM，不生成 claim/page（与现有 `batch-ingest` 配合，后续由 LLM 编译）。
 4. **CLI 子命令**：`wiki-cli notion-sync`，支持手动触发。  
 5. **Automation job 注册**：将 `notion-sync` 注册到 `AUTOMATION_JOB_SPECS`，接入 `run-daily` 链，12 小时周期。  
 6. **速率限制处理**：固定 350ms 请求间隔；HTTP 429 读 `Retry-After`（默认 60s）后重试，最多 3 次。  
@@ -42,7 +42,7 @@ NOTION_TOKEN 已作为 secret 注入环境变量。
 ### 3.2 Out of Scope（本 PRD 不做）
 
 - LLM 自动编译（由 `batch-ingest` job 负责，非本模块范围）。  
-- 已有 source 的内容更新/覆盖（首版只做 "新增跳过已存在"，更新语义待独立 PRD）。  
+- 已有 source 的全文历史版本 diff、冲突解决和人工审阅队列。当前只支持刷新到最新正文/tags。
 - Notion archived 条目退役（已有独立 roadmap 条目 `Notion Archived Source Retirement`）。  
 - `已编译到Wiki` checkbox 写回 Notion（在 `--writeback-notion` flag 后），首版关闭。  
 - 三个 DB 以外的 Notion 数据库。  
@@ -96,3 +96,4 @@ NOTION_TOKEN 已作为 secret 注入环境变量。
 - [x] CI 通过  
 - [x] PR 合并  
 - [x] roadmap 状态回填  
+- [x] PR #42 follow-up：Notion block 正文抓取、`--refresh-existing`、automation 默认刷新、Obsidian-safe tags 已合入并跑过生产修复。

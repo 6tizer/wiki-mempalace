@@ -10,6 +10,11 @@
 
 ## Active PRDs
 
-- [batch-3.md](batch-3.md) — P2 maturity：metrics、dashboard、strategy、tag governance、LongMemEval automation。
 - [vault-backfill-and-palace-init.md](vault-backfill-and-palace-init.md) — 历史 vault 回填、`wiki.db` 初始化、`palace.db` 初始化、共享 Agent 运行默认值。
 - [storage-embeddings-followup.md](storage-embeddings-followup.md) — C16 follow-up: single-transaction `wiki_state` + outbox write path; optional ANN/index for `wiki_embedding` search (replaces O(n) scan at scale). Spec: [persist-snapshot-outbox](../specs/persist-snapshot-outbox/requirements.md), [embedding-ann-index](../specs/embedding-ann-index/requirements.md).
+
+## Completed PRDs Still Useful As Reference
+
+- [batch-3.md](batch-3.md) — P2 maturity：metrics、dashboard、strategy、tag governance、LongMemEval automation。
+- [notion-incremental-sync.md](notion-incremental-sync.md) — Notion API incremental sync, cursor tables, refresh existing source bodies/tags, automation job.
+- [notion-source-vault-projection.md](notion-source-vault-projection.md) — PR #42：DB-backed Notion source projection to Obsidian, block body refresh, Obsidian-safe tags.

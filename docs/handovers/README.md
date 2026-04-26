@@ -13,3 +13,7 @@
 - 合并后可保留为历史，也可在对应 spec 归档时一起归档。
 
 模板见 [../templates/module-handoff.md](../templates/module-handoff.md)。
+
+## Current Handovers
+
+- [notion-source-vault-projection/summary.md](notion-source-vault-projection/summary.md) — PR #42 merge and production apply closeout; next workflow is Notion source compilation.
