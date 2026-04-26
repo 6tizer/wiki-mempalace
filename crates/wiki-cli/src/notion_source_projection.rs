@@ -129,13 +129,11 @@ pub fn project_notion_sources_to_vault_with_options(
         };
         let source_id = source.id.0.to_string();
         let notion_uuid_key = normalize_notion_uuid(notion_uuid);
-        let existing_path = existing
-            .source_ids
-            .get(&source_id)
-            .or_else(|| existing.notion_uuids.get(&notion_uuid_key));
-        if let Some(path) = existing_path {
+        let existing_by_source_id = existing.source_ids.get(&source_id);
+        let existing_by_notion_uuid = existing.notion_uuids.get(&notion_uuid_key);
+        if let Some(path) = existing_by_source_id.or(existing_by_notion_uuid) {
             report.existing += 1;
-            if options.refresh_existing {
+            if options.refresh_existing && existing_by_source_id.is_some() {
                 let title = source_title(source);
                 let markdown = render_source_markdown(source, origin, notion_uuid, &title)?;
                 let current = std::fs::read_to_string(path).unwrap_or_default();
@@ -724,6 +722,36 @@ body
         let text = std::fs::read_to_string(vault.join("sources/x/X-Source.md")).unwrap();
         assert!(text.contains("new full body"));
         assert!(!text.contains("old body"));
+    }
+
+    #[test]
+    fn refresh_existing_skips_duplicate_notion_uuid_without_source_id_match() {
+        let temp = tempfile::tempdir().unwrap();
+        let vault = temp.path().join("vault");
+        let original = source(
+            "88888888-8888-8888-8888-888888888888",
+            "notion://x_bookmark/dup-test",
+            "# X Source\n\nURL: https://x.com/post\n来源: X\n\ncanonical body",
+        );
+        project_notion_sources_to_vault(&[original], &vault, ProjectionMode::Apply).unwrap();
+
+        let duplicate = source(
+            "99999999-9999-9999-9999-999999999999",
+            "notion://x_bookmark/dup-test",
+            "# X Source Duplicate\n\nURL: https://x.com/post\n来源: X\n\nduplicate body",
+        );
+        let dry = project_notion_sources_to_vault_with_options(
+            &[duplicate],
+            &vault,
+            ProjectionOptions {
+                mode: ProjectionMode::DryRun,
+                refresh_existing: true,
+            },
+        )
+        .unwrap();
+
+        assert_eq!(dry.existing, 1);
+        assert_eq!(dry.planned, 0);
     }
 
     #[test]
