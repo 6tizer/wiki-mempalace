@@ -332,3 +332,64 @@ body
         .unwrap();
     assert_eq!(canonical, "1a9701074b688103b989fbd0cfb8343a");
 }
+
+#[test]
+fn notion_source_vault_sync_defaults_to_dry_run_and_apply_writes() {
+    let temp = tempfile::tempdir().unwrap();
+    let vault = temp.path().join("vault");
+    let db = temp.path().join("wiki.db");
+    let source_path = vault.join("sources/x/X-Source.md");
+
+    wiki_cmd()
+        .arg("--db")
+        .arg(&db)
+        .arg("ingest")
+        .arg("notion://x_bookmark/1a970107-4b68-8103-b989-fbd0cfb8343a")
+        .arg("# X Source\n\nURL: https://x.com/post\n来源: X\n")
+        .arg("--scope")
+        .arg("shared:wiki")
+        .assert()
+        .success();
+
+    wiki_cmd()
+        .arg("--db")
+        .arg(&db)
+        .arg("--wiki-dir")
+        .arg(&vault)
+        .arg("notion-source-vault-sync")
+        .assert()
+        .success()
+        .stdout(contains("mode=dry_run"))
+        .stdout(contains("planned=1"))
+        .stdout(contains("applied=0"));
+    assert!(!source_path.exists());
+
+    wiki_cmd()
+        .arg("--db")
+        .arg(&db)
+        .arg("--wiki-dir")
+        .arg(&vault)
+        .args(["notion-source-vault-sync", "--apply"])
+        .assert()
+        .success()
+        .stdout(contains("mode=apply"))
+        .stdout(contains("planned=1"))
+        .stdout(contains("applied=1"));
+
+    let text = std::fs::read_to_string(&source_path).unwrap();
+    assert!(text.contains("kind: source"));
+    assert!(text.contains("origin: x"));
+    assert!(text.contains("notion_uuid: \"1a970107-4b68-8103-b989-fbd0cfb8343a\""));
+    assert!(text.contains("compiled_to_wiki: false"));
+
+    wiki_cmd()
+        .arg("--db")
+        .arg(&db)
+        .arg("--wiki-dir")
+        .arg(&vault)
+        .args(["notion-source-vault-sync", "--apply"])
+        .assert()
+        .success()
+        .stdout(contains("planned=0"))
+        .stdout(contains("existing=1"));
+}

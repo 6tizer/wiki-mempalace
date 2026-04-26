@@ -35,6 +35,7 @@ mod llm;
 mod mcp;
 mod notion_client;
 mod notion_index_backfill;
+mod notion_source_projection;
 mod notion_sync;
 mod notion_writeback;
 mod orphan_governance;
@@ -421,6 +422,18 @@ enum Cmd {
         #[arg(long, default_value_t = false)]
         dry_run: bool,
         /// Write missing index rows.
+        #[arg(long, default_value_t = false)]
+        apply: bool,
+    },
+    /// Write DB-backed notion:// sources into vault sources/{origin}/ markdown.
+    NotionSourceVaultSync {
+        /// Vault root directory. Defaults to --wiki-dir when present.
+        #[arg(long)]
+        vault: Option<PathBuf>,
+        /// Dry-run only. This is also the default when --apply is absent.
+        #[arg(long, default_value_t = false)]
+        dry_run: bool,
+        /// Write missing source markdown files.
         #[arg(long, default_value_t = false)]
         apply: bool,
     },
@@ -2834,6 +2847,11 @@ fn run_with_engine(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                 &mut eng,
                 &repo,
                 &viewer,
+                if cli.sync_wiki {
+                    wiki_root.as_deref()
+                } else {
+                    None
+                },
                 db_id,
                 since.as_deref(),
                 limit,
@@ -2861,6 +2879,28 @@ fn run_with_engine(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                 notion_index_backfill::BackfillMode::DryRun
             };
             let report = notion_index_backfill::backfill_notion_page_index(&repo, &vault, mode)?;
+            println!("{report}");
+        }
+        Cmd::NotionSourceVaultSync {
+            vault,
+            dry_run,
+            apply,
+        } => {
+            if dry_run && apply {
+                return Err("--dry-run and --apply are mutually exclusive".into());
+            }
+            let vault = vault
+                .clone()
+                .or_else(|| wiki_root.clone())
+                .ok_or("--vault or --wiki-dir is required for notion-source-vault-sync")?;
+            let mode = if apply {
+                notion_source_projection::ProjectionMode::Apply
+            } else {
+                notion_source_projection::ProjectionMode::DryRun
+            };
+            let sources: Vec<_> = eng.store.sources.values().cloned().collect();
+            let report =
+                notion_source_projection::project_notion_sources_to_vault(&sources, &vault, mode)?;
             println!("{report}");
         }
     }
@@ -4409,7 +4449,15 @@ fn dispatch_automation_job(
             println!("{out}");
             Ok(())
         }
-        AutomationJob::NotionSync => run_notion_sync_job(eng, repo, viewer, false, 0, false),
+        AutomationJob::NotionSync => run_notion_sync_job(
+            eng,
+            repo,
+            viewer,
+            if sync_wiki { wiki_root } else { None },
+            false,
+            0,
+            false,
+        ),
     }
 }
 
@@ -4469,6 +4517,7 @@ fn run_notion_sync_cmd(
     eng: &mut LlmWikiEngine<NoopWikiHook>,
     repo: &SqliteRepository,
     viewer: &Scope,
+    source_projection_vault: Option<&std::path::Path>,
     db_id: NotionDbTarget,
     since: Option<&str>,
     limit: Option<usize>,
@@ -4524,6 +4573,18 @@ fn run_notion_sync_cmd(
         );
     }
 
+    if !dry_run {
+        if let Some(vault) = source_projection_vault {
+            let sources: Vec<_> = eng.store.sources.values().cloned().collect();
+            let report = notion_source_projection::project_notion_sources_to_vault(
+                &sources,
+                vault,
+                notion_source_projection::ProjectionMode::Apply,
+            )?;
+            println!("{report}");
+        }
+    }
+
     Ok(())
 }
 
@@ -4531,6 +4592,7 @@ fn run_notion_sync_job(
     eng: &mut LlmWikiEngine<NoopWikiHook>,
     repo: &SqliteRepository,
     viewer: &Scope,
+    source_projection_vault: Option<&std::path::Path>,
     dry_run: bool,
     request_delay_ms: u64,
     verbose: bool,
@@ -4545,6 +4607,7 @@ fn run_notion_sync_job(
         eng,
         repo,
         viewer,
+        source_projection_vault,
         NotionDbTarget::All,
         None,
         None,
