@@ -19,6 +19,7 @@ pub struct VaultAuditReport {
     pub identities: IdentityStats,
     pub orphan_candidates: OrphanCandidateStats,
     pub readiness: BackfillReadinessStats,
+    pub path_lists: VaultAuditPathLists,
     pub old_audit_files: Vec<String>,
     pub warnings: Vec<String>,
 }
@@ -118,6 +119,14 @@ pub struct OrphanCandidateStats {
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
+pub struct VaultAuditPathLists {
+    pub pages_missing_status: Vec<String>,
+    pub sources_missing_compiled_to_wiki: Vec<String>,
+    pub unsupported_frontmatter: Vec<String>,
+    pub orphan_candidates: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize)]
 pub struct BackfillReadinessStats {
     pub ready_sources: usize,
     pub ready_pages: usize,
@@ -195,11 +204,12 @@ pub fn scan_vault(vault_path: impl AsRef<Path>) -> io::Result<VaultAuditReport> 
         identities: IdentityStats::default(),
         orphan_candidates: OrphanCandidateStats::default(),
         readiness: BackfillReadinessStats::default(),
+        path_lists: VaultAuditPathLists::default(),
         old_audit_files: Vec::new(),
         warnings: Vec::new(),
     };
 
-    let mut files = collect_files(vault_path, &mut report.warnings)?;
+    let mut files = collect_content_files(vault_path, &mut report.warnings)?;
     files.sort();
 
     let mut scanned = Vec::new();
@@ -311,11 +321,37 @@ pub fn scan_vault(vault_path: impl AsRef<Path>) -> io::Result<VaultAuditReport> 
                 }
             }
         }
+        match kind {
+            MarkdownKind::Source => {
+                if frontmatter.scalar("compiled_to_wiki").is_none() {
+                    report
+                        .path_lists
+                        .sources_missing_compiled_to_wiki
+                        .push(rel_path.clone());
+                }
+            }
+            MarkdownKind::Page => {
+                if frontmatter.scalar("status").is_none() {
+                    report
+                        .path_lists
+                        .pages_missing_status
+                        .push(rel_path.clone());
+                }
+            }
+            MarkdownKind::Report | MarkdownKind::Other => {}
+        }
+        if has_unsupported_frontmatter(&frontmatter) {
+            report
+                .path_lists
+                .unsupported_frontmatter
+                .push(rel_path.clone());
+        }
         for category in &orphan_categories {
             add_orphan_candidate(&mut report.orphan_candidates, category, &rel_path);
         }
         if !orphan_categories.is_empty() {
             orphan_file_paths.insert(rel_path.clone());
+            report.path_lists.orphan_candidates.push(rel_path.clone());
         }
 
         scanned.push(ScannedMarkdown {
@@ -349,10 +385,13 @@ pub fn write_json_and_markdown(
     let report_dir = report_dir.as_ref();
     validate_report_dir(report, report_dir)?;
     fs::create_dir_all(report_dir)?;
-    let json_path = report_dir.join("vault-audit.json");
-    let markdown_path = report_dir.join("vault-audit.md");
+    let stem = format!("vault-audit-{}", filename_timestamp(&report.generated_at));
+    let json_name = format!("{stem}.json");
+    let markdown_name = format!("{stem}.md");
+    let json_path = report_dir.join(&json_name);
+    let markdown_path = report_dir.join(&markdown_name);
     fs::write(&json_path, serde_json::to_string_pretty(report)?)?;
-    fs::write(&markdown_path, render_markdown(report, "vault-audit.json"))?;
+    fs::write(&markdown_path, render_markdown(report, &json_name))?;
     Ok(VaultAuditReportFiles {
         json_path,
         markdown_path,
@@ -495,19 +534,52 @@ pub fn render_markdown(report: &VaultAuditReport, sibling_json: &str) -> String 
     out
 }
 
-fn collect_files(vault_path: &Path, warnings: &mut Vec<String>) -> io::Result<Vec<PathBuf>> {
+fn collect_content_files(
+    vault_path: &Path,
+    warnings: &mut Vec<String>,
+) -> io::Result<Vec<PathBuf>> {
     let mut files = Vec::new();
-    for entry in WalkDir::new(vault_path).follow_links(false) {
-        match entry {
-            Ok(entry) => {
-                if entry.file_type().is_file() {
-                    files.push(entry.path().to_path_buf());
+    for content_dir in ["pages", "sources"] {
+        let root = vault_path.join(content_dir);
+        match fs::metadata(&root) {
+            Ok(metadata) if metadata.is_dir() => {
+                for entry in WalkDir::new(&root).follow_links(false) {
+                    match entry {
+                        Ok(entry) => {
+                            if entry.file_type().is_file() {
+                                files.push(entry.path().to_path_buf());
+                            }
+                        }
+                        Err(err) => warnings.push(format!("failed to scan path: {err}")),
+                    }
                 }
             }
-            Err(err) => warnings.push(format!("failed to scan path: {err}")),
+            Ok(_) => warnings.push(format!(
+                "content path is not a directory and was skipped: {}",
+                root.display()
+            )),
+            Err(err) if err.kind() == io::ErrorKind::NotFound => {}
+            Err(err) => warnings.push(format!(
+                "failed to scan content path: {} ({err})",
+                root.display()
+            )),
         }
     }
     Ok(files)
+}
+
+fn filename_timestamp(timestamp: &str) -> String {
+    let cleaned: String = timestamp
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || matches!(ch, '-' | 'T' | 'Z') {
+                ch
+            } else {
+                '-'
+            }
+        })
+        .collect();
+    cleaned.trim_matches('-').to_string()
 }
 
 fn validate_report_dir(report: &VaultAuditReport, report_dir: &Path) -> io::Result<()> {
@@ -613,6 +685,18 @@ fn update_frontmatter_stats(frontmatter: &FrontmatterResult, stats: &mut Frontma
         FrontmatterResult::Unterminated => stats.unterminated_frontmatter += 1,
         FrontmatterResult::InvalidUtf8 => stats.invalid_utf8 += 1,
     }
+}
+
+fn has_unsupported_frontmatter(frontmatter: &FrontmatterResult) -> bool {
+    matches!(
+        frontmatter,
+        FrontmatterResult::Missing
+            | FrontmatterResult::Unterminated
+            | FrontmatterResult::InvalidUtf8
+    ) || matches!(
+        frontmatter,
+        FrontmatterResult::Parsed(parsed) if parsed.unsupported_lines > 0
+    )
 }
 
 fn update_source_stats(

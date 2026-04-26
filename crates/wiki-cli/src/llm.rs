@@ -290,7 +290,7 @@ fn do_chat_once(
         "messages": [
             {"role": "user", "content": prompt}
         ],
-        "max_tokens": 32,
+        "max_tokens": 128,
         "temperature": 0.0
     });
 

@@ -403,12 +403,8 @@ mod tests {
         assert!(wiki_root.join("pages").is_dir());
         // vault-standards：不再向根 `concepts/` 写哈希 claim 投影
         assert!(
-            !wiki_root.join("concepts").exists()
-                || std::fs::read_dir(wiki_root.join("concepts"))
-                    .unwrap()
-                    .next()
-                    .is_none(),
-            "projection 不应在根 concepts/ 写入文件"
+            !wiki_root.join("concepts").exists(),
+            "projection 不应创建根 concepts/"
         );
         // vault-standards：不再向 `sources/` 根目录写引擎投影
         assert!(
@@ -441,6 +437,30 @@ mod tests {
                 "page 文件 frontmatter 应含 status 字段"
             );
         }
+    }
+
+    #[test]
+    fn projection_does_not_recreate_root_concepts_when_claims_exist() {
+        let dir = tempdir().unwrap();
+        let wiki_root = dir.path();
+        let mut store = InMemoryStore::default();
+        let scope = private_scope();
+        let src = RawArtifact::new("file:///a.md", "hello world", scope.clone());
+        store.sources.insert(src.id, src);
+        let claim = Claim::new("Redis caching for API", scope.clone(), MemoryTier::Semantic);
+        store.claims.insert(claim.id, claim);
+        let page = WikiPage::new("Concept Page", "body", scope).with_entry_type(EntryType::Concept);
+        store.pages.insert(page.id, page);
+
+        let stats = write_projection(wiki_root, &store, &[]).unwrap();
+
+        assert_eq!(stats.claims_written, 0);
+        assert_eq!(stats.sources_written, 0);
+        assert!(
+            !wiki_root.join("concepts").exists(),
+            "projection must not recreate root concepts/"
+        );
+        assert!(wiki_root.join("pages/concept/Concept Page.md").exists());
     }
 
     #[test]

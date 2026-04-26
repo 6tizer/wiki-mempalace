@@ -1,115 +1,118 @@
-# Design: B5 Orphan Governance
+# Design: B5 Orphan Governance Follow-up
 
 ## Summary
 
-B5 is a read-only reporting module. It consumes the fresh production
-`vault-audit.json`, turns high-level audit counters into governance lanes, and
-writes JSON/Markdown reports. It does not mutate vault content.
+B5 follow-up has three commands/flows:
 
-## Plain-Language Design
+1. `vault-audit` creates a timestamped, path-level audit from real content.
+2. `orphan-governance plan` asks the LLM for a validated governance plan.
+3. `orphan-governance apply` executes only whitelisted actions from that plan.
 
-- Module role: traffic controller for risky cleanup.
-- Data it asks for: one audit JSON report.
-- Data it returns: a governance report saying which findings are safe to only
-  report, which could later be automated, and which require human judgment.
+LLM decides and writes Chinese explanation. Rust code validates and executes.
 
-Current classification:
+## Interfaces
 
-| Audit finding | Count | Lane | Reason |
-| --- | ---: | --- | --- |
-| Orphan candidates | 4 | `human_required` | Samples are old `.wiki` / `_archive` / legacy Markdown. Move/delete/link decisions need human context. |
-| Unsupported frontmatter | 12 | `agent_review` | Current report exposes count, not exact paths. Need path-level evidence before fix. |
-| Pages missing `status` | 5 | `future_auto_fix` | Future dry-run can propose `status: draft`, but v1 must not write it. |
-| Sources missing `compiled_to_wiki` | 16 | `agent_review` | `true` vs `false` changes ingestion semantics. Need per-source evidence. |
-
-## Data Model / Interfaces
-
-New module:
-
-- `crates/wiki-cli/src/orphan_governance.rs`
-
-CLI:
+Audit:
 
 ```bash
-cargo run -p wiki-cli -- \
-  --wiki-dir /Users/mac-mini/Documents/wiki \
-  orphan-governance \
-  --audit-report /Users/mac-mini/Documents/wiki/reports/vault-audit.json
+cargo run -p wiki-cli -- vault-audit \
+  --vault /Users/mac-mini/Documents/wiki
 ```
 
-Output files:
+Output:
 
-- JSON: `<report-dir>/orphan-governance-report.json`
-- Markdown: `<report-dir>/orphan-governance-report.md`
+- `reports/vault-audit-<timestamp>.json`
+- `reports/vault-audit-<timestamp>.md`
 
-Rust report shape:
+Plan:
 
-- `OrphanGovernanceReport`
-  - `generated_at`
-  - `audit_report_path`
-  - `vault_path`
-  - `counts`
-  - `lanes`
-  - `mutation_policy`
-- `GovernanceCounts`
-  - `orphan_candidates`
-  - `unsupported_frontmatter`
-  - `pages_missing_status`
-  - `sources_missing_compiled_to_wiki`
-- `GovernanceLane`
-  - `lane`
-  - `finding`
-  - `count`
-  - `samples`
-  - `reason`
-  - `next_step`
+```bash
+cargo run -p wiki-cli -- --wiki-dir /Users/mac-mini/Documents/wiki \
+  --llm-config llm-config.toml \
+  orphan-governance plan \
+  --audit-report /Users/mac-mini/Documents/wiki/reports/vault-audit-<timestamp>.json
+```
 
-## Flow
+Output:
+
+- `reports/orphan-governance-plan-<timestamp>.json`
+- `reports/orphan-governance-plan-<timestamp>.md`
+
+Apply:
+
+```bash
+cargo run -p wiki-cli -- --wiki-dir /Users/mac-mini/Documents/wiki \
+  orphan-governance apply \
+  --plan /Users/mac-mini/Documents/wiki/reports/orphan-governance-plan-<timestamp>.json
+```
+
+Add `--apply` to mutate.
+
+## Data Flow
 
 ```mermaid
 flowchart TD
-    A["vault-audit.json"] --> B["Read audit counters and samples"]
-    B --> C["Classify lanes"]
-    C --> D["Attach mutation policy"]
-    D --> E["Write JSON report"]
-    D --> F["Write Markdown sibling"]
-    E --> G["Print output paths"]
-    F --> G
+    A["pages/ + sources/"] --> B["vault-audit timestamped JSON"]
+    B --> C["orphan-governance plan gathers path evidence"]
+    C --> D["LLM returns plan JSON"]
+    D --> E["Rust validates schema + paths + whitelist"]
+    E --> F["LLM renders Chinese Markdown from validated JSON"]
+    E --> G["apply dry-run"]
+    G --> H["apply --apply whitelisted mutations"]
 ```
 
-## Edge Cases
+## Governance Plan Shape
 
-- Audit report is missing required fields.
-- Audit report uses older schema where readiness counters are absent.
-- `--report-dir` points outside `<wiki-dir>/reports`.
-- Audit path is not under the vault reports directory.
-- Counts are zero; still write an empty governance report.
+Plan JSON contains:
 
-## Compatibility
+- `version`
+- `generated_at`
+- `audit_report_path`
+- `vault_path`
+- `audit_generated_at`
+- `actions`
+- `markdown_report_model`
 
-- Does not affect B1-B4.
-- Does not require DB, outbox, or palace.
-- Uses the same vault-relative report path rule as other Agent-facing report
-  commands.
+Each action contains:
 
-## Spec Sync Rules
+- `action_type`: `insert_page_status` |
+  `insert_source_compiled_to_wiki` | `delete_cleanup_path` | `needs_human` |
+  `recommend_batch_ingest`
+- `path`
+- `value`
+- `confidence`
+- `reason`
+- `source`: `rule` or `llm`
 
-- If B5 grows an apply mode, update PRD/spec first and wait for user approval.
-- If `vault-audit` later adds path-level arrays for missing `status` /
-  `compiled_to_wiki`, update this spec before enabling auto-fix dry-run.
+Only the first three action types are executable. `recommend_batch_ingest` is a
+next-step note only.
 
-## Test Strategy
+## LLM Boundaries
 
-- Unit:
-  - parse audit JSON and classify 4/12/5/16 counts.
-  - render JSON and Markdown reports.
-  - reject report dirs outside `<wiki-dir>/reports`.
-- CLI:
-  - `orphan-governance --audit-report ...` writes both files.
-  - no non-report vault Markdown file changes.
-- Workspace:
-  - `cargo fmt --all -- --check`
-  - `cargo test -p wiki-cli --test orphan_governance`
-  - `cargo test -p wiki-cli --test vault_cli_commands`
-  - `cargo test --workspace`
-  - `cargo clippy --workspace --all-targets -- -D warnings`
+- LLM receives compact evidence: paths, frontmatter summaries, source titles,
+  summary title candidates, and rule pre-classification.
+- LLM returns JSON only for planning.
+- Rust rejects any LLM action if:
+  - path is not in audit/path evidence or cleanup whitelist
+  - action type is not recognized
+  - executable action is outside whitelist
+  - confidence is missing
+  - value is invalid
+- Chinese Markdown is generated only after plan JSON passes validation.
+
+## Root Concepts Bug
+
+`write_projection` already has a regression test for root `concepts/`. The
+follow-up must broaden coverage to the CLI sync path that users actually run
+and keep cleanup from hiding the write-back bug.
+
+## Tests
+
+- Audit fixture with `.wiki`, `_archive`, `reports`, root `concepts`,
+  `pages`, and `sources`.
+- Timestamped audit output only.
+- Plan rejects undated audit file names.
+- Fake LLM responses validate/reject path injection.
+- Dry-run apply leaves files unchanged.
+- Apply inserts only frontmatter fields and deletes only cleanup whitelist.
+- CLI/sync regression: no root `concepts/` file appears after sync.
