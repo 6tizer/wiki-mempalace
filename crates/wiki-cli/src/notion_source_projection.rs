@@ -72,6 +72,12 @@ pub enum NotionSourceProjectionError {
     Time(#[from] time::error::Format),
 }
 
+#[derive(Clone, Copy, Debug)]
+pub struct ProjectionOptions {
+    pub mode: ProjectionMode,
+    pub refresh_existing: bool,
+}
+
 #[derive(Debug, Clone)]
 struct Projection {
     path: PathBuf,
@@ -83,8 +89,23 @@ pub fn project_notion_sources_to_vault(
     vault: &Path,
     mode: ProjectionMode,
 ) -> Result<NotionSourceProjectionReport, NotionSourceProjectionError> {
+    project_notion_sources_to_vault_with_options(
+        sources,
+        vault,
+        ProjectionOptions {
+            mode,
+            refresh_existing: false,
+        },
+    )
+}
+
+pub fn project_notion_sources_to_vault_with_options(
+    sources: &[RawArtifact],
+    vault: &Path,
+    options: ProjectionOptions,
+) -> Result<NotionSourceProjectionReport, NotionSourceProjectionError> {
     let mut report = NotionSourceProjectionReport {
-        mode: mode.as_str().to_string(),
+        mode: options.mode.as_str().to_string(),
         notion_sources_seen: 0,
         planned: 0,
         applied: 0,
@@ -108,6 +129,26 @@ pub fn project_notion_sources_to_vault(
         };
         let source_id = source.id.0.to_string();
         let notion_uuid_key = normalize_notion_uuid(notion_uuid);
+        let existing_path = existing
+            .source_ids
+            .get(&source_id)
+            .or_else(|| existing.notion_uuids.get(&notion_uuid_key));
+        if let Some(path) = existing_path {
+            report.existing += 1;
+            if options.refresh_existing {
+                let title = source_title(source);
+                let markdown = render_source_markdown(source, origin, notion_uuid, &title)?;
+                let current = std::fs::read_to_string(path).unwrap_or_default();
+                if current != markdown {
+                    report.planned += 1;
+                    projections.push(Projection {
+                        path: path.clone(),
+                        markdown,
+                    });
+                }
+            }
+            continue;
+        }
         if seen_source_ids.contains(&source_id) || seen_notion_uuids.contains(&notion_uuid_key) {
             report.existing += 1;
             continue;
@@ -122,7 +163,7 @@ pub fn project_notion_sources_to_vault(
         projections.push(Projection { path, markdown });
     }
 
-    if mode == ProjectionMode::Apply {
+    if options.mode == ProjectionMode::Apply {
         for projection in &projections {
             if let Some(parent) = projection.path.parent() {
                 std::fs::create_dir_all(parent)?;
@@ -639,6 +680,50 @@ body
         assert!(text.contains("  - \"密码学/ZK\""));
         assert!(!text.contains("Apache2.0"));
         assert!(!text.contains("API Key"));
+    }
+
+    #[test]
+    fn refresh_existing_rewrites_existing_source_body() {
+        let temp = tempfile::tempdir().unwrap();
+        let vault = temp.path().join("vault");
+        let sources = vec![source(
+            "77777777-7777-7777-7777-777777777777",
+            "notion://x_bookmark/refresh-test",
+            "# X Source\n\nURL: https://x.com/post\n来源: X\n\nold body",
+        )];
+        project_notion_sources_to_vault(&sources, &vault, ProjectionMode::Apply).unwrap();
+
+        let updated = vec![source(
+            "77777777-7777-7777-7777-777777777777",
+            "notion://x_bookmark/refresh-test",
+            "# X Source\n\nURL: https://x.com/post\n来源: X\n\nnew full body",
+        )];
+        let dry = project_notion_sources_to_vault_with_options(
+            &updated,
+            &vault,
+            ProjectionOptions {
+                mode: ProjectionMode::DryRun,
+                refresh_existing: true,
+            },
+        )
+        .unwrap();
+        assert_eq!(dry.existing, 1);
+        assert_eq!(dry.planned, 1);
+        assert_eq!(dry.applied, 0);
+
+        let applied = project_notion_sources_to_vault_with_options(
+            &updated,
+            &vault,
+            ProjectionOptions {
+                mode: ProjectionMode::Apply,
+                refresh_existing: true,
+            },
+        )
+        .unwrap();
+        assert_eq!(applied.applied, 1);
+        let text = std::fs::read_to_string(vault.join("sources/x/X-Source.md")).unwrap();
+        assert!(text.contains("new full body"));
+        assert!(!text.contains("old body"));
     }
 
     #[test]

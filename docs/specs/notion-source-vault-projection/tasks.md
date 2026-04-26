@@ -9,3 +9,4 @@
 - [x] Run focused tests, workspace tests, clippy, and diff checks.
 - [x] Open PR #41 and defer production `--apply` until merge.
 - [x] Post-merge Obsidian check found invalid tag display for labels such as `Apache2.0`; added Obsidian-safe tag projection and `--repair-tags`, then repaired production Vault source tags.
+- [x] Follow-up check found newly synced Notion sources had property-only bodies; added Notion block content fetch plus `--refresh-existing` DB/Vault refresh path.

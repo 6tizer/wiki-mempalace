@@ -148,6 +148,7 @@ pub struct SyncResult {
     pub db_id: String,
     pub fetched: usize,
     pub new: usize,
+    pub refreshed: usize,
     pub skipped: usize,
     pub errors: usize,
     pub duration_secs: f64,
@@ -161,6 +162,7 @@ impl NotionSyncRunner {
         since_override: Option<OffsetDateTime>,
         limit: Option<usize>,
         dry_run: bool,
+        refresh_existing: bool,
         writeback: &dyn NotionWriteBackClient,
         verbose: bool,
     ) -> Result<SyncResult, SyncError>;
@@ -173,7 +175,8 @@ impl NotionSyncRunner {
 3. 若 `since_override` 不为 None，用 override 替换
 4. 调 `client.query_database_incremental(notion_db_id, since, limit)` → pages
 5. 对每条 page：
-   - `if repo.notion_page_exists(&page.id)` → skipped++, continue
+   - `if repo.notion_page_exists(&page.id)` 且未传 `--refresh-existing` → skipped++, continue
+   - `if repo.notion_page_exists(&page.id)` 且传了 `--refresh-existing` → 用 page blocks 重建 body，刷新对应 source，refreshed++ 或 skipped++
    - 如是 dry_run → 仅计数，不写 DB
    - 否则：构造 body（§4.3）→ `engine.ingest_raw_with_tags(uri, body, scope, "notion-sync", tags)` → source_id
    - `repo.insert_notion_page_index(&page.id, db_id, &source_id)`
@@ -201,9 +204,14 @@ URL: {url}
 来源: {source}
 状态: {status}
 备注: {note}
+
+{Notion page block content rendered as plain Markdown}
 ```
 
-空字段不输出对应行。此格式与 `batch-ingest` 期望的 source body 格式兼容，LLM 可从中提取结构。
+空字段不输出对应行。`NotionApiClient` 在查询 DB page 后继续读取
+`GET /v1/blocks/{page_id}/children`，把 paragraph / heading / list / quote /
+code / link blocks 渲染为 plain Markdown 后追加到属性行之后。此格式与
+`batch-ingest` 期望的 source body 格式兼容，LLM 可从中提取结构。
 
 ---
 
@@ -331,7 +339,9 @@ AutomationJob::NotionSync => "notion-sync",
 |---|---|---|
 | `notion_client_rate_limit` | notion_client.rs | mock server 返回 429，验证 Retry-After 等待逻辑 |
 | `notion_client_pagination` | notion_client.rs | mock server 返回 has_more=true，验证翻页累计 |
+| `notion_client_pagination` | notion_client.rs | 同时 mock block children，验证 page content 被读取 |
 | `notion_sync_skips_existing_page` | notion_sync.rs | page_id 已在 notion_page_index，验证 skipped++ 且不写 DB |
+| `notion_sync_refreshes_existing_source_body` | notion_sync.rs | `--refresh-existing` 路径刷新已有 source 正文和 tags |
 | `notion_sync_ingests_new_page` | notion_sync.rs | page_id 不存在，验证 source 写入 wiki.db + cursor 更新 |
 | `notion_sync_dry_run_no_writes` | notion_sync.rs | dry_run=true，验证 DB 不变、cursor 不变 |
 | `notion_writeback_noop` | notion_writeback.rs | NoopWriteBack.mark_compiled 不出错 |

@@ -140,7 +140,8 @@
 - [ ] 首次运行（无 cursor）从 `NOW-30d` 开始
 - [ ] 连续两次运行无新内容，DB 状态不变，cursor 不回退
 - [ ] `--since` 覆盖 cursor 有效
-- [ ] body 拼装格式与 `batch-ingest` 兼容（LLM 可正确解析）
+- [x] body 拼装格式与 `batch-ingest` 兼容，并包含 Notion page blocks 正文
+- [x] `--refresh-existing` 可回填已存在 Notion source 的正文和 tags
 - [ ] Source URI `notion://` 不与 vault_audit / vault_backfill 的 `file://` 逻辑冲突
 
 ---

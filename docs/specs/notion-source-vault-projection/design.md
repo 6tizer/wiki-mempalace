@@ -20,10 +20,23 @@ Repair existing source tags for Obsidian's stricter `tags` property:
 wiki-cli notion-source-vault-sync --vault /Users/mac-mini/Documents/wiki --repair-tags --apply
 ```
 
+Refresh existing DB-backed source Markdown after `wiki.db` source bodies change:
+
+```bash
+wiki-cli notion-source-vault-sync --vault /Users/mac-mini/Documents/wiki --refresh-existing --apply
+```
+
 Future incremental sync:
 
 ```bash
 wiki-cli --wiki-dir /Users/mac-mini/Documents/wiki --sync-wiki notion-sync --db-id all
+```
+
+Refresh existing Notion sources from Notion API blocks and reproject them:
+
+```bash
+wiki-cli --wiki-dir /Users/mac-mini/Documents/wiki --sync-wiki \
+  notion-sync --db-id all --refresh-existing
 ```
 
 ## Projection
@@ -50,6 +63,9 @@ separators to `-`. Examples: `Apache2.0 -> Apache2-0`,
 
 Before planning a write, scan `sources/**/*.md` and index `source_id` plus
 `notion_uuid`. If either identity already exists, count the source as existing.
+By default existing files are not rewritten. With `--refresh-existing`, the
+projector renders the current DB source body/tags and rewrites only files whose
+content differs.
 
 ## Mempalace
 
