@@ -33,6 +33,7 @@ mod consistency;
 mod dashboard;
 mod llm;
 mod mcp;
+mod notion_client;
 mod orphan_governance;
 mod palace_init;
 mod vault_audit;
