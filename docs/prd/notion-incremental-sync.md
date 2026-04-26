@@ -37,7 +37,7 @@ NOTION_TOKEN 已作为 secret 注入环境变量。
 5. **Automation job 注册**：将 `notion-sync` 注册到 `AUTOMATION_JOB_SPECS`，接入 `run-daily` 链，12 小时周期。  
 6. **速率限制处理**：固定 350ms 请求间隔；HTTP 429 读 `Retry-After`（默认 60s）后重试，最多 3 次。  
 7. **写回接口（关闭）**：定义 `NotionWriteBackClient` trait + `NoopWriteBack`（默认）+ `HttpNotionWriteBack`（代码实现完整，`--writeback-notion` flag 启用，首版默认关闭）。  
-8. **游标持久化**：`wiki.db` 新增 `notion_sync_state` 表（`db_id`, `last_synced_at`, `pages_synced`）。  
+8. **游标持久化**：`wiki.db` 新增 `notion_sync_cursors` 表（`db_id`, `last_synced_at`, `pages_synced`）。  
 
 ### 3.2 Out of Scope（本 PRD 不做）
 
@@ -84,7 +84,7 @@ NOTION_TOKEN 已作为 secret 注入环境变量。
 |---|---|
 | Notion API rate limit | 350ms 间隔 + 429 重试 + `--limit` 保护 |
 | 首次同步量过大 | `--since` 覆盖游标，`--limit N` 截断 |
-| 重复 source 插入 | `notion_sync_state` 表 page_id 去重，ingest 前查询 |
+| 重复 source 插入 | `notion_page_index` 表 page_id 去重，ingest 前查询 |
 
 ---
 

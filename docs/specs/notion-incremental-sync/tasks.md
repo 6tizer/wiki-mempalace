@@ -99,7 +99,7 @@
 - [x] 在 `main` match 分支中调用 `NotionSyncRunner::run_sync`（x_bookmark / wechat / all 逻辑）
 - [x] `NotionDbTarget` enum 实现 `clap::ValueEnum` + `Display`
 - [x] 在 `AutomationJob` enum 追加 `NotionSync`
-- [x] 在 `AUTOMATION_JOB_SPECS` 追加 spec（`run_in_daily_chain = true`, `short_circuit_on_failure = false`）
+- [x] 在 `AUTOMATION_JOB_SPECS` 追加 spec（`in_daily = true`, `requires_network = true`, `short_circuit = false`）
 - [x] 在 `automation_job_name` match 追加 `"notion-sync"`
 - [x] 在 `run_automation_job` match 追加 `NotionSync` 分支，复用 `NotionSyncRunner`
 - [x] 验证 `wiki-cli notion-sync --help` 输出正确
@@ -133,7 +133,7 @@
 - [ ] T2：`NOTION_TOKEN` 不被打印；429 重试不超 3 次；`limit` 在翻页循环中正确截断
 - [ ] T3：`HttpNotionWriteBack` 失败时返回 `Err` 不 panic；`NoopWriteBack` 实现 `Send + Sync`
 - [ ] T4：dry_run 分支不写任何 DB 行；cursor 仅在非 dry_run 且无 error 时更新；去重查询在 ingest 前执行
-- [ ] T5：`--writeback-notion` 默认 false；`automation list-jobs` 含 `notion-sync`；job 失败不 short-circuit chain
+- [ ] T5：`--writeback-notion` 默认 false；`automation list-jobs` 含 `notion-sync`；job 失败后不 short-circuit
 
 ### 集成 Review（所有 T 完成后）
 

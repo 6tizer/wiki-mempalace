@@ -19,7 +19,7 @@ wiki-cli notion-sync (新子命令)
     │       │       速率限制 + 429 重试
     │       │
     │       ├─► WikiRepository (已有 wiki-storage)
-    │       │       读写 notion_sync_state 表（新增）
+    │       │       读写 notion_sync_cursors 表（新增）
     │       │       page_id → source_id 去重查询
     │       │
     │       ├─► LlmWikiEngine (已有 wiki-kernel)
@@ -40,7 +40,7 @@ wiki-cli notion-sync (新子命令)
 
 ## 2. 存储设计
 
-### 2.1 新增表：`notion_sync_state`
+### 2.1 新增表：`notion_sync_cursors`
 
 在 `wiki-storage/src/lib.rs` 的 `SCHEMA` 常量中追加：
 
@@ -72,6 +72,8 @@ fn upsert_notion_sync_cursor(&self, db_id: &str, at: OffsetDateTime, pages_synce
 fn notion_page_exists(&self, notion_page_id: &str) -> Result<bool, StorageError>;
 // 记录 page_id → source_id 映射
 fn insert_notion_page_index(&self, notion_page_id: &str, db_id: &str, source_id: &SourceId) -> Result<(), StorageError>;
+// 批量写入 page_id 映射
+fn insert_notion_page_indexes(&self, indexes: Vec<(String, String, SourceId)>) -> Result<(), StorageError>;
 ```
 
 ---
@@ -294,8 +296,9 @@ NotionSync,
 ```rust
 AutomationJobSpec {
     job: AutomationJob::NotionSync,
-    run_in_daily_chain: true,
-    short_circuit_on_failure: false,
+    in_daily: true,
+    requires_network: true,
+    short_circuit: false,
 },
 ```
 
