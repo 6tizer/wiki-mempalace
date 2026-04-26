@@ -1534,12 +1534,32 @@ fn normalize_local_target(target: &str) -> String {
 }
 
 fn notion_uuid_from_target(target: &str) -> Option<String> {
-    let bytes = target.as_bytes();
-    for window in bytes.windows(32) {
-        if window.iter().all(u8::is_ascii_hexdigit) {
-            return Some(String::from_utf8_lossy(window).to_ascii_lowercase());
-        }
+    // Pattern 1: Notion local filename — last space-separated segment before optional ".md"
+    // e.g. "Page Title abc123...def0.md"  or  "some/path/Title abc123...def0.md"
+    let stem = target.strip_suffix(".md").unwrap_or(target);
+    // Take the last path segment (after last '/')
+    let last_path_seg = stem.rsplit('/').next().unwrap_or(stem);
+    // Within that segment, take the last space-separated token
+    let last_token = last_path_seg.rsplit(' ').next().unwrap_or(last_path_seg);
+    if last_token.len() == 32 && last_token.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return Some(last_token.to_ascii_lowercase());
     }
+
+    // Pattern 2: Notion web URL — last path segment (strip query), may be "<slug>-<32hex>"
+    let path_part = target.split('?').next().unwrap_or(target);
+    let last_seg = path_part.rsplit('/').next().unwrap_or(path_part);
+    // Strip a trailing fragment
+    let last_seg = last_seg.split('#').next().unwrap_or(last_seg);
+    // Try the portion after the last '-'
+    let hex_candidate = last_seg.rsplit('-').next().unwrap_or(last_seg);
+    if hex_candidate.len() == 32 && hex_candidate.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return Some(hex_candidate.to_ascii_lowercase());
+    }
+    // Try the segment itself as a bare 32-hex id
+    if last_seg.len() == 32 && last_seg.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return Some(last_seg.to_ascii_lowercase());
+    }
+
     None
 }
 

@@ -35,6 +35,8 @@ pub enum EngineError {
     ScopeDenied,
     #[error(transparent)]
     TagPolicy(#[from] TagPolicyError),
+    #[error("internal engine error: {0}")]
+    Internal(String),
 }
 
 /// 页面状态晋升失败的细粒度错误
@@ -779,7 +781,9 @@ impl<H: WikiHook> LlmWikiEngine<H> {
                 }
             }
         }
-        Err(last_err.expect("retry loop runs at least once"))
+        Err(last_err.unwrap_or_else(|| {
+            EngineError::Internal("save_to_repo retry loop produced no error".into())
+        }))
     }
 
     pub fn flush_outbox_to_repo<R: WikiRepository>(
@@ -795,14 +799,16 @@ impl<H: WikiHook> LlmWikiEngine<H> {
         batch_size: usize,
         retry_count: usize,
     ) -> Result<usize, EngineError> {
-        let mut n = 0usize;
         let size = batch_size.max(1);
-        while n < self.outbox.len() {
-            let end = usize::min(n + size, self.outbox.len());
-            for event in &self.outbox[n..end] {
+        let mut next = 0usize;
+        while next < self.outbox.len() {
+            let batch_end = usize::min(next + size, self.outbox.len());
+            let batch_start = next;
+            for offset in 0..(batch_end - batch_start) {
+                let idx = batch_start + offset;
                 let mut last_err: Option<EngineError> = None;
                 for _ in 0..=retry_count {
-                    match repo.append_outbox(event) {
+                    match repo.append_outbox(&self.outbox[idx]) {
                         Ok(()) => {
                             last_err = None;
                             break;
@@ -813,15 +819,17 @@ impl<H: WikiHook> LlmWikiEngine<H> {
                     }
                 }
                 if let Some(err) = last_err {
-                    // Trim successfully flushed events so a retry won't re-append them.
-                    self.outbox.drain(..n);
+                    // Trim only the successfully flushed events so a retry won't re-append them.
+                    let flushed = batch_start + offset;
+                    self.outbox.drain(..flushed);
                     return Err(err);
                 }
             }
-            n = end;
+            next = batch_end;
         }
+        let total = self.outbox.len();
         self.outbox.clear();
-        Ok(n)
+        Ok(total)
     }
 
     /// 对知识库运行 gap 扫描，返回检测到的知识缺口。
