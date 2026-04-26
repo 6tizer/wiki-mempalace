@@ -29,7 +29,7 @@
 | Embedding Tx Atomicity | 💤 未开始 | CR-01 延后项：`upsert_embedding` 纳入 snapshot+outbox 同一 SQLite transaction；需存储层改造 PRD |
 | Benchmark Reproducibility | 💤 未开始 | CR-01 延后项：`rust-mempalace benchmark --mode random` 添加 `--seed` 参数并存入 `benchmark_runs`，使跨次 recall 可比；需独立配置 PRD |
 | Notion Archived Source Retirement | 💤 未开始 | 待 PRD/spec；Notion 已归档 source 应同步退役到本地 DB/Vault。已知样本：`sources/wechat/微信公众号文章链接汇总.md`，Notion `is_archived=true`，本地仍在 `wiki.db.sources` 和 Vault 中 |
-| Notion Incremental Sync | 💤 未开始 | 待 PRD；当前 Notion 数据为一次性离线迁移。需实现：Notion API token secret 注入、X书签/微信文章 DB 增量检测（`last_edited_time`）、调度触发（scheduled workflow 或 automation job）、复用 `wiki-migration-notion` 解析逻辑；**需用户决策**：是否接入 Notion API、token 如何管理 |
+| Notion Incremental Sync | 🚧 PR 审核中 | PR #36；`wiki-cli notion-sync`、automation `notion-sync` daily job 已实现；增量游标 `notion_sync_cursors`/`notion_page_index`；速率限制 350ms + 429 重试；`--writeback-notion` 接口完整默认关闭；PRD: `docs/prd/notion-incremental-sync.md`；smoke test: X书签 782 + 微信文章 482 dry-run 通过 |
 | Scheduled Vault Reports | 💤 未开始 | 待 PRD；把 `vault-audit`、`metrics`、`dashboard`、`automation health`、`suggest` 等报告接入定时生成和保留策略 |
 | C16A Atomic snapshot + outbox | ✅ 已合入 | PR #25 已 merge；新增 `save_snapshot_and_append_outbox` 单事务持久化路径；CLI/MCP/backfill 写路径已切到原子提交 |
 | C16B Embedding ANN index | 💤 未开始 | 仍保留在 [embedding-ann-index](specs/embedding-ann-index/)；可单独规划，不和存储一致性混在一个 PR |
@@ -37,7 +37,7 @@
 ## 当前下一阶段
 
 1. CR-01 merge：PR #34 review sign-off 后合入；合并后回填 PRD status 和 roadmap。
-2. **【需用户决策】Notion Incremental Sync**：是否接入 Notion API 增量同步；需确认 (a) 是否愿意将 Notion Integration token 作为 secret 注入；(b) 优先同步哪个 DB（X书签/微信文章/两者）；(c) 触发方式（定时/手动）。决策后再写 PRD。
+2. **Notion Incremental Sync**：PR 已提交待 review；合并后回填 roadmap 状态。
 3. Notion Archived Source Retirement：新增 Notion archived 状态同步治理，识别已归档 source，生成退役 plan，并通过 DB 原点更新 + Vault 投影清理处理，不手工删除单个 Markdown。
 4. Scheduled Vault Reports：新增定时报告流水线 PRD，明确哪些报告由 cron/automation 生成、生成频率、输出目录、latest 指针和历史保留/清理策略。
 5. CR-01 延后项（按优先级）：

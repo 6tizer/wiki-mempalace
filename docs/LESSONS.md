@@ -88,3 +88,12 @@
 - Spec changes needed: 设计文档 M4 的代码示例细节与最终实现有细微差异（`strip_suffix` 逻辑路径调整）；伪代码级设计文档只做方向参考，实现以代码为准，不需要每次精确同步。
 - Tests or reviews that caught issues: clippy 抓到两处编译时 lint；新增 `source_ingested_unresolved_scope_counted_as_unresolved`、`source_ingested_filtered_scope_counted_as_filtered` 直接覆盖 M2 语义修正；`to_snapshot_is_deterministic` 验证 M1。
 - Next plan note: 四项 CR-01 延后 follow-up 已写入 roadmap（MCP Vault Sync、Outbox Consumer Cursors、Embedding Tx Atomicity、Benchmark Reproducibility）。各项影响面窄，适合独立小 PRD，不建议合并批次。embedding tx 需存储层改造，风险最高，建议最后处理。
+
+## 2026-04-26 / Notion Incremental Sync (PR #36)
+
+- Scope: 新增 `wiki-cli notion-sync` 子命令和 `AutomationJob::NotionSync`，通过 Notion API 增量拉取 X书签文章数据库和微信文章数据库到 `wiki.db`；新增 `notion_sync_cursors` / `notion_page_index` 两张表；速率限制 + 429 重试；`NotionWriteBackClient` trait 默认关闭。
+- What worked: 白话架构对话先把「增量去重」「速率限制」「写回接口先关闭」三个关键约束定清楚再写 spec，实现阶段没有返工。T1→T2→T3→T4→T5 的模块顺序依赖关系清晰，每个模块有独立测试，focused review 逐一把关效果好。测试用 in-memory stub 替代真实 HTTP（T4）加上 mockito mock server（T2/T3）完全不需要真实 Notion token 就能跑通。
+- What caused rework: 云端 Cargo 默认版本（1.83.0）拉依赖时遇到 `time-macros` edition2024 解析失败，需要全程加 `+stable` 绕过；这是云端环境特有问题，本地 Mac mini 不受影响。`clippy -D warnings` 下的 dead_code 处理：`last_edited_time` 字段目前只在测试用、`DomainSchema` use 放在了非 test 作用域、`from_env()` 方法被认为未调用——这三处都需要调整，以后新增只在测试里用到的 pub 字段/方法时，应提前加 `#[allow(dead_code)]` 或移到 `#[cfg(test)]` 作用域。现有 automation job 列表断言测试（固定列表 assert_eq!）在新增 job 时必然失败，需同步更新。
+- Spec changes needed: design.md §7 自动化 job 注册描述了 `short_circuit_on_failure` 字段，但实际 `AutomationJobSpec` 没有该字段（只有 `in_daily` + `requires_network`）；spec 描述比代码超前，以代码为准，spec 可在合并后修正。
+- Tests or reviews that caught issues: clippy `-D warnings` 抓到 dead_code 和 unused import 4 处；T4 dry_run 测试确认了 cursor 不更新的边界；integration review 确认了 `notion://` URI 与 `vault_audit`/`vault_backfill` 的 `file://` 路径完全隔离。smoke test 用真实 NOTION_TOKEN 验证了 dry-run 返回 782 + 482 = 1264 条。
+- Next plan note: PR 合并后在本地 Mac mini 执行首次真实同步（`notion-sync --db-id all`），再跑 `batch-ingest` 编译新文章。后续优先做 Notion Archived Source Retirement（识别本地已有但 Notion 已归档的 source，生成退役计划），再考虑 Scheduled Vault Reports。
