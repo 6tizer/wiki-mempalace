@@ -149,9 +149,9 @@
 
 | Task | 实现 | 测试 | Review | 备注 |
 |---|---|---|---|---|
-| T1 存储层 | ⬜ | ⬜ | ⬜ | |
-| T2 API 客户端 | ⬜ | ⬜ | ⬜ | |
-| T3 Writeback | ⬜ | ⬜ | ⬜ | |
-| T4 同步逻辑 | ⬜ | ⬜ | ⬜ | |
-| T5 CLI+Automation | ⬜ | ⬜ | ⬜ | |
-| T6 CI gate | — | ⬜ | ⬜ | |
+| T1 存储层 | ✅ | ✅ | ✅ | |
+| T2 API 客户端 | ✅ | ✅ | ✅ | |
+| T3 Writeback | ✅ | ✅ | ✅ | |
+| T4 同步逻辑 | ✅ | ✅ | ✅ | |
+| T5 CLI+Automation | ✅ | ✅ | ✅ | |
+| T6 CI gate | — | ✅ | ✅ | fmt/test/clippy all green |

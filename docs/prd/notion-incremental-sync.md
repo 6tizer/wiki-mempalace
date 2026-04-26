@@ -92,7 +92,7 @@ NOTION_TOKEN 已作为 secret 注入环境变量。
 
 - [ ] PRD 用户确认  
 - [ ] spec 三件套写完并确认  
-- [ ] 实现完成  
-- [ ] CI 通过  
+- [x] 实现完成  
+- [x] CI 通过  
 - [ ] PR 合并  
 - [ ] roadmap 状态回填  
