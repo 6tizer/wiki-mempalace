@@ -29,6 +29,7 @@ use wiki_storage::{
 };
 
 mod banner;
+mod consistency;
 mod dashboard;
 mod llm;
 mod mcp;
@@ -279,6 +280,26 @@ enum Cmd {
         /// Report directory. Defaults to <wiki-dir>/reports or ./reports.
         #[arg(long)]
         report_dir: Option<PathBuf>,
+    },
+    /// Read-only DB/Vault/Mempalace consistency audit.
+    ConsistencyAudit,
+    /// Build a validated DB/Vault/Mempalace consistency plan from an audit.
+    ConsistencyPlan {
+        /// Path to reports/consistency-audit-<timestamp>.json.
+        #[arg(long)]
+        audit_report: PathBuf,
+        /// Report directory. Defaults to <wiki-dir>/reports from the audit.
+        #[arg(long)]
+        report_dir: Option<PathBuf>,
+    },
+    /// Apply executable actions from a validated consistency plan. Defaults to dry-run.
+    ConsistencyApply {
+        /// Path to reports/consistency-plan-<timestamp>.json.
+        #[arg(long)]
+        plan: PathBuf,
+        /// Mutate DB/Vault/Mempalace page mirror. Without this flag, dry-run only.
+        #[arg(long, default_value_t = false)]
+        apply: bool,
     },
     /// Collect read-only wiki metrics.
     Metrics {
@@ -2168,6 +2189,77 @@ fn run_with_engine(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             eng.save_to_repo_and_flush_outbox_with_policy(&repo, 128, 3)?;
             maybe_sync_projection(sync_wiki, wiki_root.as_deref(), &eng)?;
             println!("promoted page {page_id} to {to_status:?}");
+        }
+        Cmd::ConsistencyAudit => {
+            let wiki_dir = wiki_root
+                .clone()
+                .ok_or("--wiki-dir is required for consistency-audit")?;
+            let (report, files) = consistency::run_consistency_audit(
+                &repo,
+                consistency::ConsistencyAuditOptions {
+                    db_path: cli.db.clone(),
+                    wiki_dir,
+                    palace_path: cli.palace.clone(),
+                    generated_at: OffsetDateTime::now_utc(),
+                },
+            )?;
+            println!(
+                "consistency_audit db_pages={} db_sources={} vault_empty_unmanaged={} palace_missing_page_drawers={}",
+                report.db.page_count,
+                report.db.source_count,
+                report.vault.empty_unmanaged_files.len(),
+                report.palace.missing_page_drawers.len()
+            );
+            println!("json_report_file={}", files.json_path.display());
+            println!("markdown_report_file={}", files.markdown_path.display());
+        }
+        Cmd::ConsistencyPlan {
+            audit_report,
+            report_dir,
+        } => {
+            let (plan, files) = consistency::run_consistency_plan(
+                &audit_report,
+                report_dir,
+                OffsetDateTime::now_utc(),
+            )?;
+            println!(
+                "consistency_plan actions={} executable_actions={}",
+                plan.actions.len(),
+                plan.actions
+                    .iter()
+                    .filter(|action| action.executable)
+                    .count()
+            );
+            println!("json_report_file={}", files.json_path.display());
+            println!("markdown_report_file={}", files.markdown_path.display());
+        }
+        Cmd::ConsistencyApply { plan, apply } => {
+            let wiki_dir = wiki_root
+                .clone()
+                .ok_or("--wiki-dir is required for consistency-apply")?;
+            let palace_bank = palace_init::mempalace_bank_from_viewer_scope(&cli.viewer_scope);
+            let report = consistency::run_consistency_apply(
+                &repo,
+                &mut eng.store,
+                &eng.audits,
+                consistency::ConsistencyApplyOptions {
+                    plan_path: &plan,
+                    wiki_dir: &wiki_dir,
+                    palace_path: cli.palace.as_deref(),
+                    palace_bank_id: &palace_bank,
+                    apply,
+                },
+            )?;
+            println!(
+                "consistency_apply mode={} actions_seen={} executable_actions={} db_fixes_applied={} vault_cleanups_applied={} palace_replays_applied={} projection_ran={}",
+                report.mode,
+                report.actions_seen,
+                report.executable_actions,
+                report.db_fixes_applied,
+                report.vault_cleanups_applied,
+                report.palace_replays_applied,
+                report.projection_ran,
+            );
         }
         Cmd::Crystallize {
             question,

@@ -70,3 +70,12 @@
 - Spec changes needed: 后续若要修 `status` 或 `compiled_to_wiki`，先让 `vault-audit` 输出 path-level arrays，再更新 B5 spec 并让用户确认 apply mode。
 - Tests or reviews that caught issues: 独立 review subagent 抓到 2 个 P2；新增 malformed audit 与 symlink escape tests；最终需跑 `fmt/test/clippy` gate。
 - Next plan note: B5 v1 只给治理报告。不要在本 PR 里清理 `_archive`、改 frontmatter、重跑 LLM 或移动历史文件。
+
+## 2026-04-26 / DB/Vault/Palace Consistency Governance
+
+- Scope: 新增 `consistency-audit` / `consistency-plan` / `consistency-apply`，以 `wiki.db` 为原点审计 Vault 与 Mempalace page 镜像，再按白名单 dry-run/apply。
+- What worked: 先真实跑生产 audit/plan/dry-run，再 apply；可执行动作只有 2 个空文件清理和 Mempalace page replay，避免大规模 DB/Vault 改写。
+- What caused rework: 初版 audit 把所有 DB page 都要求进 Mempalace，误报 45 个 index/lint-report 等非 eligible page；应直接复用 sink eligibility 口径。
+- Spec changes needed: Mempalace audit 必须写清 “source drawers out of scope” 和 “只有 summary/concept/entity/synthesis/qa page 进入 palace”。
+- Tests or reviews that caught issues: 生产复查 audit 抓到 45 个误报；新增 ineligible page 不要求 palace drawer 的回归测试。
+- Next plan note: 剩余 12578 个旧 Notion link 只报告为 needs_human；要自动修，需另开规则/LLM 目标解析模块。
