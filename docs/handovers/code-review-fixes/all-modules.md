@@ -58,7 +58,8 @@ cargo test --workspace   ✓ (全部通过，包含新增单测)
 
 ## 下一步建议
 
-1. MCP vault 同步：为 `wiki-cli/src/mcp.rs` 添加 `--sync-wiki` flag，在写操作后调用 `write_projection`（独立 PRD）。
-2. outbox 消费者游标：为 `export_outbox_ndjson_from_id` 添加 consumer-scoped cursor 表（独立 PRD）。
-3. benchmark 可重复性：为 `benchmark_run` 添加 `--seed` 参数并存入 DB（独立 PRD）。
-4. embedding 事务包装：将 `upsert_embedding` 纳入 snapshot+outbox 同一 SQLite transaction（需存储层改造）。
+1. **MCP Vault Sync**（roadmap 已登记）：为 `wiki-cli/src/mcp.rs` 添加 `--sync-wiki` flag，在写操作后调用 `write_projection`（独立 PRD）。
+2. **Outbox Consumer Cursors**（roadmap 已登记）：为 `export_outbox_ndjson_from_id` 添加 consumer-scoped cursor 表，实现 at-exactly-once 语义（独立 outbox-v2 PRD）。
+3. **Benchmark Reproducibility**（roadmap 已登记）：为 `benchmark_run` 添加 `--seed` 参数并存入 DB（独立配置 PRD）。
+4. **Embedding Tx Atomicity**（roadmap 已登记）：将 `upsert_embedding` 纳入 snapshot+outbox 同一 SQLite transaction，需存储层改造（风险最高，建议最后处理）。
+5. 合并 PR #34 后，回填 `docs/prd/code-review-fixes.md` Status 中的 "Merged" 和 "Roadmap updated" 勾选，并将 roadmap 中 CR-01 条目状态改为 `✅ 已合入`。

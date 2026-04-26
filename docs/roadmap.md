@@ -23,6 +23,11 @@
 | Vault Backfill + Palace Init | ✅ 已合入并已跑生产初始化 | PR #23 已 merge；`vault-audit`、`vault-backfill`、`palace-init`、MCP `shared:wiki` runtime defaults 已实现；2026-04-25 已对 `/Users/mac-mini/Documents/wiki` 完成生产 backfill + palace init |
 | B5 Orphan Governance | ✅ 已合入并已跑生产 apply | PR #28 / PR #30 已 merge；`vault-audit` timestamped 报告、LLM plan、中文报告、白名单 apply 已实现；生产 vault 已真实跑过 |
 | DB/Vault/Palace Consistency Governance | ✅ 已合入并已跑生产 apply | PR #32 已 merge；已真实 apply 到 `/Users/mac-mini/Documents/wiki`，最终 plan 可执行动作 0，Vault 无新 pages 文件，Mempalace 缺失 page drawer 0 |
+| CR-01 Code Review Fixes | 🔄 PR #34 draft | 修复全库审查发现的 Critical/High/Medium 问题：快照序列化确定性、SourceIngested unresolved 语义、flush_outbox drain 精度、save_snapshot 事务、notion_uuid 锚定提取、url_index 重复 URL、benchmark hits 真实存储 |
+| MCP Vault Sync | 💤 未开始 | CR-01 延后项：`wiki-cli/src/mcp.rs` `_wiki_dir` 实际 projection 集成，写操作后自动触发 `write_projection`；需独立 PRD 和接口设计 |
+| Outbox Consumer Cursors | 💤 未开始 | CR-01 延后项：outbox 消费者游标 / at-exactly-once 语义；`export_outbox_ndjson_from_id` 添加 consumer-scoped cursor 表，防止重复派发；需独立 outbox-v2 PRD |
+| Embedding Tx Atomicity | 💤 未开始 | CR-01 延后项：`upsert_embedding` 纳入 snapshot+outbox 同一 SQLite transaction；需存储层改造 PRD |
+| Benchmark Reproducibility | 💤 未开始 | CR-01 延后项：`rust-mempalace benchmark --mode random` 添加 `--seed` 参数并存入 `benchmark_runs`，使跨次 recall 可比；需独立配置 PRD |
 | Notion Archived Source Retirement | 💤 未开始 | 待 PRD/spec；Notion 已归档 source 应同步退役到本地 DB/Vault。已知样本：`sources/wechat/微信公众号文章链接汇总.md`，Notion `is_archived=true`，本地仍在 `wiki.db.sources` 和 Vault 中 |
 | Scheduled Vault Reports | 💤 未开始 | 待 PRD；把 `vault-audit`、`metrics`、`dashboard`、`automation health`、`suggest` 等报告接入定时生成和保留策略 |
 | C16A Atomic snapshot + outbox | ✅ 已合入 | PR #25 已 merge；新增 `save_snapshot_and_append_outbox` 单事务持久化路径；CLI/MCP/backfill 写路径已切到原子提交 |
@@ -30,12 +35,18 @@
 
 ## 当前下一阶段
 
-1. Notion Archived Source Retirement：新增 Notion archived 状态同步治理，识别已归档 source，生成退役 plan，并通过 DB 原点更新 + Vault 投影清理处理，不手工删除单个 Markdown。
-2. Scheduled Vault Reports：新增定时报告流水线 PRD，明确哪些报告由 cron/automation 生成、生成频率、输出目录、latest 指针和历史保留/清理策略。
-3. C16B Embedding ANN index 如需推进，单独从 PRD/spec 开新分支。
-4. 观察 J13 scheduled artifacts：先积累至少 7 份 nightly report 和 1 份 weekly full report，确认 artifact 稳定和 full run 真实耗时。
-5. J14 Semantic Fusion Benchmark：只有在 J13 报告显示同义表达/词面不匹配是主要错因，且运行预算明确后，再评估 `wiki-cli --vectors --palace-db` 语义融合 lane。
-6. M12 后续 operator/executor、dashboard latest suggestion report、QueryServed scope/hash schema 改进单独规划，不混入首版 suggest。
+1. CR-01 merge：PR #34 review sign-off 后合入；合并后回填 PRD status 和 roadmap。
+2. Notion Archived Source Retirement：新增 Notion archived 状态同步治理，识别已归档 source，生成退役 plan，并通过 DB 原点更新 + Vault 投影清理处理，不手工删除单个 Markdown。
+3. Scheduled Vault Reports：新增定时报告流水线 PRD，明确哪些报告由 cron/automation 生成、生成频率、输出目录、latest 指针和历史保留/清理策略。
+4. CR-01 延后项（按优先级）：
+   - MCP Vault Sync — 写操作后自动 vault projection；需独立 PRD。
+   - Outbox Consumer Cursors — at-exactly-once 消费语义；需独立 outbox-v2 PRD。
+   - Embedding Tx Atomicity — embedding 纳入 snapshot 事务；需存储层改造 PRD。
+   - Benchmark Reproducibility — random 模式确定性种子；需独立配置 PRD。
+5. C16B Embedding ANN index 如需推进，单独从 PRD/spec 开新分支。
+6. 观察 J13 scheduled artifacts：先积累至少 7 份 nightly report 和 1 份 weekly full report，确认 artifact 稳定和 full run 真实耗时。
+7. J14 Semantic Fusion Benchmark：只有在 J13 报告显示同义表达/词面不匹配是主要错因，且运行预算明确后，再评估 `wiki-cli --vectors --palace-db` 语义融合 lane。
+8. M12 后续 operator/executor、dashboard latest suggestion report、QueryServed scope/hash schema 改进单独规划，不混入首版 suggest。
 
 执行计划见 [automation-issue-batch-3.md](automation-issue-batch-3.md)。开发流程见
 [dev-workflow.md](dev-workflow.md)，batch-3 PRD 见 [prd/batch-3.md](prd/batch-3.md)。

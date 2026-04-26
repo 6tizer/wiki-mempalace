@@ -38,9 +38,15 @@
 - [x] `cargo fmt --all`
 - [x] `cargo test --workspace`
 - [x] `cargo clippy --workspace --all-targets -- -D warnings`
-- [ ] 提交并推送
-- [ ] 更新 handover 文档
-- [ ] 创建 PR
+- [x] 提交并推送
+- [x] 更新 handover 文档
+- [x] 创建 PR (#34)
+
+### 延后 follow-up（独立 PRD，不在本批范围）
+- [ ] MCP Vault Sync — `wiki-cli/src/mcp.rs` 写操作后自动调用 `write_projection`（roadmap: "MCP Vault Sync"）
+- [ ] Outbox Consumer Cursors — at-exactly-once 消费语义，添加 consumer-scoped cursor 表（roadmap: "Outbox Consumer Cursors"）
+- [ ] Embedding Tx Atomicity — `upsert_embedding` 纳入 snapshot+outbox 同一事务（roadmap: "Embedding Tx Atomicity"）
+- [ ] Benchmark Reproducibility — `--seed` 参数存入 `benchmark_runs`（roadmap: "Benchmark Reproducibility"）
 
 ## Status
 
@@ -53,5 +59,5 @@
 - [x] M6 完成
 - [x] M7 完成
 - [x] M8 完成
-- [ ] CI green (local pass)
-- [ ] PR open
+- [x] CI green (local: fmt ✓ clippy ✓ test ✓)
+- [x] PR #34 open (draft)

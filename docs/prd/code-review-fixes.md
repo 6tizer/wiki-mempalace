@@ -27,21 +27,25 @@ In:
 
 Out:
 
-- MCP `_wiki_dir` 实际 projection 集成（需独立 PRD）
-- embedding 事务包装（需独立存储迁移）
-- outbox 消费者游标（需独立 outbox-v2 PRD）
-- longmemeval benchmark 可重复性种子（需独立配置 PRD）
+- MCP `_wiki_dir` 实际 projection 集成（需独立 PRD — 参见 roadmap "MCP Vault Sync"）
+- embedding 写入纳入快照事务（需独立存储迁移 PRD — 参见 roadmap "C16B-embedding-tx"）
+- outbox 消费者游标 / at-exactly-once 语义（需独立 outbox-v2 PRD — 参见 roadmap "Outbox Consumer Cursors"）
+- longmemeval benchmark random 模式可重复性种子（需独立配置 PRD — 参见 roadmap "Benchmark Reproducibility"）
 
 ## Modules
 
+
 | Module | Goal | Owner area | Status |
 | --- | --- | --- | --- |
-| M1-snapshot-sort | 快照序列化排序确定性 | memory.rs | Planned |
-| M2-source-unresolved | SourceIngested unresolved 正确计数 | mempalace-bridge/lib.rs | Planned |
-| M3-outbox-drain | flush_outbox drain 修复 + expect 替换 | engine.rs | Planned |
-| M4-notion-uuid | notion_uuid_from_target 锚定 | consistency.rs | Planned |
-| M5-url-index | url_index 重复 URL 警告 | writer.rs | Planned |
-| M6-benchmark | benchmark hits/samples 字段修复 | service.rs + db.rs | Planned |
+| M1-snapshot-sort | 快照序列化排序确定性 | memory.rs | ✅ Completed |
+| M2-source-unresolved | SourceIngested unresolved 正确计数 | mempalace-bridge/lib.rs | ✅ Completed |
+| M3-outbox-drain | flush_outbox drain 修复 + expect 替换 | engine.rs | ✅ Completed |
+| M4-save-snapshot-tx | save_snapshot 事务包装 | wiki-storage/lib.rs | ✅ Completed |
+| M5-notion-uuid | notion_uuid_from_target 锚定 | consistency.rs | ✅ Completed |
+| M6-url-index | url_index 重复 URL 检测 | writer.rs | ✅ Completed |
+| M7-benchmark | benchmark hits/samples 字段修复 | service.rs + db.rs | ✅ Completed |
+| M8-stale-pages-doc | cleanup_stale_managed_pages 保护注释 | wiki_writer.rs | ✅ Completed |
+
 
 ## Acceptance
 
@@ -66,9 +70,9 @@ Out:
 ## Status
 
 - [x] PRD approved
-- [ ] Plain architecture approved
-- [ ] Specs created
-- [ ] Modules implemented
-- [ ] CI green
-- [ ] Merged
+- [x] Plain architecture approved
+- [x] Specs created
+- [x] Modules implemented
+- [x] CI green (local: fmt ✓ clippy ✓ test ✓)
+- [ ] Merged (PR #34 draft，待 review sign-off)
 - [ ] Roadmap updated

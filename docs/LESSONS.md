@@ -79,3 +79,12 @@
 - Spec changes needed: Mempalace audit 必须写清 “source drawers out of scope” 和 “只有 summary/concept/entity/synthesis/qa page 进入 palace”；Vault projection 命名和 frontmatter 保留规则必须和生产迁移格式一致。
 - Tests or reviews that caught issues: 生产复查 audit 抓到 Mempalace eligibility 误报；真实 apply 抓到 projection 重写风险；新增 ineligible page、targeted projection 不新建缺失旧页、保留 frontmatter 的回归测试；本地 `cargo test -p wiki-cli --test consistency`、`cargo test -p wiki-kernel`、`cargo clippy --workspace --all-targets -- -D warnings`、`cargo test --workspace` 和 GitHub `quick` CI 通过。
 - Next plan note: Notion archived 状态还没有同步到本地退役流程；已知样本 `sources/wechat/微信公众号文章链接汇总.md` 在 Notion 为 `is_archived=true`，但本地仍在 `wiki.db.sources` 和 Vault。下一轮要做 DB-first archived source retirement，不要手删 Markdown。
+
+## 2026-04-26 / CR-01 Code Review Fixes (PR #34)
+
+- Scope: 修复全库代码审查发现的 Critical/High/Medium/Low 问题，共 8 个模块（快照序列化确定性、SourceIngested unresolved 语义、flush_outbox drain 精度、save_snapshot 事务包装、notion_uuid 锚定提取、url_index 重复 URL 检测、benchmark hits 真实存储、cleanup 保护文档）。
+- What worked: 从 explore-mode review 产出结构化问题列表，再逐条对照代码确认后才动手，避免基于 review 描述直接猜测实现；每个模块都有独立测试覆盖；白话架构先确认延后范围边界后再写 spec，让实现范围保持紧凑。
+- What caused rework: 新增测试插入位置破坏了相邻的 `#[test]` 函数头（`unresolved_supersede_scope_is_not_dispatched` 的 `fn` 头被消费），导致括号不匹配；下次插入测试时应在上下文中显式包含被插入位置的完整 `#[test]\nfn` 标记行，而非只用函数体开头匹配。clippy `-D warnings` 在 Rust 1.95 抓到两处新 lint：`needless_borrows_for_generic_args`（format! 借用）和 `attempt_to_mutate_range_bound`（range 变量在循环内变更）。
+- Spec changes needed: 设计文档 M4 的代码示例细节与最终实现有细微差异（`strip_suffix` 逻辑路径调整）；伪代码级设计文档只做方向参考，实现以代码为准，不需要每次精确同步。
+- Tests or reviews that caught issues: clippy 抓到两处编译时 lint；新增 `source_ingested_unresolved_scope_counted_as_unresolved`、`source_ingested_filtered_scope_counted_as_filtered` 直接覆盖 M2 语义修正；`to_snapshot_is_deterministic` 验证 M1。
+- Next plan note: 四项 CR-01 延后 follow-up 已写入 roadmap（MCP Vault Sync、Outbox Consumer Cursors、Embedding Tx Atomicity、Benchmark Reproducibility）。各项影响面窄，适合独立小 PRD，不建议合并批次。embedding tx 需存储层改造，风险最高，建议最后处理。
