@@ -20,7 +20,8 @@ Production evidence on 2026-04-26:
 - `wiki.db` contains 176 `notion://` sources.
 - `x_bookmark`: 113 sources.
 - `wechat`: 63 sources.
-- Vault source files matching those `source_id` / `notion_uuid`: 0.
+- Final dry-run after canonical UUID de-duplication: 172 files to write, 4
+  duplicate Notion UUID records already represented in the same run.
 
 ## Scope
 
@@ -43,7 +44,8 @@ Production evidence on 2026-04-26:
 
 ## Success Criteria
 
-- Dry-run reports the 176 missing production source Markdown files.
+- Dry-run reports 176 DB-backed Notion sources, with 172 unique production
+  source Markdown files to write after duplicate UUID de-duplication.
 - Apply writes `sources/x/*.md` and `sources/wechat/*.md` with standard
   frontmatter.
 - Re-running apply is idempotent.

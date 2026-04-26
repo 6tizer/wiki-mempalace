@@ -73,6 +73,8 @@ pub fn project_notion_sources_to_vault(
         skipped_unknown_db: 0,
     };
     let existing = scan_existing_source_identity(vault)?;
+    let mut seen_source_ids: BTreeSet<String> = existing.source_ids.keys().cloned().collect();
+    let mut seen_notion_uuids: BTreeSet<String> = existing.notion_uuids.keys().cloned().collect();
     let mut planned_paths = BTreeSet::new();
     let mut projections = Vec::new();
 
@@ -86,9 +88,8 @@ pub fn project_notion_sources_to_vault(
             continue;
         };
         let source_id = source.id.0.to_string();
-        if existing.source_ids.contains_key(&source_id)
-            || existing.notion_uuids.contains_key(notion_uuid)
-        {
+        let notion_uuid_key = normalize_notion_uuid(notion_uuid);
+        if seen_source_ids.contains(&source_id) || seen_notion_uuids.contains(&notion_uuid_key) {
             report.existing += 1;
             continue;
         }
@@ -97,6 +98,8 @@ pub fn project_notion_sources_to_vault(
         planned_paths.insert(path.clone());
         let markdown = render_source_markdown(source, origin, notion_uuid, &title)?;
         report.planned += 1;
+        seen_source_ids.insert(source_id);
+        seen_notion_uuids.insert(notion_uuid_key);
         projections.push(Projection { path, markdown });
     }
 
@@ -144,7 +147,7 @@ fn scan_existing_source_identity(vault: &Path) -> Result<ExistingSourceIdentity,
             if let Some(notion_uuid) = values.get("notion_uuid") {
                 existing
                     .notion_uuids
-                    .insert(notion_uuid.to_string(), path.to_path_buf());
+                    .insert(normalize_notion_uuid(notion_uuid), path.to_path_buf());
             }
         }
     }
@@ -158,6 +161,14 @@ fn parse_notion_uri(uri: &str) -> Option<(&str, &str)> {
         return None;
     }
     Some((db_id, notion_uuid))
+}
+
+fn normalize_notion_uuid(value: &str) -> String {
+    value
+        .chars()
+        .filter(|c| c.is_ascii_hexdigit())
+        .flat_map(char::to_lowercase)
+        .collect()
 }
 
 fn origin_from_db_id(db_id: &str) -> Option<&'static str> {
@@ -380,5 +391,68 @@ mod tests {
             project_notion_sources_to_vault(&sources, &vault, ProjectionMode::Apply).unwrap();
         assert_eq!(second.planned, 0);
         assert_eq!(second.existing, 1);
+    }
+
+    #[test]
+    fn existing_hyphenless_notion_uuid_matches_hyphenated_uri() {
+        let temp = tempfile::tempdir().unwrap();
+        let vault = temp.path().join("vault");
+        std::fs::create_dir_all(vault.join("sources/x")).unwrap();
+        std::fs::write(
+            vault.join("sources/x/existing.md"),
+            r#"---
+notion_uuid: 1a9701074b688103b989fbd0cfb8343a
+kind: source
+---
+
+body
+"#,
+        )
+        .unwrap();
+        let sources = vec![source(
+            "33333333-3333-3333-3333-333333333333",
+            "notion://x_bookmark/1a970107-4b68-8103-b989-fbd0cfb8343a",
+            "# X Source\n\nURL: https://x.com/post\n来源: X\n",
+        )];
+
+        let report =
+            project_notion_sources_to_vault(&sources, &vault, ProjectionMode::Apply).unwrap();
+
+        assert_eq!(report.planned, 0);
+        assert_eq!(report.applied, 0);
+        assert_eq!(report.existing, 1);
+        assert!(!vault.join("sources/x/X-Source.md").exists());
+    }
+
+    #[test]
+    fn duplicate_notion_uuid_in_same_run_writes_once() {
+        let temp = tempfile::tempdir().unwrap();
+        let vault = temp.path().join("vault");
+        let sources = vec![
+            source(
+                "44444444-4444-4444-4444-444444444444",
+                "notion://x_bookmark/1a970107-4b68-8103-b989-fbd0cfb8343a",
+                "# X Source\n\nURL: https://x.com/post\n来源: X\n",
+            ),
+            source(
+                "55555555-5555-5555-5555-555555555555",
+                "notion://x_bookmark/1a9701074b688103b989fbd0cfb8343a",
+                "# X Source Copy\n\nURL: https://x.com/post\n来源: X\n",
+            ),
+        ];
+
+        let report =
+            project_notion_sources_to_vault(&sources, &vault, ProjectionMode::Apply).unwrap();
+
+        assert_eq!(report.notion_sources_seen, 2);
+        assert_eq!(report.planned, 1);
+        assert_eq!(report.applied, 1);
+        assert_eq!(report.existing, 1);
+        let files: Vec<_> = walkdir::WalkDir::new(vault.join("sources/x"))
+            .into_iter()
+            .filter_map(Result::ok)
+            .filter(|entry| entry.path().extension().and_then(|ext| ext.to_str()) == Some("md"))
+            .collect();
+        assert_eq!(files.len(), 1);
     }
 }
