@@ -14,6 +14,12 @@ Default dry-run:
 wiki-cli notion-source-vault-sync --vault /Users/mac-mini/Documents/wiki
 ```
 
+Repair existing source tags for Obsidian's stricter `tags` property:
+
+```bash
+wiki-cli notion-source-vault-sync --vault /Users/mac-mini/Documents/wiki --repair-tags --apply
+```
+
 Future incremental sync:
 
 ```bash
@@ -34,6 +40,11 @@ RawArtifact { uri: notion://x_bookmark/<page_id>, body, tags }
 Filename slug follows vault-standards: keep Chinese characters, fold whitespace
 and punctuation to `-`, max 80 chars. If a file path conflicts with another
 source, append the source id prefix.
+
+Tags are written as Obsidian-safe tag names in frontmatter. The projector keeps
+letters, numbers, Chinese characters, `/`, `_`, and `-`, and folds other
+separators to `-`. Examples: `Apache2.0 -> Apache2-0`,
+`API Key -> API-Key`, `Apple Silicon -> Apple-Silicon`.
 
 ## Idempotency
 

@@ -436,6 +436,9 @@ enum Cmd {
         /// Write missing source markdown files.
         #[arg(long, default_value_t = false)]
         apply: bool,
+        /// Rewrite existing source frontmatter tags into Obsidian-safe tag names.
+        #[arg(long, default_value_t = false)]
+        repair_tags: bool,
     },
 }
 
@@ -2885,6 +2888,7 @@ fn run_with_engine(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             vault,
             dry_run,
             apply,
+            repair_tags,
         } => {
             if dry_run && apply {
                 return Err("--dry-run and --apply are mutually exclusive".into());
@@ -2902,6 +2906,10 @@ fn run_with_engine(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             let report =
                 notion_source_projection::project_notion_sources_to_vault(&sources, &vault, mode)?;
             println!("{report}");
+            if repair_tags {
+                let report = notion_source_projection::repair_obsidian_source_tags(&vault, mode)?;
+                println!("{report}");
+            }
         }
     }
     Ok(())

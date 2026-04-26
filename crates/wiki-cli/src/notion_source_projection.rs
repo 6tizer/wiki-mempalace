@@ -45,6 +45,25 @@ impl fmt::Display for NotionSourceProjectionReport {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct ObsidianTagRepairReport {
+    pub mode: String,
+    pub files_seen: usize,
+    pub files_planned: usize,
+    pub files_applied: usize,
+    pub tags_rewritten: usize,
+}
+
+impl fmt::Display for ObsidianTagRepairReport {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "obsidian_tag_repair mode={} files_seen={} files_planned={} files_applied={} tags_rewritten={}",
+            self.mode, self.files_seen, self.files_planned, self.files_applied, self.tags_rewritten
+        )
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum NotionSourceProjectionError {
     #[error("io: {0}")]
@@ -110,6 +129,52 @@ pub fn project_notion_sources_to_vault(
             }
             std::fs::write(&projection.path, &projection.markdown)?;
             report.applied += 1;
+        }
+    }
+
+    Ok(report)
+}
+
+pub fn repair_obsidian_source_tags(
+    vault: &Path,
+    mode: ProjectionMode,
+) -> Result<ObsidianTagRepairReport, NotionSourceProjectionError> {
+    let root = vault.join("sources");
+    let mut report = ObsidianTagRepairReport {
+        mode: mode.as_str().to_string(),
+        files_seen: 0,
+        files_planned: 0,
+        files_applied: 0,
+        tags_rewritten: 0,
+    };
+    if !root.exists() {
+        return Ok(report);
+    }
+
+    let mut repairs: Vec<(PathBuf, String, usize)> = Vec::new();
+    for entry in walkdir::WalkDir::new(root)
+        .into_iter()
+        .filter_map(Result::ok)
+    {
+        let path = entry.path();
+        if path.extension().and_then(|ext| ext.to_str()) != Some("md") {
+            continue;
+        }
+        report.files_seen += 1;
+        let text = std::fs::read_to_string(path)?;
+        if let Some((rewritten, changed)) = rewrite_frontmatter_tags(&text) {
+            if changed > 0 {
+                report.files_planned += 1;
+                report.tags_rewritten += changed;
+                repairs.push((path.to_path_buf(), rewritten, changed));
+            }
+        }
+    }
+
+    if mode == ProjectionMode::Apply {
+        for (path, text, _) in repairs {
+            std::fs::write(path, text)?;
+            report.files_applied += 1;
         }
     }
 
@@ -321,10 +386,103 @@ fn yaml_string_list_block(name: &str, items: &[String]) -> String {
     } else {
         let mut out = format!("{name}:\n");
         for item in items {
-            out.push_str(&format!("  - \"{}\"\n", yaml_escape(item)));
+            out.push_str(&format!(
+                "  - \"{}\"\n",
+                yaml_escape(&obsidian_safe_tag(item))
+            ));
         }
         out
     }
+}
+
+fn obsidian_safe_tag(tag: &str) -> String {
+    let mut out = String::with_capacity(tag.len());
+    let mut last_sep = true;
+    for c in tag.trim().chars() {
+        if c.is_ascii_alphanumeric()
+            || (!c.is_ascii() && !c.is_control() && !c.is_whitespace())
+            || matches!(c, '-' | '_' | '/')
+        {
+            out.push(c);
+            last_sep = false;
+        } else if !last_sep {
+            out.push('-');
+            last_sep = true;
+        }
+    }
+    let trimmed = out.trim_matches('-');
+    if trimmed.is_empty() {
+        "untagged".to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
+fn rewrite_frontmatter_tags(text: &str) -> Option<(String, usize)> {
+    let rest = text.strip_prefix("---\n")?;
+    let end = rest.find("\n---")?;
+    let frontmatter = &rest[..end];
+    let body = &rest[end..];
+    let mut changed = 0usize;
+    let mut out = String::with_capacity(frontmatter.len());
+    let mut lines = frontmatter.lines().peekable();
+
+    while let Some(line) = lines.next() {
+        if let Some(raw_value) = line.strip_prefix("tags:") {
+            if let Some(tags) = parse_inline_tags(raw_value.trim()) {
+                let safe_tags = safe_tags_and_count(&tags, &mut changed);
+                out.push_str(&yaml_string_list_block("tags", &safe_tags));
+                continue;
+            }
+            if raw_value.trim().is_empty() {
+                let mut tags = Vec::new();
+                while let Some(next) = lines.peek() {
+                    if let Some(value) = next.trim_start().strip_prefix("- ") {
+                        tags.push(unquote(value.trim()));
+                        lines.next();
+                    } else {
+                        break;
+                    }
+                }
+                let safe_tags = safe_tags_and_count(&tags, &mut changed);
+                out.push_str(&yaml_string_list_block("tags", &safe_tags));
+                continue;
+            }
+        }
+        out.push_str(line);
+        out.push('\n');
+    }
+
+    Some((format!("---\n{out}{body}"), changed))
+}
+
+fn safe_tags_and_count(tags: &[String], changed: &mut usize) -> Vec<String> {
+    let mut seen = BTreeSet::new();
+    let mut safe_tags = Vec::new();
+    for tag in tags {
+        let safe = obsidian_safe_tag(tag);
+        if &safe != tag {
+            *changed += 1;
+        }
+        if seen.insert(safe.clone()) {
+            safe_tags.push(safe);
+        }
+    }
+    safe_tags
+}
+
+fn parse_inline_tags(value: &str) -> Option<Vec<String>> {
+    let inner = value.strip_prefix('[')?.strip_suffix(']')?.trim();
+    if inner.is_empty() {
+        return Some(Vec::new());
+    }
+    Some(
+        inner
+            .split(',')
+            .map(|item| unquote(item.trim()))
+            .filter(|item| !item.is_empty())
+            .collect(),
+    )
 }
 
 #[cfg(test)]
@@ -454,5 +612,86 @@ body
             .filter(|entry| entry.path().extension().and_then(|ext| ext.to_str()) == Some("md"))
             .collect();
         assert_eq!(files.len(), 1);
+    }
+
+    #[test]
+    fn projection_writes_obsidian_safe_tags() {
+        let temp = tempfile::tempdir().unwrap();
+        let vault = temp.path().join("vault");
+        let mut src = source(
+            "66666666-6666-6666-6666-666666666666",
+            "notion://x_bookmark/tag-test",
+            "# X Source\n\nURL: https://x.com/post\n来源: X\n",
+        );
+        src.tags = vec![
+            "Apache2.0".into(),
+            "API Key".into(),
+            "Apple Silicon".into(),
+            "密码学/ZK".into(),
+        ];
+
+        project_notion_sources_to_vault(&[src], &vault, ProjectionMode::Apply).unwrap();
+
+        let text = std::fs::read_to_string(vault.join("sources/x/X-Source.md")).unwrap();
+        assert!(text.contains("  - \"Apache2-0\""));
+        assert!(text.contains("  - \"API-Key\""));
+        assert!(text.contains("  - \"Apple-Silicon\""));
+        assert!(text.contains("  - \"密码学/ZK\""));
+        assert!(!text.contains("Apache2.0"));
+        assert!(!text.contains("API Key"));
+    }
+
+    #[test]
+    fn repair_obsidian_source_tags_handles_inline_and_block_tags() {
+        let temp = tempfile::tempdir().unwrap();
+        let vault = temp.path().join("vault");
+        std::fs::create_dir_all(vault.join("sources/x")).unwrap();
+        let inline = vault.join("sources/x/inline.md");
+        let block = vault.join("sources/x/block.md");
+        std::fs::write(
+            &inline,
+            r#"---
+title: Inline
+tags: [API Key, Apple Silicon, 密码学/ZK]
+---
+
+body
+"#,
+        )
+        .unwrap();
+        std::fs::write(
+            &block,
+            r#"---
+title: Block
+tags:
+  - "Apache2.0"
+  - "Google Stitch"
+---
+
+body
+"#,
+        )
+        .unwrap();
+
+        let dry = repair_obsidian_source_tags(&vault, ProjectionMode::DryRun).unwrap();
+        assert_eq!(dry.files_seen, 2);
+        assert_eq!(dry.files_planned, 2);
+        assert_eq!(dry.files_applied, 0);
+        assert_eq!(dry.tags_rewritten, 4);
+
+        let applied = repair_obsidian_source_tags(&vault, ProjectionMode::Apply).unwrap();
+        assert_eq!(applied.files_applied, 2);
+        let inline_text = std::fs::read_to_string(&inline).unwrap();
+        let block_text = std::fs::read_to_string(&block).unwrap();
+        assert!(inline_text.contains("  - \"API-Key\""));
+        assert!(inline_text.contains("  - \"Apple-Silicon\""));
+        assert!(inline_text.contains("  - \"密码学/ZK\""));
+        assert!(block_text.contains("  - \"Apache2-0\""));
+        assert!(block_text.contains("  - \"Google-Stitch\""));
+
+        let again = repair_obsidian_source_tags(&vault, ProjectionMode::Apply).unwrap();
+        assert_eq!(again.files_planned, 0);
+        assert_eq!(again.files_applied, 0);
+        assert_eq!(again.tags_rewritten, 0);
     }
 }
