@@ -23,12 +23,10 @@ pub fn write_projection(
     cleanup_stale_managed_pages(&pages_dir, store)?;
 
     let mut stats = ProjectionStats::default();
-    let mut page_rows = Vec::new();
     // 不再向根 `concepts/` 写哈希 claim 投影；root 仅保留 Notion 对齐的目录
     // （见 docs/vault-standards.md）
-    let claim_rows: Vec<String> = Vec::new();
+    let mut page_counts: BTreeMap<&'static str, usize> = BTreeMap::new();
     // 不在 `sources/` 根目录写引擎投影；source 文件由迁移/抓取工具维护（见 vault-standards）
-    let source_rows: Vec<String> = Vec::new();
 
     let mut pages: Vec<_> = store.pages.values().collect();
     pages.sort_by(|a, b| a.title.cmp(&b.title).then_with(|| a.id.0.cmp(&b.id.0)));
@@ -40,23 +38,14 @@ pub fn write_projection(
         let path = dir.join(format!("{fname}.md"));
         fs::write(&path, render_page_with_frontmatter(page))?;
         stats.pages_written += 1;
-        let rel = format!("pages/{subdir}/{fname}.md");
-        page_rows.push(format!(
-            "- [{}]({}) | updated: {}",
-            page.title,
-            rel,
-            page.updated_at.date()
-        ));
+        *page_counts.entry(subdir).or_default() += 1;
     }
 
     // Claim 不再作为独立 markdown 文件落盘；其语义由 page（`pages/concept/` 等）承载。
     // `render_claim_with_frontmatter` 仍保留供测试 / 未来导出使用。
     let _ = &store.claims;
 
-    fs::write(
-        wiki_root.join("index.md"),
-        render_index(&page_rows, &claim_rows, &source_rows),
-    )?;
+    fs::write(wiki_root.join("index.md"), render_index(&page_counts))?;
     fs::write(wiki_root.join("log.md"), render_log(audits))?;
     Ok(stats)
 }
@@ -301,35 +290,36 @@ fn render_source_with_frontmatter(source: &RawArtifact) -> String {
     fm
 }
 
-fn render_index(pages: &[String], claims: &[String], sources: &[String]) -> String {
-    let mut md = String::from("# index\n\n");
-    md.push_str("## pages\n\n");
-    if pages.is_empty() {
-        md.push_str("- (empty)\n");
-    } else {
-        for l in pages {
-            md.push_str(l);
-            md.push('\n');
+fn render_index(page_counts: &BTreeMap<&'static str, usize>) -> String {
+    let mut md = String::from("# Wiki\n\n");
+    md.push_str("本地知识库入口。\n\n");
+    md.push_str("当前规则以 `wiki-mempalace` 仓库为准：\n\n");
+    md.push_str("- `AGENTS.md`\n");
+    md.push_str("- `docs/dev-workflow.md`\n");
+    md.push_str("- `docs/vault-standards.md`\n\n");
+    md.push_str("内容区：\n\n");
+    md.push_str("- `pages/`\n");
+    md.push_str("- `sources/`\n");
+    md.push_str("- `reports/`\n\n");
+    md.push_str("## Active Pages\n\n");
+    md.push_str("| 区域 | 数量 |\n");
+    md.push_str("| --- | ---: |\n");
+    for subdir in [
+        "concept",
+        "entity",
+        "summary",
+        "synthesis",
+        "qa",
+        "index",
+        "lint-report",
+        "_unspecified",
+    ] {
+        let count = page_counts.get(subdir).copied().unwrap_or_default();
+        if count > 0 {
+            md.push_str(&format!("| `pages/{subdir}/` | {count} |\n"));
         }
     }
-    md.push_str("\n## concepts\n\n");
-    if claims.is_empty() {
-        md.push_str("- (empty)\n");
-    } else {
-        for l in claims {
-            md.push_str(l);
-            md.push('\n');
-        }
-    }
-    md.push_str("\n## sources\n\n");
-    if sources.is_empty() {
-        md.push_str("- (empty)\n");
-    } else {
-        for l in sources {
-            md.push_str(l);
-            md.push('\n');
-        }
-    }
+    md.push_str("\n旧 Notion 系统页和旧噪音报告应放入 `_archive/`，不要放回 active 图谱。\n");
     md
 }
 
@@ -401,6 +391,14 @@ mod tests {
         assert!(wiki_root.join("index.md").exists());
         assert!(wiki_root.join("log.md").exists());
         assert!(wiki_root.join("pages").is_dir());
+        let index = std::fs::read_to_string(wiki_root.join("index.md")).unwrap();
+        assert!(index.contains("本地知识库入口。"));
+        assert!(index.contains("docs/vault-standards.md"));
+        assert!(!index.contains("/Users/"));
+        assert!(
+            !index.contains("[Alpha Page]"),
+            "root index must not link every page into a fake graph hub"
+        );
         // vault-standards：不再向根 `concepts/` 写哈希 claim 投影
         assert!(
             !wiki_root.join("concepts").exists(),
