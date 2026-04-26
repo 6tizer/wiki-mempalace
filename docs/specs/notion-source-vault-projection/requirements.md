@@ -18,9 +18,17 @@
   - `tags`
 - Existing files are detected by `source_id` or `notion_uuid`.
 - The operation must be idempotent.
+- `notion-source-vault-sync --refresh-existing` must rewrite existing
+  DB-backed source Markdown files when the DB source body or tags changed.
+- Projected `tags` must be Obsidian-safe tag names, because the `tags`
+  frontmatter key is rendered by Obsidian as a strict tag property.
 - `notion-source-vault-sync` defaults to dry-run and requires `--apply` to write.
+- `notion-source-vault-sync --repair-tags` must rewrite existing source
+  frontmatter tags into Obsidian-safe names without mutating `wiki.db`.
 - `notion-sync --sync-wiki` must run the same source projection after successful
   DB writes.
+- `notion-sync --refresh-existing --sync-wiki` must refresh existing Notion
+  source records and then reproject the updated body into the vault.
 
 ## Non-Goals
 

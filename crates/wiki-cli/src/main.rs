@@ -406,6 +406,9 @@ enum Cmd {
         /// Write back to Notion after sync (marks 已编译到Wiki checkbox)
         #[arg(long, default_value_t = false)]
         writeback_notion: bool,
+        /// Re-fetch and update existing notion:// sources instead of skipping them.
+        #[arg(long, default_value_t = false)]
+        refresh_existing: bool,
         /// Tag policy for this sync run. Notion AI auto-fill is treated as a trusted source by default.
         #[arg(long, value_enum, default_value = "trusted-source")]
         tag_policy: NotionSyncTagPolicy,
@@ -436,6 +439,12 @@ enum Cmd {
         /// Write missing source markdown files.
         #[arg(long, default_value_t = false)]
         apply: bool,
+        /// Rewrite existing source frontmatter tags into Obsidian-safe tag names.
+        #[arg(long, default_value_t = false)]
+        repair_tags: bool,
+        /// Rewrite existing DB-backed source markdown files when DB content changed.
+        #[arg(long, default_value_t = false)]
+        refresh_existing: bool,
     },
 }
 
@@ -2839,6 +2848,7 @@ fn run_with_engine(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             dry_run,
             request_delay_ms,
             writeback_notion,
+            refresh_existing,
             tag_policy,
             verbose,
         } => {
@@ -2858,6 +2868,7 @@ fn run_with_engine(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                 dry_run,
                 request_delay_ms,
                 writeback_notion,
+                refresh_existing,
                 verbose,
             )?;
         }
@@ -2885,6 +2896,8 @@ fn run_with_engine(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             vault,
             dry_run,
             apply,
+            repair_tags,
+            refresh_existing,
         } => {
             if dry_run && apply {
                 return Err("--dry-run and --apply are mutually exclusive".into());
@@ -2899,9 +2912,23 @@ fn run_with_engine(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                 notion_source_projection::ProjectionMode::DryRun
             };
             let sources: Vec<_> = eng.store.sources.values().cloned().collect();
-            let report =
-                notion_source_projection::project_notion_sources_to_vault(&sources, &vault, mode)?;
+            let report = if refresh_existing {
+                notion_source_projection::project_notion_sources_to_vault_with_options(
+                    &sources,
+                    &vault,
+                    notion_source_projection::ProjectionOptions {
+                        mode,
+                        refresh_existing,
+                    },
+                )?
+            } else {
+                notion_source_projection::project_notion_sources_to_vault(&sources, &vault, mode)?
+            };
             println!("{report}");
+            if repair_tags {
+                let report = notion_source_projection::repair_obsidian_source_tags(&vault, mode)?;
+                println!("{report}");
+            }
         }
     }
     Ok(())
@@ -4524,6 +4551,7 @@ fn run_notion_sync_cmd(
     dry_run: bool,
     request_delay_ms: u64,
     writeback_notion: bool,
+    refresh_existing: bool,
     verbose: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     use crate::notion_client::NotionApiClient;
@@ -4559,13 +4587,15 @@ fn run_notion_sync_cmd(
             since_time,
             limit,
             dry_run,
+            refresh_existing,
             writeback.as_ref(),
         )?;
         println!(
-            "notion-sync db={} fetched={} new={} skipped={} errors={} duration={:.1}s{}",
+            "notion-sync db={} fetched={} new={} refreshed={} skipped={} errors={} duration={:.1}s{}",
             result.db_id,
             result.fetched,
             result.new,
+            result.refreshed,
             result.skipped,
             result.errors,
             result.duration_secs,
@@ -4576,11 +4606,19 @@ fn run_notion_sync_cmd(
     if !dry_run {
         if let Some(vault) = source_projection_vault {
             let sources: Vec<_> = eng.store.sources.values().cloned().collect();
-            let report = notion_source_projection::project_notion_sources_to_vault(
-                &sources,
-                vault,
-                notion_source_projection::ProjectionMode::Apply,
-            )?;
+            let mode = notion_source_projection::ProjectionMode::Apply;
+            let report = if refresh_existing {
+                notion_source_projection::project_notion_sources_to_vault_with_options(
+                    &sources,
+                    vault,
+                    notion_source_projection::ProjectionOptions {
+                        mode,
+                        refresh_existing,
+                    },
+                )?
+            } else {
+                notion_source_projection::project_notion_sources_to_vault(&sources, vault, mode)?
+            };
             println!("{report}");
         }
     }
@@ -4613,6 +4651,7 @@ fn run_notion_sync_job(
         None,
         dry_run,
         request_delay_ms,
+        false,
         false,
         verbose,
     )
