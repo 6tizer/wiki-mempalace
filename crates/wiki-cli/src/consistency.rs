@@ -116,6 +116,12 @@ pub struct StaleNotionLinkCandidate {
     pub decoded_target: String,
     pub reason: String,
     pub action: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resolved_target_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub replacement_target: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resolution: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -279,21 +285,45 @@ pub fn run_consistency_plan(
     }
     for stale in &audit.vault.stale_notion_links {
         let report_only = stale.reason == "notion_url";
+        let retired_system_page = is_retired_notion_system_page(&stale.decoded_target);
+        let resolved = stale.resolved_target_path.is_some()
+            && stale.replacement_target.is_some()
+            && stale.resolution.as_deref() == Some("notion_uuid_page");
+        if resolved {
+            actions.push(ConsistencyPlanAction {
+                kind: ConsistencyActionKind::DbFix,
+                path: format!("wiki://page/{}", stale.page_id),
+                operation: "replace_legacy_notion_link".to_string(),
+                value: Some(format!(
+                    "{}\t{}",
+                    stale.raw_target,
+                    stale.replacement_target.clone().unwrap_or_default()
+                )),
+                reason: "旧 Notion 导出链接已通过 notion_uuid 对上当前页面，可在 DB page 中自动改成当前 Vault 链接。"
+                    .to_string(),
+                executable: true,
+            });
+            continue;
+        }
         actions.push(ConsistencyPlanAction {
-            kind: if report_only {
+            kind: if report_only || retired_system_page {
                 ConsistencyActionKind::Deferred
             } else {
                 ConsistencyActionKind::NeedsHuman
             },
             path: format!("wiki://page/{}", stale.page_id),
-            operation: if report_only {
+            operation: if retired_system_page {
+                "record_retired_notion_system_link"
+            } else if report_only {
                 "record_legacy_notion_url"
             } else {
                 "review_stale_notion_link"
             }
             .to_string(),
             value: Some(stale.raw_target.clone()),
-            reason: if report_only {
+            reason: if retired_system_page {
+                "旧 Notion 系统页已确认不进入本地 active wiki，本轮只报告，不要求人工逐条处理。"
+            } else if report_only {
                 "旧 Notion URL 是来源脚印，本轮只报告，不要求人工逐条处理。"
             } else {
                 "旧 Notion 导出文件名意图不能安全判断，先保留人工复核项。"
@@ -601,11 +631,16 @@ pub fn render_markdown(report: &ConsistencyAuditReport, sibling_json: &str) -> S
 
 pub fn find_stale_notion_link_candidates(
     pages: &[DbPageEvidence],
+    known_vault_paths: &BTreeSet<String>,
+    notion_uuid_paths: &BTreeMap<String, String>,
 ) -> Vec<StaleNotionLinkCandidate> {
     let mut out = Vec::new();
     for page in pages {
         for raw_target in markdown_link_targets(&page.markdown) {
             let decoded = percent_decode(&raw_target);
+            if local_target_exists(&raw_target, &decoded, known_vault_paths) {
+                continue;
+            }
             let mut reasons = Vec::new();
             if raw_target.contains('%') && decoded != raw_target {
                 reasons.push("url_encoded");
@@ -619,6 +654,14 @@ pub fn find_stale_notion_link_candidates(
             if reasons.is_empty() {
                 continue;
             }
+            let resolved_target_path = notion_uuid_from_target(&decoded)
+                .and_then(|uuid| notion_uuid_paths.get(&uuid).cloned());
+            let replacement_target = resolved_target_path
+                .as_deref()
+                .map(|path| relative_target_from_page(page.entry_type.as_deref(), path));
+            let resolution = resolved_target_path
+                .as_ref()
+                .map(|_| "notion_uuid_page".to_string());
             out.push(StaleNotionLinkCandidate {
                 page_id: page.id.clone(),
                 page_title: page.title.clone(),
@@ -626,6 +669,9 @@ pub fn find_stale_notion_link_candidates(
                 decoded_target: decoded,
                 reason: reasons.join(","),
                 action: "candidate_only".to_string(),
+                resolved_target_path,
+                replacement_target,
+                resolution,
             });
         }
     }
@@ -770,6 +816,8 @@ fn scan_vault(
     let page_titles: BTreeSet<_> = pages.iter().map(|page| page.title.clone()).collect();
     let mut vault_page_ids: BTreeMap<String, String> = BTreeMap::new();
     let mut vault_source_ids: BTreeMap<String, String> = BTreeMap::new();
+    let mut known_vault_paths: BTreeSet<String> = BTreeSet::new();
+    let mut notion_uuid_paths: BTreeMap<String, String> = BTreeMap::new();
 
     for root in ["pages", "sources"] {
         let root_path = wiki_dir.join(root);
@@ -787,6 +835,7 @@ fn scan_vault(
             } else {
                 section.source_files += 1;
             }
+            known_vault_paths.insert(rel.clone());
             let bytes = match fs::read(path) {
                 Ok(bytes) => bytes,
                 Err(err) => {
@@ -805,6 +854,9 @@ fn scan_vault(
                 section.managed_files.push(rel.clone());
                 if root == "pages" {
                     vault_page_ids.insert(id, rel.clone());
+                    if let Some(notion_uuid) = frontmatter_value(&text, "notion_uuid") {
+                        notion_uuid_paths.insert(notion_uuid, rel.clone());
+                    }
                 } else {
                     vault_source_ids.insert(id, rel.clone());
                 }
@@ -832,7 +884,8 @@ fn scan_vault(
         .filter(|id| !db_source_ids.contains(*id))
         .map(|id| vault_source_ids[id].clone())
         .collect();
-    section.stale_notion_links = find_stale_notion_link_candidates(pages);
+    section.stale_notion_links =
+        find_stale_notion_link_candidates(pages, &known_vault_paths, &notion_uuid_paths);
     section.unresolved_local_links = find_unresolved_local_links(pages, &page_titles);
     section.managed_files.sort();
     section.empty_unmanaged_files.sort();
@@ -1067,7 +1120,11 @@ fn validate_plan(plan: &ConsistencyPlan) -> Result<(), DynError> {
     for action in &plan.actions {
         match action.kind {
             ConsistencyActionKind::DbFix => {
-                if action.operation != "append_source_reference" || action.value.is_none() {
+                if !matches!(
+                    action.operation.as_str(),
+                    "append_source_reference" | "replace_legacy_notion_link"
+                ) || action.value.is_none()
+                {
                     return Err(format!("invalid db_fix action: {}", action.path).into());
                 }
             }
@@ -1111,6 +1168,24 @@ fn validate_plan_against_audit(
             )
         })
         .collect();
+    let legacy_link_replacements: BTreeSet<_> = audit
+        .vault
+        .stale_notion_links
+        .iter()
+        .filter_map(|candidate| {
+            if candidate.resolution.as_deref() != Some("notion_uuid_page") {
+                return None;
+            }
+            Some((
+                format!("wiki://page/{}", candidate.page_id),
+                format!(
+                    "{}\t{}",
+                    candidate.raw_target,
+                    candidate.replacement_target.clone()?
+                ),
+            ))
+        })
+        .collect();
     let known_pages: BTreeSet<_> = audit
         .db
         .page_ids
@@ -1140,12 +1215,28 @@ fn validate_plan_against_audit(
             }
             ConsistencyActionKind::DbFix => {
                 let value = action.value.clone().unwrap_or_default();
-                if !source_refs.contains(&(action.path.clone(), value)) {
-                    return Err(format!(
-                        "db_fix outside exact source-summary evidence: {}",
-                        action.path
-                    )
-                    .into());
+                match action.operation.as_str() {
+                    "append_source_reference" => {
+                        if !source_refs.contains(&(action.path.clone(), value)) {
+                            return Err(format!(
+                                "db_fix outside exact source-summary evidence: {}",
+                                action.path
+                            )
+                            .into());
+                        }
+                    }
+                    "replace_legacy_notion_link" => {
+                        if !legacy_link_replacements.contains(&(action.path.clone(), value)) {
+                            return Err(format!(
+                                "db_fix outside legacy link evidence: {}",
+                                action.path
+                            )
+                            .into());
+                        }
+                    }
+                    _ => {
+                        return Err(format!("invalid db_fix operation: {}", action.operation).into())
+                    }
                 }
             }
             ConsistencyActionKind::NeedsHuman | ConsistencyActionKind::Deferred => {
@@ -1170,10 +1261,7 @@ fn apply_db_fix(
         .path
         .strip_prefix("wiki://page/")
         .ok_or_else(|| format!("db_fix path must be wiki://page/<id>: {}", action.path))?;
-    let source_uri = action
-        .value
-        .as_deref()
-        .ok_or("db_fix append_source_reference requires value")?;
+    let value = action.value.as_deref().ok_or("db_fix requires value")?;
     let Some(page) = store
         .pages
         .values_mut()
@@ -1181,6 +1269,19 @@ fn apply_db_fix(
     else {
         return Err(format!("page not found for db_fix: {page_id}").into());
     };
+    if action.operation == "replace_legacy_notion_link" {
+        let (raw_target, replacement_target) = value
+            .split_once('\t')
+            .ok_or("replace_legacy_notion_link value must be raw<TAB>replacement")?;
+        if !page.markdown.contains(raw_target) {
+            return Ok(false);
+        }
+        page.markdown = page.markdown.replace(raw_target, replacement_target);
+        page.refresh_outbound_links();
+        page.updated_at = OffsetDateTime::now_utc();
+        return Ok(true);
+    }
+    let source_uri = value;
     if page.markdown.contains(source_uri) {
         return Ok(false);
     }
@@ -1254,17 +1355,85 @@ fn markdown_link_targets(markdown: &str) -> Vec<String> {
             continue;
         }
         let start = i + 2;
-        if let Some(end) = markdown[start..].find(')') {
-            let target = markdown[start..start + end].trim();
+        let mut j = start;
+        let mut depth = 0usize;
+        let mut end = None;
+        while j < bytes.len() {
+            match bytes[j] {
+                b'(' => depth += 1,
+                b')' if depth == 0 => {
+                    end = Some(j);
+                    break;
+                }
+                b')' => depth -= 1,
+                _ => {}
+            }
+            j += 1;
+        }
+        if let Some(end) = end {
+            let target = markdown[start..end].trim();
             if !target.is_empty() {
                 out.push(target.to_string());
             }
-            i = start + end + 1;
+            i = end + 1;
         } else {
             break;
         }
     }
     out
+}
+
+fn local_target_exists(
+    raw_target: &str,
+    decoded_target: &str,
+    known_paths: &BTreeSet<String>,
+) -> bool {
+    [raw_target, decoded_target]
+        .iter()
+        .map(|target| strip_fragment(target))
+        .map(normalize_local_target)
+        .any(|target| known_paths.contains(&target))
+}
+
+fn strip_fragment(target: &str) -> &str {
+    target.split_once('#').map_or(target, |(path, _)| path)
+}
+
+fn normalize_local_target(target: &str) -> String {
+    let mut out = target.trim_start_matches("./");
+    while let Some(rest) = out.strip_prefix("../") {
+        out = rest;
+    }
+    out.trim_start_matches('/').to_string()
+}
+
+fn notion_uuid_from_target(target: &str) -> Option<String> {
+    let bytes = target.as_bytes();
+    for window in bytes.windows(32) {
+        if window.iter().all(u8::is_ascii_hexdigit) {
+            return Some(String::from_utf8_lossy(window).to_ascii_lowercase());
+        }
+    }
+    None
+}
+
+fn relative_target_from_page(entry_type: Option<&str>, target_path: &str) -> String {
+    if let Some(rest) = target_path.strip_prefix("pages/") {
+        return format!("../{rest}");
+    }
+    if target_path.starts_with("sources/") {
+        return format!("../../{target_path}");
+    }
+    let _ = entry_type;
+    target_path.to_string()
+}
+
+fn is_retired_notion_system_page(decoded_target: &str) -> bool {
+    [
+        "Wiki Schema（规则文件） 5616b84751134607a28a810ec9b26386.md",
+        "系统工作流程图 49c4c53d95f0455e9c6669bdb79108cf.md",
+    ]
+    .contains(&decoded_target)
 }
 
 fn frontmatter_value(markdown: &str, key: &str) -> Option<String> {

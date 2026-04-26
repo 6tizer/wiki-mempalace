@@ -7,6 +7,7 @@ use consistency::{
     run_consistency_plan, ConsistencyActionKind, ConsistencyPlan, ConsistencyPlanAction,
     DbPageEvidence, DbSourceEvidence, SourceSummaryCandidateKind,
 };
+use std::collections::{BTreeMap, BTreeSet};
 
 #[test]
 fn stale_notion_style_links_are_candidates_only() {
@@ -17,7 +18,7 @@ fn stale_notion_style_links_are_candidates_only() {
         entry_type: Some("concept".into()),
     }];
 
-    let candidates = find_stale_notion_link_candidates(&pages);
+    let candidates = find_stale_notion_link_candidates(&pages, &BTreeSet::new(), &BTreeMap::new());
 
     assert_eq!(candidates.len(), 3);
     assert_eq!(candidates[0].page_id, "page-a");
@@ -36,6 +37,47 @@ fn stale_notion_style_links_are_candidates_only() {
     assert!(!candidates
         .iter()
         .any(|candidate| candidate.raw_target == "../concept/混合检索.md"));
+}
+
+#[test]
+fn stale_notion_links_skip_existing_sources_and_resolve_current_pages() {
+    let pages = vec![DbPageEvidence {
+        id: "page-a".into(),
+        title: "Page A".into(),
+        markdown: "[source](../../sources/wechat/article-abcdefabcdefabcdefabcdefabcdefab.md)\n[agent](AGENTS%20md%205da673ca2377484498ec12f5679bfbf3.md)\n[paren](Codex%20for%20(almost)%20everyone%2012345678123456781234567812345678.md)".into(),
+        entry_type: Some("summary".into()),
+    }];
+    let known_paths =
+        BTreeSet::from(["sources/wechat/article-abcdefabcdefabcdefabcdefabcdefab.md".to_string()]);
+    let notion_uuid_paths = BTreeMap::from([
+        (
+            "5da673ca2377484498ec12f5679bfbf3".to_string(),
+            "pages/concept/AGENTS-md.md".to_string(),
+        ),
+        (
+            "12345678123456781234567812345678".to_string(),
+            "pages/summary/Codex-for-almost-everyone.md".to_string(),
+        ),
+    ]);
+
+    let candidates = find_stale_notion_link_candidates(&pages, &known_paths, &notion_uuid_paths);
+
+    assert_eq!(candidates.len(), 2);
+    assert_eq!(
+        candidates[0].resolved_target_path.as_deref(),
+        Some("pages/concept/AGENTS-md.md")
+    );
+    assert_eq!(
+        candidates[0].replacement_target.as_deref(),
+        Some("../concept/AGENTS-md.md")
+    );
+    assert_eq!(
+        candidates[0].resolution.as_deref(),
+        Some("notion_uuid_page")
+    );
+    assert!(candidates
+        .iter()
+        .any(|candidate| candidate.raw_target.contains("(almost)")));
 }
 
 #[test]
@@ -509,6 +551,122 @@ mod plan_apply_coverage {
         assert_eq!(plan.actions[0].kind, ConsistencyActionKind::Deferred);
         assert_eq!(plan.actions[0].operation, "record_legacy_notion_url");
         assert!(!plan.actions[0].executable);
+    }
+
+    #[test]
+    fn consistency_plan_makes_resolved_legacy_links_executable_db_fixes() {
+        let temp = tempfile::tempdir().unwrap();
+        let vault = temp.path().join("vault");
+        let (_repo, _store, source_id, page_id) = seed_repo(&temp.path().join("wiki.db"));
+        let mut audit = audit_json(&vault, &page_id, &source_id);
+        audit["vault"]["stale_notion_links"] = serde_json::json!([{
+            "page_id": page_id,
+            "page_title": "Summary A",
+            "raw_target": "AGENTS%20md%205da673ca2377484498ec12f5679bfbf3.md",
+            "decoded_target": "AGENTS md 5da673ca2377484498ec12f5679bfbf3.md",
+            "reason": "url_encoded,notion_export_filename",
+            "action": "candidate_only",
+            "resolved_target_path": "pages/concept/AGENTS-md.md",
+            "replacement_target": "../concept/AGENTS-md.md",
+            "resolution": "notion_uuid_page"
+        }]);
+        audit["candidates"]["safe_cleanup_candidates"] = serde_json::json!([]);
+        audit["candidates"]["source_summary_exact_matches"] = serde_json::json!([]);
+        let audit_path = vault.join("reports/consistency-audit-20260426T000000Z.json");
+        write_file(&audit_path, &serde_json::to_string_pretty(&audit).unwrap());
+
+        let (plan, _files) =
+            run_consistency_plan(&audit_path, None, OffsetDateTime::now_utc()).unwrap();
+
+        assert_eq!(plan.actions.len(), 1);
+        assert_eq!(plan.actions[0].kind, ConsistencyActionKind::DbFix);
+        assert_eq!(plan.actions[0].operation, "replace_legacy_notion_link");
+        assert!(plan.actions[0].executable);
+    }
+
+    #[test]
+    fn consistency_plan_treats_retired_notion_system_pages_as_report_only() {
+        let temp = tempfile::tempdir().unwrap();
+        let vault = temp.path().join("vault");
+        let (_repo, _store, source_id, page_id) = seed_repo(&temp.path().join("wiki.db"));
+        let mut audit = audit_json(&vault, &page_id, &source_id);
+        audit["vault"]["stale_notion_links"] = serde_json::json!([{
+            "page_id": page_id,
+            "page_title": "Summary A",
+            "raw_target": "Wiki%20Schema%EF%BC%88%E8%A7%84%E5%88%99%E6%96%87%E4%BB%B6%EF%BC%89%205616b84751134607a28a810ec9b26386.md",
+            "decoded_target": "Wiki Schema（规则文件） 5616b84751134607a28a810ec9b26386.md",
+            "reason": "url_encoded,notion_export_filename",
+            "action": "candidate_only"
+        }]);
+        audit["candidates"]["safe_cleanup_candidates"] = serde_json::json!([]);
+        audit["candidates"]["source_summary_exact_matches"] = serde_json::json!([]);
+        let audit_path = vault.join("reports/consistency-audit-20260426T000000Z.json");
+        write_file(&audit_path, &serde_json::to_string_pretty(&audit).unwrap());
+
+        let (plan, _files) =
+            run_consistency_plan(&audit_path, None, OffsetDateTime::now_utc()).unwrap();
+
+        assert_eq!(plan.actions.len(), 1);
+        assert_eq!(plan.actions[0].kind, ConsistencyActionKind::Deferred);
+        assert_eq!(
+            plan.actions[0].operation,
+            "record_retired_notion_system_link"
+        );
+        assert!(!plan.actions[0].executable);
+    }
+
+    #[test]
+    fn consistency_apply_replaces_resolved_legacy_link_in_db_page() {
+        let temp = tempfile::tempdir().unwrap();
+        let vault = temp.path().join("vault");
+        let (repo, mut store, source_id, page_id) = seed_repo(&temp.path().join("wiki.db"));
+        store
+            .pages
+            .values_mut()
+            .find(|page| page.id.0.to_string() == page_id)
+            .unwrap()
+            .markdown = "[old](AGENTS%20md%205da673ca2377484498ec12f5679bfbf3.md)".into();
+        let mut audit = audit_json(&vault, &page_id, &source_id);
+        audit["vault"]["stale_notion_links"] = serde_json::json!([{
+            "page_id": page_id,
+            "page_title": "Summary A",
+            "raw_target": "AGENTS%20md%205da673ca2377484498ec12f5679bfbf3.md",
+            "decoded_target": "AGENTS md 5da673ca2377484498ec12f5679bfbf3.md",
+            "reason": "url_encoded,notion_export_filename",
+            "action": "candidate_only",
+            "resolved_target_path": "pages/concept/AGENTS-md.md",
+            "replacement_target": "../concept/AGENTS-md.md",
+            "resolution": "notion_uuid_page"
+        }]);
+        audit["candidates"]["safe_cleanup_candidates"] = serde_json::json!([]);
+        audit["candidates"]["source_summary_exact_matches"] = serde_json::json!([]);
+        let audit_path = vault.join("reports/consistency-audit-20260426T000000Z.json");
+        write_file(&audit_path, &serde_json::to_string_pretty(&audit).unwrap());
+        let (_plan, files) =
+            run_consistency_plan(&audit_path, None, OffsetDateTime::now_utc()).unwrap();
+
+        let report = run_consistency_apply(
+            &repo,
+            &mut store,
+            &[],
+            ConsistencyApplyOptions {
+                plan_path: &files.json_path,
+                wiki_dir: &vault,
+                palace_path: None,
+                palace_bank_id: "wiki",
+                apply: true,
+            },
+        )
+        .unwrap();
+
+        assert_eq!(report.db_fixes_applied, 1);
+        let page = store
+            .pages
+            .values()
+            .find(|page| page.id.0.to_string() == page_id)
+            .unwrap();
+        assert!(page.markdown.contains("../concept/AGENTS-md.md"));
+        assert!(!page.markdown.contains("AGENTS%20md"));
     }
 
     #[test]
