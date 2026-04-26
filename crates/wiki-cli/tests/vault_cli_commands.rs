@@ -274,3 +274,61 @@ fn vault_backfill_apply_then_palace_init_cli_round_trips() {
     assert!(palace.exists());
     assert!(vault.join("reports/palace-init-report.json").exists());
 }
+
+#[test]
+fn notion_sync_index_backfill_defaults_to_dry_run_and_apply_inserts() {
+    let temp = tempfile::tempdir().unwrap();
+    let vault = temp.path().join("vault");
+    let db = temp.path().join("wiki.db");
+    write_file(
+        &vault.join("sources/wechat/a.md"),
+        r#"---
+source_id: "11111111-1111-1111-1111-111111111111"
+notion_uuid: 1a9701074b688103b989fbd0cfb8343a
+origin: wechat
+---
+
+body
+"#,
+    );
+
+    wiki_cmd()
+        .arg("--db")
+        .arg(&db)
+        .arg("--wiki-dir")
+        .arg(&vault)
+        .arg("notion-sync-index-backfill")
+        .assert()
+        .success()
+        .stdout(contains("mode=dry_run"))
+        .stdout(contains("planned=1"))
+        .stdout(contains("applied=0"));
+
+    let count: i64 = rusqlite::Connection::open(&db)
+        .unwrap()
+        .query_row("SELECT COUNT(*) FROM notion_page_index", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    assert_eq!(count, 0);
+
+    wiki_cmd()
+        .arg("--db")
+        .arg(&db)
+        .arg("--wiki-dir")
+        .arg(&vault)
+        .args(["notion-sync-index-backfill", "--apply"])
+        .assert()
+        .success()
+        .stdout(contains("mode=apply"))
+        .stdout(contains("planned=1"))
+        .stdout(contains("applied=1"));
+
+    let canonical: String = rusqlite::Connection::open(&db)
+        .unwrap()
+        .query_row("SELECT notion_page_id FROM notion_page_index", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    assert_eq!(canonical, "1a9701074b688103b989fbd0cfb8343a");
+}
