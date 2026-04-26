@@ -7,9 +7,9 @@
 | Consistency plan | Agent | Main | plan schema/rendering/tests | Done |
 | DB/Vault source-link fixes | Agent | Subagent C | DB-backed link candidates/projection tests | Done |
 | Apply + palace replay integration | Agent | Main | apply path, CLI wiring, palace reuse | Done |
-| Focused review | Agent | Reviewer | diff vs spec | Pending |
-| Integration review + CI | Skill/Script | Main | workspace | Pending |
-| PR + merge follow-up | Skill | Main | roadmap, LESSONS, handoff | Pending |
+| Focused review | Agent | Reviewer | diff vs spec | Done |
+| Integration review + CI | Skill/Script | Main | workspace | Done locally |
+| PR + merge follow-up | Skill | Main | roadmap, LESSONS, handoff | Pending merge |
 
 ## Checklist
 
@@ -25,5 +25,5 @@
 - [x] Apply never direct-writes `palace.db`.
 - [x] Source bodies are not inserted into Mempalace.
 - [x] `batch-ingest` is never run by this feature.
-- [ ] Focused review and integration review are complete.
-- [ ] CI passes locally.
+- [x] Focused review and integration review are complete.
+- [x] CI passes locally.

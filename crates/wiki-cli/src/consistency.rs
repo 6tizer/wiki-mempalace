@@ -472,6 +472,13 @@ pub fn run_consistency_apply<R: WikiRepository>(
         return Ok(report);
     }
 
+    let db_fix_page_ids: BTreeSet<_> = plan
+        .actions
+        .iter()
+        .filter(|action| action.executable && action.kind == ConsistencyActionKind::DbFix)
+        .filter_map(|action| action.path.strip_prefix("wiki://page/"))
+        .map(str::to_string)
+        .collect();
     let mut db_changed = false;
     let mut db_changed_page_ids = BTreeSet::new();
     for action in plan
@@ -489,6 +496,11 @@ pub fn run_consistency_apply<R: WikiRepository>(
     }
     if db_changed {
         repo.save_snapshot(&store.to_snapshot(audits))?;
+    }
+    if !db_fix_page_ids.is_empty() {
+        project_db_fixed_pages_to_vault(options.wiki_dir, store, &db_fix_page_ids)?;
+        report.projection_ran = true;
+    } else if db_changed {
         write_projection(options.wiki_dir, store, audits)?;
         report.projection_ran = true;
     }
@@ -516,6 +528,7 @@ pub fn run_consistency_apply<R: WikiRepository>(
     }
 
     let mut palace_replay_page_ids = db_changed_page_ids;
+    palace_replay_page_ids.extend(db_fix_page_ids);
     for action in plan
         .actions
         .iter()
@@ -1322,6 +1335,108 @@ fn apply_vault_cleanup(wiki_dir: &Path, action: &ConsistencyPlanAction) -> Resul
     }
     fs::remove_file(path)?;
     Ok(true)
+}
+
+fn project_db_fixed_pages_to_vault(
+    wiki_dir: &Path,
+    store: &InMemoryStore,
+    page_ids: &BTreeSet<String>,
+) -> Result<usize, DynError> {
+    let page_paths = vault_page_paths_by_id(wiki_dir)?;
+    let mut written = 0usize;
+    for page_id in page_ids {
+        let page = store
+            .pages
+            .values()
+            .find(|page| page.id.0.to_string() == page_id.as_str())
+            .ok_or_else(|| format!("page not found for vault projection: {page_id}"))?;
+        let Some(path) = page_paths.get(page_id).cloned() else {
+            continue;
+        };
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        let existing = fs::read_to_string(&path).unwrap_or_default();
+        let next = replace_markdown_body_preserving_frontmatter(&existing, &page.markdown, page);
+        if existing != next {
+            fs::write(path, next)?;
+            written += 1;
+        }
+    }
+    Ok(written)
+}
+
+fn vault_page_paths_by_id(wiki_dir: &Path) -> Result<BTreeMap<String, PathBuf>, DynError> {
+    let mut out = BTreeMap::new();
+    let root = wiki_dir.join("pages");
+    if !root.exists() {
+        return Ok(out);
+    }
+    for entry in WalkDir::new(root).into_iter().filter_map(Result::ok) {
+        if !entry.file_type().is_file() {
+            continue;
+        }
+        if entry.path().extension().is_none_or(|ext| ext != "md") {
+            continue;
+        }
+        let Ok(text) = fs::read_to_string(entry.path()) else {
+            continue;
+        };
+        if let Some(id) =
+            frontmatter_value(&text, "page_id").or_else(|| frontmatter_value(&text, "id"))
+        {
+            out.insert(id, entry.path().to_path_buf());
+        }
+    }
+    Ok(out)
+}
+
+fn replace_markdown_body_preserving_frontmatter(
+    existing: &str,
+    markdown: &str,
+    page: &wiki_core::WikiPage,
+) -> String {
+    if let Some((frontmatter, _body)) = split_frontmatter(existing) {
+        return format!("{frontmatter}\n\n{markdown}");
+    }
+    render_minimal_page_with_frontmatter(page)
+}
+
+fn split_frontmatter(markdown: &str) -> Option<(&str, &str)> {
+    let rest = markdown.strip_prefix("---\n")?;
+    let end = rest.find("\n---")?;
+    let frontmatter_end = end + "---\n".len() + "\n---".len();
+    let body_start = if markdown[frontmatter_end..].starts_with("\n\n") {
+        frontmatter_end + 2
+    } else if markdown[frontmatter_end..].starts_with('\n') {
+        frontmatter_end + 1
+    } else {
+        frontmatter_end
+    };
+    Some((&markdown[..frontmatter_end], &markdown[body_start..]))
+}
+
+fn render_minimal_page_with_frontmatter(page: &wiki_core::WikiPage) -> String {
+    format!(
+        "---\nid: \"{}\"\ntitle: \"{}\"\nstatus: {}\nentry_type: {}\n---\n\n{}",
+        page.id.0,
+        page.title.replace('\\', "\\\\").replace('"', "\\\""),
+        status_label(page.status),
+        page.entry_type
+            .as_ref()
+            .map(entry_type_label)
+            .unwrap_or("null"),
+        page.markdown
+    )
+}
+
+fn status_label(status: wiki_core::EntryStatus) -> &'static str {
+    match status {
+        wiki_core::EntryStatus::Draft => "draft",
+        wiki_core::EntryStatus::InReview => "in_review",
+        wiki_core::EntryStatus::Approved => "approved",
+        wiki_core::EntryStatus::NeedsUpdate => "needs_update",
+    }
 }
 
 fn action_kind_str(kind: ConsistencyActionKind) -> &'static str {

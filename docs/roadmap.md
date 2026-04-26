@@ -22,7 +22,7 @@
 | J13 LongMemEval auto benchmark | ✅ 已合入 | PR #19 已 merge；`rust-mempalace` 本地检索基线 runner、fetch/cache script、nightly/weekly workflow、30 天 artifact、fixture tests、review handoff 已实现；不进 PR 必跑 CI |
 | Vault Backfill + Palace Init | ✅ 已合入并已跑生产初始化 | PR #23 已 merge；`vault-audit`、`vault-backfill`、`palace-init`、MCP `shared:wiki` runtime defaults 已实现；2026-04-25 已对 `/Users/mac-mini/Documents/wiki` 完成生产 backfill + palace init |
 | B5 Orphan Governance | 🛠 Follow-up in progress | PR #28 已 merge；当前分支 `codex/orphan-governance-followup` 正在补 timestamped audit、LLM plan、中文报告、白名单 apply |
-| DB/Vault/Palace Consistency Governance | 🛠 In progress | 分支 `codex/db-vault-palace-consistency`；以 `wiki.db` 为原点审计/计划/修复 Vault 与 Mempalace page 镜像一致性 |
+| DB/Vault/Palace Consistency Governance | 🛠 PR #32 in review | 分支 `codex/db-vault-palace-consistency`；已真实 apply 到 `/Users/mac-mini/Documents/wiki`，最终 plan 可执行动作 0，Vault 无新 pages 文件，Mempalace 缺失 page drawer 0 |
 | Scheduled Vault Reports | 💤 未开始 | 待 PRD；把 `vault-audit`、`metrics`、`dashboard`、`automation health`、`suggest` 等报告接入定时生成和保留策略 |
 | C16A Atomic snapshot + outbox | ✅ 已合入 | PR #25 已 merge；新增 `save_snapshot_and_append_outbox` 单事务持久化路径；CLI/MCP/backfill 写路径已切到原子提交 |
 | C16B Embedding ANN index | 💤 未开始 | 仍保留在 [embedding-ann-index](specs/embedding-ann-index/)；可单独规划，不和存储一致性混在一个 PR |

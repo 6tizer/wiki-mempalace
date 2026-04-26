@@ -23,7 +23,7 @@
 
 ## 命名规则
 
-- **中文标题直用**：仅将 `/` 替换为 `-`，**不做** ASCII slugify，**不用** UUID 作为默认文件名。
+- **Notion 迁移 slug**：保留中文字符；空白、标点、`/` 等折叠为 `-`；文件名最长 80 个字符；**不用** UUID 作为默认文件名。
 - Summary 文件：`pages/summary/摘要：{原标题}.md`（与 Notion 迁移一致）。
 
 ## Source frontmatter 契约

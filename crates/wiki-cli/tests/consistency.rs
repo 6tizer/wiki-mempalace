@@ -630,6 +630,13 @@ mod plan_apply_coverage {
             .find(|page| page.id.0.to_string() == page_id)
             .unwrap()
             .markdown = "[old](AGENTS%20md%205da673ca2377484498ec12f5679bfbf3.md)".into();
+        let vault_page = vault.join("pages/summary/Summary-A.md");
+        write_file(
+            &vault_page,
+            &format!(
+                "---\npage_id: \"{page_id}\"\nnotion_uuid: keep-me\nentry_type: summary\n---\n\n[old](AGENTS%20md%205da673ca2377484498ec12f5679bfbf3.md)"
+            ),
+        );
         let mut audit = audit_json(&vault, &page_id, &source_id);
         audit["vault"]["stale_notion_links"] = serde_json::json!([{
             "page_id": page_id,
@@ -672,6 +679,62 @@ mod plan_apply_coverage {
             .unwrap();
         assert!(page.markdown.contains("../concept/AGENTS-md.md"));
         assert!(!page.markdown.contains("AGENTS%20md"));
+        let projected = std::fs::read_to_string(vault_page).unwrap();
+        assert!(projected.contains("notion_uuid: keep-me"));
+        assert!(projected.contains("../concept/AGENTS-md.md"));
+        assert!(!projected.contains("AGENTS%20md"));
+    }
+
+    #[test]
+    fn consistency_apply_does_not_create_missing_vault_pages_during_targeted_projection() {
+        let temp = tempfile::tempdir().unwrap();
+        let vault = temp.path().join("vault");
+        let palace_path = temp.path().join("palace.db");
+        let conn = rusqlite::Connection::open(&palace_path).unwrap();
+        rust_mempalace::db::init_schema(&conn).unwrap();
+        drop(conn);
+        let (repo, mut store, source_id, page_id) = seed_repo(&temp.path().join("wiki.db"));
+        store
+            .pages
+            .values_mut()
+            .find(|page| page.id.0.to_string() == page_id)
+            .unwrap()
+            .markdown = "[old](AGENTS%20md%205da673ca2377484498ec12f5679bfbf3.md)".into();
+        let mut audit = audit_json(&vault, &page_id, &source_id);
+        audit["vault"]["stale_notion_links"] = serde_json::json!([{
+            "page_id": page_id,
+            "page_title": "Summary A",
+            "raw_target": "AGENTS%20md%205da673ca2377484498ec12f5679bfbf3.md",
+            "decoded_target": "AGENTS md 5da673ca2377484498ec12f5679bfbf3.md",
+            "reason": "url_encoded,notion_export_filename",
+            "action": "candidate_only",
+            "resolved_target_path": "pages/concept/AGENTS-md.md",
+            "replacement_target": "../concept/AGENTS-md.md",
+            "resolution": "notion_uuid_page"
+        }]);
+        audit["candidates"]["safe_cleanup_candidates"] = serde_json::json!([]);
+        audit["candidates"]["source_summary_exact_matches"] = serde_json::json!([]);
+        let audit_path = vault.join("reports/consistency-audit-20260426T000000Z.json");
+        write_file(&audit_path, &serde_json::to_string_pretty(&audit).unwrap());
+        let (_plan, files) =
+            run_consistency_plan(&audit_path, None, OffsetDateTime::now_utc()).unwrap();
+
+        let report = run_consistency_apply(
+            &repo,
+            &mut store,
+            &[],
+            ConsistencyApplyOptions {
+                plan_path: &files.json_path,
+                wiki_dir: &vault,
+                palace_path: Some(&palace_path),
+                palace_bank_id: "wiki",
+                apply: true,
+            },
+        )
+        .unwrap();
+
+        assert!(report.projection_ran);
+        assert!(!vault.join("pages/summary/Summary-A.md").exists());
     }
 
     #[test]
