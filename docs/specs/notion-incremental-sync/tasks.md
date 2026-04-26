@@ -142,6 +142,7 @@
 - [ ] `--since` 覆盖 cursor 有效
 - [x] body 拼装格式与 `batch-ingest` 兼容，并包含 Notion page blocks 正文
 - [x] `--refresh-existing` 可回填已存在 Notion source 的正文和 tags
+- [x] automation `notion-sync` 默认启用 existing refresh，同时继续使用 cursor 做增量窗口
 - [ ] Source URI `notion://` 不与 vault_audit / vault_backfill 的 `file://` 逻辑冲突
 
 ---

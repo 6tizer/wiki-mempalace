@@ -63,6 +63,8 @@
 
 - `notion-sync` 必须注册到 `AUTOMATION_JOB_SPECS`，`in_daily = true`、`requires_network = true`、`short_circuit = false`，`job_name = "notion-sync"`。
 - job 执行时使用与 CLI 相同的 ingest 路径；`short_circuit=false` 时失败后不应阻塞后续 `run-daily` 链继续执行。
+- automation job 必须默认启用 existing refresh：cursor 之后若返回已存在的
+  `notion_page_id`，仍要刷新正文和 tags，避免 Notion 后续编辑被本地跳过。
 - job 必须通过 `start_automation_run` / `mark_automation_run_succeeded` / `mark_automation_run_failed` 记录状态。
 
 ### FR-08 Writeback 接口（首版关闭）

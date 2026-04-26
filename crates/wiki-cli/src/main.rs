@@ -3353,6 +3353,7 @@ mod tests {
         assert!(!automation_job_spec(AutomationJob::LlmSmoke).in_daily);
         assert!(automation_job_spec(AutomationJob::NotionSync).requires_network);
         assert!(automation_job_spec(AutomationJob::NotionSync).in_daily);
+        assert!(automation_notion_refresh_existing());
     }
 
     #[test]
@@ -4540,6 +4541,10 @@ fn apply_notion_sync_tag_policy(schema: &mut DomainSchema, policy: NotionSyncTag
 const NOTION_DB_X_BOOKMARK: (&str, &str) = ("x_bookmark", "0d305291-2a5d-426c-8db8-903ed5bb7ddb");
 const NOTION_DB_WECHAT: (&str, &str) = ("wechat", "16470107-4b68-810a-bc81-f90795cc29ad");
 
+fn automation_notion_refresh_existing() -> bool {
+    true
+}
+
 fn run_notion_sync_cmd(
     eng: &mut LlmWikiEngine<NoopWikiHook>,
     repo: &SqliteRepository,
@@ -4652,7 +4657,7 @@ fn run_notion_sync_job(
         dry_run,
         request_delay_ms,
         false,
-        false,
+        automation_notion_refresh_existing(),
         verbose,
     )
 }

@@ -186,6 +186,11 @@ impl NotionSyncRunner {
 7. 如非 dry_run：`repo.upsert_notion_sync_cursor(db_id, sync_started_at, new)`
 8. 返回 SyncResult
 
+Automation 调用 `run_notion_sync_job` 时固定传
+`refresh_existing = true`。这样自动任务仍然使用 `notion_sync_cursors`
+做增量窗口，但窗口内的已存在页面会刷新正文和 tags，而不是被
+`notion_page_index` 静默跳过。
+
 ### 4.2 Source URI 格式
 
 ```
