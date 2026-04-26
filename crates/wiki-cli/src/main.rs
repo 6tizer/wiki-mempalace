@@ -34,6 +34,7 @@ mod dashboard;
 mod llm;
 mod mcp;
 mod notion_client;
+mod notion_writeback;
 mod orphan_governance;
 mod palace_init;
 mod vault_audit;
