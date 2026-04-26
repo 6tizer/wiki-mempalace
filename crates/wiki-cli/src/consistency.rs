@@ -473,6 +473,7 @@ pub fn run_consistency_apply<R: WikiRepository>(
     }
 
     let mut db_changed = false;
+    let mut db_changed_page_ids = BTreeSet::new();
     for action in plan
         .actions
         .iter()
@@ -481,6 +482,9 @@ pub fn run_consistency_apply<R: WikiRepository>(
         if apply_db_fix(store, action)? {
             report.db_fixes_applied += 1;
             db_changed = true;
+            if let Some(page_id) = action.path.strip_prefix("wiki://page/") {
+                db_changed_page_ids.insert(page_id.to_string());
+            }
         }
     }
     if db_changed {
@@ -511,24 +515,31 @@ pub fn run_consistency_apply<R: WikiRepository>(
         }
     }
 
-    if palace_replays_planned > 0 {
+    let mut palace_replay_page_ids = db_changed_page_ids;
+    for action in plan
+        .actions
+        .iter()
+        .filter(|action| action.executable && action.kind == ConsistencyActionKind::PalaceReplay)
+    {
+        let page_id = action.path.strip_prefix("wiki://page/").ok_or_else(|| {
+            format!(
+                "palace replay path must be wiki://page/<id>: {}",
+                action.path
+            )
+        })?;
+        palace_replay_page_ids.insert(page_id.to_string());
+    }
+
+    if !palace_replay_page_ids.is_empty() {
         let palace_path = options
             .palace_path
-            .ok_or("--palace is required for palace replay")?;
+            .ok_or("--palace is required when DB fixes or palace replay need Mempalace sync")?;
         let sink = LiveMempalaceSink::open(palace_path, options.palace_bank_id)?;
-        for action in plan.actions.iter().filter(|action| {
-            action.executable && action.kind == ConsistencyActionKind::PalaceReplay
-        }) {
-            let page_id = action.path.strip_prefix("wiki://page/").ok_or_else(|| {
-                format!(
-                    "palace replay path must be wiki://page/<id>: {}",
-                    action.path
-                )
-            })?;
+        for page_id in palace_replay_page_ids {
             let page = store
                 .pages
                 .values()
-                .find(|page| page.id.0.to_string() == page_id)
+                .find(|page| page.id.0.to_string() == page_id.as_str())
                 .ok_or_else(|| format!("page not found for palace replay: {page_id}"))?;
             sink.on_page_written(page)?;
             report.palace_replays_applied += 1;

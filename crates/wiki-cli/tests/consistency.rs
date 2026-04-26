@@ -619,6 +619,10 @@ mod plan_apply_coverage {
     fn consistency_apply_replaces_resolved_legacy_link_in_db_page() {
         let temp = tempfile::tempdir().unwrap();
         let vault = temp.path().join("vault");
+        let palace_path = temp.path().join("palace.db");
+        let conn = rusqlite::Connection::open(&palace_path).unwrap();
+        rust_mempalace::db::init_schema(&conn).unwrap();
+        drop(conn);
         let (repo, mut store, source_id, page_id) = seed_repo(&temp.path().join("wiki.db"));
         store
             .pages
@@ -652,7 +656,7 @@ mod plan_apply_coverage {
             ConsistencyApplyOptions {
                 plan_path: &files.json_path,
                 wiki_dir: &vault,
-                palace_path: None,
+                palace_path: Some(&palace_path),
                 palace_bank_id: "wiki",
                 apply: true,
             },
@@ -660,6 +664,7 @@ mod plan_apply_coverage {
         .unwrap();
 
         assert_eq!(report.db_fixes_applied, 1);
+        assert_eq!(report.palace_replays_applied, 1);
         let page = store
             .pages
             .values()
