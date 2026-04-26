@@ -61,3 +61,4 @@
 - [x] M8 完成
 - [x] CI green (local: fmt ✓ clippy ✓ test ✓)
 - [x] PR #34 open (draft)
+- [x] Merged (PR #34, squash merge to main, 2026-04-26)

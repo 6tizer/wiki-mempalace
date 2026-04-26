@@ -74,5 +74,5 @@ Out:
 - [x] Specs created
 - [x] Modules implemented
 - [x] CI green (local: fmt ✓ clippy ✓ test ✓)
-- [ ] Merged (PR #34 draft，待 review sign-off)
-- [ ] Roadmap updated
+- [x] Merged (PR #34, squash merge to main, 2026-04-26)
+- [x] Roadmap updated
