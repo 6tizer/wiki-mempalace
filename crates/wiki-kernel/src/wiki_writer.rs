@@ -186,9 +186,22 @@ fn page_subdir_for_entry_type(et: Option<&wiki_core::EntryType>) -> &'static str
     }
 }
 
-/// vault 命名：中文标题直用，仅将 `/` 替换为 `-`（不做 ASCII slugify）。
+/// Vault 命名沿用 Notion 迁移规则：保留中文，空白/标点折叠为 `-`。
 fn vault_page_filename(title: &str) -> String {
-    title.replace('/', "-")
+    let mut out = String::with_capacity(title.len());
+    let mut last_sep = true;
+    for c in title.chars() {
+        if c.is_ascii_alphanumeric() || (!c.is_ascii() && !c.is_control()) || matches!(c, '-' | '_')
+        {
+            out.push(c);
+            last_sep = false;
+        } else if !last_sep {
+            out.push('-');
+            last_sep = true;
+        }
+    }
+    let trimmed = out.trim_matches('-');
+    trimmed.chars().take(80).collect()
 }
 
 /// YAML 双引号内转义：只处理双引号和反斜杠。
@@ -458,7 +471,7 @@ mod tests {
             !wiki_root.join("concepts").exists(),
             "projection must not recreate root concepts/"
         );
-        assert!(wiki_root.join("pages/concept/Concept Page.md").exists());
+        assert!(wiki_root.join("pages/concept/Concept-Page.md").exists());
     }
 
     #[test]
@@ -473,7 +486,7 @@ mod tests {
         store.pages.insert(sum.id, sum);
         store.pages.insert(con.id, con);
         write_projection(wiki_root, &store, &[]).unwrap();
-        // 中文标题直用，`/` → `-`
+        // Notion 迁移 slug：保留中文，空白/标点折叠为 `-`
         assert!(wiki_root
             .join("pages")
             .join("summary")
