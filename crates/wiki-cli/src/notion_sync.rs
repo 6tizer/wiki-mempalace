@@ -7,7 +7,7 @@ use crate::notion_client::{NotionApiClient, NotionClientError, NotionPage};
 use crate::notion_writeback::NotionWriteBackClient;
 use std::time::Instant;
 use time::OffsetDateTime;
-use wiki_core::Scope;
+use wiki_core::{normalize_and_validate_tags, redact_for_ingest, Scope};
 use wiki_kernel::{EngineError, LlmWikiEngine, NoopWikiHook};
 use wiki_storage::{SqliteRepository, WikiRepository};
 
@@ -34,6 +34,8 @@ pub struct SyncResult {
     pub new: usize,
     /// Pages skipped because their `notion_page_id` already exists.
     pub skipped: usize,
+    /// Existing pages whose source body/tags were refreshed.
+    pub refreshed: usize,
     /// Pages that failed to ingest (non-fatal; logged but not retried).
     pub errors: usize,
     pub duration_secs: f64,
@@ -75,6 +77,7 @@ impl<'a> NotionSyncRunner<'a> {
         since_override: Option<OffsetDateTime>,
         limit: Option<usize>,
         dry_run: bool,
+        refresh_existing: bool,
         writeback: &dyn NotionWriteBackClient,
     ) -> Result<SyncResult, SyncError> {
         let started = Instant::now();
@@ -106,6 +109,18 @@ impl<'a> NotionSyncRunner<'a> {
         for page in &pages {
             let already_exists = self.repo.notion_page_exists(&page.id)?;
             if already_exists {
+                if refresh_existing {
+                    if dry_run {
+                        result.refreshed += 1;
+                        continue;
+                    }
+                    if self.refresh_existing_source(db_id, page)? {
+                        result.refreshed += 1;
+                    } else {
+                        result.skipped += 1;
+                    }
+                    continue;
+                }
                 result.skipped += 1;
                 if self.verbose {
                     eprintln!(
@@ -154,6 +169,42 @@ impl<'a> NotionSyncRunner<'a> {
         Ok(result)
     }
 
+    fn refresh_existing_source(
+        &mut self,
+        db_id: &str,
+        page: &NotionPage,
+    ) -> Result<bool, SyncError> {
+        let uri = format!("notion://{}/{}", db_id, page.id);
+        let body = build_body(page);
+        let (clean_body, _) = redact_for_ingest(&body);
+        let tags =
+            normalize_and_validate_tags(page.tags.iter().map(String::as_str), &self.engine.schema)
+                .map_err(EngineError::from)?;
+
+        let Some(source) = self
+            .engine
+            .store
+            .sources
+            .values_mut()
+            .find(|source| source.uri == uri)
+        else {
+            return Ok(false);
+        };
+
+        let body_changed = clean_body.trim() != source.body.trim();
+        let body_not_shrinking = clean_body.trim().len() >= source.body.trim().len();
+        let tags_changed = source.tags != tags;
+        if (body_changed && body_not_shrinking) || tags_changed {
+            if body_changed && body_not_shrinking {
+                source.body = clean_body;
+            }
+            source.tags = tags;
+            return Ok(true);
+        }
+
+        Ok(false)
+    }
+
     fn ingest_page(
         &mut self,
         db_id: &str,
@@ -188,6 +239,10 @@ fn build_body(page: &NotionPage) -> String {
     if let Some(note) = &page.note {
         parts.push(format!("备注: {note}"));
     }
+    if !page.content.trim().is_empty() {
+        parts.push(String::new());
+        parts.push(page.content.trim().to_string());
+    }
 
     parts.join("\n")
 }
@@ -195,7 +250,7 @@ fn build_body(page: &NotionPage) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::notion_client::NotionPage;
+    use crate::notion_client::{NotionApiClient, NotionPage};
     use crate::notion_writeback::NoopWriteBack;
     use tempfile::tempdir;
     use time::OffsetDateTime;
@@ -218,6 +273,7 @@ mod tests {
             source: Some("X".to_string()),
             note: None,
             status: Some("待读".to_string()),
+            content: "full page body".to_string(),
         }
     }
 
@@ -364,6 +420,41 @@ mod tests {
     }
 
     #[test]
+    fn notion_sync_refreshes_existing_source_body() {
+        unsafe { std::env::set_var("NOTION_TOKEN", "test-token") };
+        let dir = tempdir().unwrap();
+        let db = dir.path().join("wiki.db");
+        let repo = SqliteRepository::open(&db).unwrap();
+        let schema = DomainSchema::permissive_default();
+        let mut engine = LlmWikiEngine::new(schema);
+        let source_id = engine
+            .ingest_raw_with_tags(
+                "notion://x_bookmark/page-refresh",
+                "# Existing\n\nURL: https://example.com",
+                private_scope(),
+                "test",
+                ["OldTag"],
+            )
+            .unwrap();
+        repo.insert_notion_page_index("page-refresh", "x_bookmark", &source_id)
+            .unwrap();
+
+        let mut client = NotionApiClient::from_env_with_delay(0).unwrap();
+        let mut runner =
+            NotionSyncRunner::new(&mut client, &repo, &mut engine, private_scope(), false);
+        let mut page = make_page("page-refresh", "Existing");
+        page.content = "new full page body from Notion blocks".to_string();
+        page.tags = vec!["NewTag".to_string()];
+
+        assert!(runner.refresh_existing_source("x_bookmark", &page).unwrap());
+        let source = runner.engine.store.sources.get(&source_id).unwrap();
+        assert!(source
+            .body
+            .contains("new full page body from Notion blocks"));
+        assert_eq!(source.tags, vec!["NewTag"]);
+    }
+
+    #[test]
     fn notion_sync_dry_run_no_writes() {
         let dir = tempdir().unwrap();
         let db = dir.path().join("wiki.db");
@@ -406,6 +497,7 @@ mod tests {
             source: Some("X".to_string()),
             note: Some("a note".to_string()),
             status: Some("待读".to_string()),
+            content: "main body".to_string(),
         };
         let body = build_body(&page);
         assert!(body.starts_with("# My Title"));
@@ -413,6 +505,7 @@ mod tests {
         assert!(body.contains("来源: X"));
         assert!(body.contains("状态: 待读"));
         assert!(body.contains("备注: a note"));
+        assert!(body.contains("main body"));
     }
 
     #[test]
@@ -426,6 +519,7 @@ mod tests {
             source: None,
             note: None,
             status: None,
+            content: String::new(),
         };
         let body = build_body(&page);
         assert!(body.starts_with("# Title Only"));

@@ -41,6 +41,7 @@ pub struct NotionPage {
     pub source: Option<String>,
     pub note: Option<String>,
     pub status: Option<String>,
+    pub content: String,
 }
 
 pub struct NotionApiClient {
@@ -110,7 +111,8 @@ impl NotionApiClient {
             let next_cursor = batch.next_cursor;
 
             for raw in batch.results {
-                if let Some(page) = parse_notion_page(raw) {
+                if let Some(mut page) = parse_notion_page(raw) {
+                    page.content = self.fetch_page_content(&page.id)?;
                     pages.push(page);
                     if let Some(lim) = limit {
                         if pages.len() >= lim {
@@ -166,6 +168,68 @@ impl NotionApiClient {
         }
     }
 
+    fn get_with_retry(&mut self, url: &str) -> Result<serde_json::Value, NotionClientError> {
+        let mut retries = 0u32;
+        loop {
+            self.rate_limit_sleep();
+            let resp = self
+                .client
+                .get(url)
+                .header("Authorization", format!("Bearer {}", self.token))
+                .header("Notion-Version", NOTION_VERSION)
+                .send()?;
+
+            let status = resp.status();
+            if status.as_u16() == 429 {
+                if retries >= MAX_RETRIES {
+                    return Err(NotionClientError::RateLimitExceeded);
+                }
+                let retry_after = retry_after_secs(&resp);
+                std::thread::sleep(Duration::from_secs(retry_after));
+                retries += 1;
+                continue;
+            }
+
+            if !status.is_success() {
+                let text = resp.text().unwrap_or_default();
+                return Err(NotionClientError::Api(format!("HTTP {status}: {text}")));
+            }
+
+            return Ok(resp.json()?);
+        }
+    }
+
+    fn fetch_page_content(&mut self, page_id: &str) -> Result<String, NotionClientError> {
+        let mut blocks = Vec::new();
+        let mut start_cursor: Option<String> = None;
+
+        loop {
+            let mut url = format!(
+                "{}/blocks/{}/children?page_size=100",
+                self.base_url, page_id
+            );
+            if let Some(cursor) = &start_cursor {
+                url.push_str("&start_cursor=");
+                url.push_str(cursor);
+            }
+
+            let response_json = self.get_with_retry(&url)?;
+            let batch = parse_block_children_response(&response_json)?;
+            for raw in batch.results {
+                if let Some(text) = render_block_text(&raw) {
+                    blocks.push(text);
+                }
+            }
+
+            if !batch.has_more || batch.next_cursor.is_none() {
+                break;
+            }
+            start_cursor = batch.next_cursor;
+        }
+
+        Ok(blocks.join("\n\n"))
+    }
+
     fn rate_limit_sleep(&mut self) {
         if let Some(last) = self.last_request_at {
             let elapsed = last.elapsed();
@@ -214,9 +278,24 @@ struct QueryResponse {
     next_cursor: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+struct BlockChildrenResponse {
+    results: Vec<serde_json::Value>,
+    has_more: bool,
+    next_cursor: Option<String>,
+}
+
 fn parse_query_response(json: &serde_json::Value) -> Result<QueryResponse, NotionClientError> {
     serde_json::from_value(json.clone())
         .map_err(|e| NotionClientError::Api(format!("failed to parse query response: {e}")))
+}
+
+fn parse_block_children_response(
+    json: &serde_json::Value,
+) -> Result<BlockChildrenResponse, NotionClientError> {
+    serde_json::from_value(json.clone()).map_err(|e| {
+        NotionClientError::Api(format!("failed to parse block children response: {e}"))
+    })
 }
 
 fn parse_notion_page(raw: serde_json::Value) -> Option<NotionPage> {
@@ -247,7 +326,55 @@ fn parse_notion_page(raw: serde_json::Value) -> Option<NotionPage> {
         source,
         note,
         status,
+        content: String::new(),
     })
+}
+
+fn render_block_text(raw: &serde_json::Value) -> Option<String> {
+    let block_type = raw["type"].as_str()?;
+    let block = &raw[block_type];
+    let text = rich_text_plain(block);
+    let text = text.trim();
+
+    let rendered = match block_type {
+        "paragraph" => text.to_string(),
+        "heading_1" => format!("# {text}"),
+        "heading_2" => format!("## {text}"),
+        "heading_3" => format!("### {text}"),
+        "bulleted_list_item" => format!("- {text}"),
+        "numbered_list_item" => format!("1. {text}"),
+        "to_do" => {
+            let checked = block["checked"].as_bool().unwrap_or(false);
+            format!("- [{}] {text}", if checked { "x" } else { " " })
+        }
+        "quote" => format!("> {text}"),
+        "code" => {
+            let language = block["language"].as_str().unwrap_or("");
+            format!("```{language}\n{text}\n```")
+        }
+        "callout" => format!("> {text}"),
+        "toggle" => format!("- {text}"),
+        "bookmark" | "link_preview" => block["url"].as_str().unwrap_or("").to_string(),
+        _ => text.to_string(),
+    };
+
+    if rendered.trim().is_empty() {
+        None
+    } else {
+        Some(rendered)
+    }
+}
+
+fn rich_text_plain(block: &serde_json::Value) -> String {
+    block["rich_text"]
+        .as_array()
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v["plain_text"].as_str())
+                .collect::<Vec<_>>()
+                .join("")
+        })
+        .unwrap_or_default()
 }
 
 fn extract_title(props: &serde_json::Value) -> String {
@@ -302,7 +429,7 @@ fn extract_rich_text(props: &serde_json::Value, key: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mockito::Server;
+    use mockito::{Matcher, Server};
 
     fn make_page_json(page_id: &str, last_edited: &str, title: &str) -> serde_json::Value {
         serde_json::json!({
@@ -319,12 +446,34 @@ mod tests {
         })
     }
 
+    fn mock_blocks(server: &mut Server, page_id: &str, text: &str) -> mockito::Mock {
+        server
+            .mock("GET", format!("/blocks/{page_id}/children").as_str())
+            .match_query(Matcher::Any)
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(
+                serde_json::json!({
+                    "results": [{
+                        "type": "paragraph",
+                        "paragraph": {"rich_text": [{"plain_text": text}]}
+                    }],
+                    "has_more": false,
+                    "next_cursor": null
+                })
+                .to_string(),
+            )
+            .create()
+    }
+
     #[test]
     fn notion_client_pagination() {
         let mut server = Server::new();
 
         let page1 = make_page_json("page-1", "2026-04-01T00:00:00.000Z", "Title 1");
         let page2 = make_page_json("page-2", "2026-04-02T00:00:00.000Z", "Title 2");
+        let _b1 = mock_blocks(&mut server, "page-1", "Body 1");
+        let _b2 = mock_blocks(&mut server, "page-2", "Body 2");
 
         // First request: has_more = true
         let _m1 = server
@@ -370,6 +519,7 @@ mod tests {
         assert_eq!(pages[1].id, "page-2");
         assert_eq!(pages[0].tags, vec!["LLM"]);
         assert_eq!(pages[0].url, Some("https://example.com".to_string()));
+        assert_eq!(pages[0].content, "Body 1");
     }
 
     #[test]
@@ -377,6 +527,7 @@ mod tests {
         let mut server = Server::new();
 
         let page = make_page_json("page-1", "2026-04-01T00:00:00.000Z", "Title 1");
+        let _b1 = mock_blocks(&mut server, "page-1", "Body 1");
 
         // First two requests return 429
         let _m1 = server
@@ -445,6 +596,9 @@ mod tests {
 
         let pages: Vec<serde_json::Value> = (1..=5)
             .map(|i| make_page_json(&format!("page-{i}"), "2026-04-01T00:00:00.000Z", "T"))
+            .collect();
+        let _block_mocks: Vec<_> = (1..=3)
+            .map(|i| mock_blocks(&mut server, &format!("page-{i}"), &format!("Body {i}")))
             .collect();
 
         let _m = server

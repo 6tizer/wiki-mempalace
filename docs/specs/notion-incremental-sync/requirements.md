@@ -24,12 +24,15 @@
 
 - 系统必须在 `wiki.db` 中维护 `notion_page_id → source_id` 映射（`notion_page_index` 表）。
 - 对于已存在 `notion_page_id` 的页面，跳过 ingest，记录 `skipped` 计数。
+- 如果显式传入 `--refresh-existing`，已存在页面不跳过；系统必须重新读取
+  Notion page blocks，并在新 body 更完整或 tags 变化时刷新对应 `RawArtifact`。
 - 跳过不报错，只在 `--verbose` 日志中打印。
   - 注：实现使用 `notion_page_index` 表持久化 `notion_page_id` 与 `source_id` 映射（字段名在实现中已对齐数据库 DDL）。
 
 ### FR-04 Raw Ingest
 
 - 新页面必须转换为 body 文本（格式见 design.md §4.3），调用 `LlmWikiEngine::ingest_raw_with_tags`。
+- body 必须包含 Notion 页面 blocks 的纯文本/Markdown 化内容；不能只保存数据库属性。
 - Source URI 格式：`notion://x_bookmark/<page_id>` 或 `notion://wechat/<page_id>`。
 - tags 取自 Notion 页面的 `标签` multi_select 字段，归一化后写入。
 - scope 使用 CLI `--viewer-scope` 参数传入的值（与其他子命令一致）。
@@ -53,12 +56,15 @@
 | `--dry-run` | flag | false | 打印将拉取页数，不写 DB |
 | `--request-delay-ms <N>` | u64 | 350 | API 请求间隔（最小 100） |
 | `--writeback-notion` | flag | false | 同步后标记 Notion 页面（首版关闭） |
+| `--refresh-existing` | flag | false | 刷新已存在 Notion source 的正文和 tags |
 | `--verbose` | flag | false | 打印每条 page_id 处理结果 |
 
 ### FR-07 Automation Job
 
 - `notion-sync` 必须注册到 `AUTOMATION_JOB_SPECS`，`in_daily = true`、`requires_network = true`、`short_circuit = false`，`job_name = "notion-sync"`。
 - job 执行时使用与 CLI 相同的 ingest 路径；`short_circuit=false` 时失败后不应阻塞后续 `run-daily` 链继续执行。
+- automation job 必须默认启用 existing refresh：cursor 之后若返回已存在的
+  `notion_page_id`，仍要刷新正文和 tags，避免 Notion 后续编辑被本地跳过。
 - job 必须通过 `start_automation_run` / `mark_automation_run_succeeded` / `mark_automation_run_failed` 记录状态。
 
 ### FR-08 Writeback 接口（首版关闭）
@@ -81,7 +87,7 @@
 
 ### NFR-02 可观测性
 
-- stdout：每次运行结束打印 `fetched=N new=N skipped=N errors=N duration=Xs` 摘要。
+- stdout：每次运行结束打印 `fetched=N new=N refreshed=N skipped=N errors=N duration=Xs` 摘要。
 - `automation health` / `automation last-failures` 中可见 notion-sync 的运行状态。
 
 ### NFR-03 安全性
