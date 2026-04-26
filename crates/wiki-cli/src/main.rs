@@ -34,6 +34,7 @@ mod dashboard;
 mod llm;
 mod mcp;
 mod notion_client;
+mod notion_index_backfill;
 mod notion_sync;
 mod notion_writeback;
 mod orphan_governance;
@@ -407,6 +408,18 @@ enum Cmd {
         /// Print per-page processing details
         #[arg(long, default_value_t = false)]
         verbose: bool,
+    },
+    /// Backfill notion_page_index from historical vault source frontmatter.
+    NotionSyncIndexBackfill {
+        /// Vault root directory. Defaults to --wiki-dir when present.
+        #[arg(long)]
+        vault: Option<PathBuf>,
+        /// Dry-run only. This is also the default when --apply is absent.
+        #[arg(long, default_value_t = false)]
+        dry_run: bool,
+        /// Write missing index rows.
+        #[arg(long, default_value_t = false)]
+        apply: bool,
     },
 }
 
@@ -2814,6 +2827,26 @@ fn run_with_engine(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                 writeback_notion,
                 verbose,
             )?;
+        }
+        Cmd::NotionSyncIndexBackfill {
+            vault,
+            dry_run,
+            apply,
+        } => {
+            if dry_run && apply {
+                return Err("--dry-run and --apply are mutually exclusive".into());
+            }
+            let vault = vault
+                .clone()
+                .or_else(|| wiki_root.clone())
+                .ok_or("--vault or --wiki-dir is required for notion-sync-index-backfill")?;
+            let mode = if apply {
+                notion_index_backfill::BackfillMode::Apply
+            } else {
+                notion_index_backfill::BackfillMode::DryRun
+            };
+            let report = notion_index_backfill::backfill_notion_page_index(&repo, &vault, mode)?;
+            println!("{report}");
         }
     }
     Ok(())

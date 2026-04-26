@@ -79,6 +79,14 @@ pub struct AutomationJobFailureSummary {
     pub latest_failure: Option<AutomationRunRecord>,
 }
 
+pub fn canonical_notion_page_id(raw: &str) -> String {
+    raw.trim()
+        .chars()
+        .filter(|ch| *ch != '-')
+        .flat_map(char::to_lowercase)
+        .collect()
+}
+
 pub trait WikiRepository {
     fn load_snapshot(&self) -> Result<StorageSnapshot, StorageError>;
     fn save_snapshot(&self, snapshot: &StorageSnapshot) -> Result<(), StorageError>;
@@ -843,6 +851,7 @@ impl WikiRepository for SqliteRepository {
     }
 
     fn notion_page_exists(&self, notion_page_id: &str) -> Result<bool, StorageError> {
+        let notion_page_id = canonical_notion_page_id(notion_page_id);
         let count: i64 = self.conn.query_row(
             "SELECT COUNT(*) FROM notion_page_index WHERE notion_page_id = ?1",
             params![notion_page_id],
@@ -857,6 +866,7 @@ impl WikiRepository for SqliteRepository {
         db_id: &str,
         source_id: &SourceId,
     ) -> Result<(), StorageError> {
+        let notion_page_id = canonical_notion_page_id(notion_page_id);
         let now_str = encode_time(OffsetDateTime::now_utc())?;
         self.conn.execute(
             "INSERT OR IGNORE INTO notion_page_index(notion_page_id, db_id, source_id, synced_at)
@@ -878,6 +888,7 @@ impl WikiRepository for SqliteRepository {
                  VALUES(?1, ?2, ?3, ?4)",
             )?;
             for (notion_page_id, db_id, source_id) in entries {
+                let notion_page_id = canonical_notion_page_id(notion_page_id);
                 stmt.execute(params![
                     notion_page_id,
                     db_id,
@@ -1345,5 +1356,28 @@ mod tests {
 
         // Different page_id not found
         assert!(!repo.notion_page_exists("other-page").unwrap());
+    }
+
+    #[test]
+    fn storage_notion_page_index_canonicalizes_hyphens_and_case() {
+        let dir = tempdir().unwrap();
+        let db = dir.path().join("wiki.db");
+        let repo = SqliteRepository::open(&db).unwrap();
+        let source_id = wiki_core::SourceId(uuid::Uuid::new_v4());
+
+        repo.insert_notion_page_index("1A9701074B688103B989FBD0CFB8343A", "wechat", &source_id)
+            .unwrap();
+
+        assert!(repo
+            .notion_page_exists("1a970107-4b68-8103-b989-fbd0cfb8343a")
+            .unwrap());
+
+        let count: i64 = rusqlite::Connection::open(&db)
+            .unwrap()
+            .query_row("SELECT COUNT(*) FROM notion_page_index", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(count, 1);
     }
 }
