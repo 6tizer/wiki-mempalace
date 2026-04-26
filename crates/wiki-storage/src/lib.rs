@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use time::{
     format_description, format_description::well_known::Rfc3339, OffsetDateTime, PrimitiveDateTime,
 };
-use wiki_core::{AuditRecord, Claim, Entity, RawArtifact, TypedEdge, WikiEvent, WikiPage};
+use wiki_core::{AuditRecord, Claim, Entity, RawArtifact, SourceId, TypedEdge, WikiEvent, WikiPage};
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct StorageSnapshot {
@@ -93,6 +93,29 @@ pub trait WikiRepository {
         up_to_id: i64,
         consumer_tag: &str,
     ) -> Result<usize, StorageError>;
+
+    // --- Notion incremental sync ---
+
+    fn get_notion_sync_cursor(
+        &self,
+        db_id: &str,
+    ) -> Result<Option<OffsetDateTime>, StorageError>;
+
+    fn upsert_notion_sync_cursor(
+        &self,
+        db_id: &str,
+        at: OffsetDateTime,
+        pages_synced_increment: i64,
+    ) -> Result<(), StorageError>;
+
+    fn notion_page_exists(&self, notion_page_id: &str) -> Result<bool, StorageError>;
+
+    fn insert_notion_page_index(
+        &self,
+        notion_page_id: &str,
+        db_id: &str,
+        source_id: &SourceId,
+    ) -> Result<(), StorageError>;
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -153,6 +176,17 @@ CREATE INDEX IF NOT EXISTS wiki_automation_run_job_id_idx
   ON wiki_automation_run(job_name, id DESC);
 CREATE INDEX IF NOT EXISTS wiki_automation_run_job_status_id_idx
   ON wiki_automation_run(job_name, status, id DESC);
+CREATE TABLE IF NOT EXISTS notion_sync_cursors (
+  db_id TEXT PRIMARY KEY,
+  last_synced_at TEXT NOT NULL,
+  pages_synced INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS notion_page_index (
+  notion_page_id TEXT PRIMARY KEY,
+  db_id TEXT NOT NULL,
+  source_id TEXT NOT NULL,
+  synced_at TEXT NOT NULL
+);
 "#,
         )?;
         Ok(Self { conn })
@@ -770,6 +804,68 @@ impl WikiRepository for SqliteRepository {
         }
         result
     }
+
+    fn get_notion_sync_cursor(
+        &self,
+        db_id: &str,
+    ) -> Result<Option<OffsetDateTime>, StorageError> {
+        let result = self
+            .conn
+            .query_row(
+                "SELECT last_synced_at FROM notion_sync_cursors WHERE db_id = ?1",
+                params![db_id],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?;
+        match result {
+            Some(value) => Ok(Some(parse_time(&value)?)),
+            None => Ok(None),
+        }
+    }
+
+    fn upsert_notion_sync_cursor(
+        &self,
+        db_id: &str,
+        at: OffsetDateTime,
+        pages_synced_increment: i64,
+    ) -> Result<(), StorageError> {
+        let at_str = encode_time(at)?;
+        self.conn.execute(
+            "INSERT INTO notion_sync_cursors(db_id, last_synced_at, pages_synced)
+             VALUES(?1, ?2, ?3)
+             ON CONFLICT(db_id) DO UPDATE SET
+               last_synced_at = excluded.last_synced_at,
+               pages_synced = pages_synced + excluded.pages_synced",
+            params![db_id, at_str, pages_synced_increment],
+        )?;
+        Ok(())
+    }
+
+    fn notion_page_exists(&self, notion_page_id: &str) -> Result<bool, StorageError> {
+        let count: i64 = self
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM notion_page_index WHERE notion_page_id = ?1",
+                params![notion_page_id],
+                |row| row.get(0),
+            )?;
+        Ok(count > 0)
+    }
+
+    fn insert_notion_page_index(
+        &self,
+        notion_page_id: &str,
+        db_id: &str,
+        source_id: &SourceId,
+    ) -> Result<(), StorageError> {
+        let now_str = encode_time(OffsetDateTime::now_utc())?;
+        self.conn.execute(
+            "INSERT OR IGNORE INTO notion_page_index(notion_page_id, db_id, source_id, synced_at)
+             VALUES(?1, ?2, ?3, ?4)",
+            params![notion_page_id, db_id, source_id.0.to_string(), now_str],
+        )?;
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -1167,5 +1263,55 @@ mod tests {
         assert_eq!(summaries[0].consecutive_failures, 2);
         assert_eq!(summaries[1].job_name, "maintenance");
         assert_eq!(summaries[1].consecutive_failures, 1);
+    }
+
+    #[test]
+    fn storage_notion_cursor_roundtrip() {
+        let dir = tempdir().unwrap();
+        let db = dir.path().join("wiki.db");
+        let repo = SqliteRepository::open(&db).unwrap();
+
+        // No cursor initially
+        assert!(repo.get_notion_sync_cursor("x_bookmark").unwrap().is_none());
+
+        let t1 = OffsetDateTime::from_unix_timestamp(1_700_000_000).unwrap();
+        repo.upsert_notion_sync_cursor("x_bookmark", t1, 5).unwrap();
+
+        let got = repo.get_notion_sync_cursor("x_bookmark").unwrap().unwrap();
+        assert_eq!(got.unix_timestamp(), t1.unix_timestamp());
+
+        // Upsert again with a newer timestamp; pages_synced accumulates
+        let t2 = OffsetDateTime::from_unix_timestamp(1_700_001_000).unwrap();
+        repo.upsert_notion_sync_cursor("x_bookmark", t2, 3).unwrap();
+
+        let got2 = repo.get_notion_sync_cursor("x_bookmark").unwrap().unwrap();
+        assert_eq!(got2.unix_timestamp(), t2.unix_timestamp());
+
+        // Other db_id still missing
+        assert!(repo.get_notion_sync_cursor("wechat").unwrap().is_none());
+    }
+
+    #[test]
+    fn storage_notion_page_exists() {
+        let dir = tempdir().unwrap();
+        let db = dir.path().join("wiki.db");
+        let repo = SqliteRepository::open(&db).unwrap();
+
+        let page_id = "abc-123";
+        let source_id = wiki_core::SourceId(uuid::Uuid::new_v4());
+
+        assert!(!repo.notion_page_exists(page_id).unwrap());
+
+        repo.insert_notion_page_index(page_id, "x_bookmark", &source_id)
+            .unwrap();
+        assert!(repo.notion_page_exists(page_id).unwrap());
+
+        // Inserting again (OR IGNORE) should not fail
+        repo.insert_notion_page_index(page_id, "x_bookmark", &source_id)
+            .unwrap();
+        assert!(repo.notion_page_exists(page_id).unwrap());
+
+        // Different page_id not found
+        assert!(!repo.notion_page_exists("other-page").unwrap());
     }
 }
