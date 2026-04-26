@@ -159,9 +159,7 @@ impl NotionApiClient {
 
             if !status.is_success() {
                 let text = resp.text().unwrap_or_default();
-                return Err(NotionClientError::Api(format!(
-                    "HTTP {status}: {text}"
-                )));
+                return Err(NotionClientError::Api(format!("HTTP {status}: {text}")));
             }
 
             return Ok(resp.json()?);
@@ -187,10 +185,7 @@ fn retry_after_secs(resp: &reqwest::blocking::Response) -> u64 {
         .unwrap_or(DEFAULT_RETRY_AFTER_SECS)
 }
 
-fn build_query_body(
-    since: Option<&str>,
-    start_cursor: Option<&str>,
-) -> serde_json::Value {
+fn build_query_body(since: Option<&str>, start_cursor: Option<&str>) -> serde_json::Value {
     let mut body = serde_json::json!({
         "page_size": 100,
         "sorts": [{"timestamp": "last_edited_time", "direction": "descending"}]
@@ -219,9 +214,7 @@ struct QueryResponse {
     next_cursor: Option<String>,
 }
 
-fn parse_query_response(
-    json: &serde_json::Value,
-) -> Result<QueryResponse, NotionClientError> {
+fn parse_query_response(json: &serde_json::Value) -> Result<QueryResponse, NotionClientError> {
     serde_json::from_value(json.clone())
         .map_err(|e| NotionClientError::Api(format!("failed to parse query response: {e}")))
 }

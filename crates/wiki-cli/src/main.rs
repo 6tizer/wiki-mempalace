@@ -3162,6 +3162,7 @@ mod tests {
                 "lint",
                 "maintenance",
                 "consume-to-mempalace",
+                "notion-sync",
             ]
         );
     }
@@ -3180,10 +3181,13 @@ mod tests {
                 "maintenance",
                 "consume-to-mempalace",
                 "llm-smoke",
+                "notion-sync",
             ]
         );
         assert!(automation_job_spec(AutomationJob::LlmSmoke).requires_network);
         assert!(!automation_job_spec(AutomationJob::LlmSmoke).in_daily);
+        assert!(automation_job_spec(AutomationJob::NotionSync).requires_network);
+        assert!(automation_job_spec(AutomationJob::NotionSync).in_daily);
     }
 
     #[test]
@@ -4307,9 +4311,7 @@ fn dispatch_automation_job(
             println!("{out}");
             Ok(())
         }
-        AutomationJob::NotionSync => {
-            run_notion_sync_job(eng, repo, viewer, false, 350, false)
-        }
+        AutomationJob::NotionSync => run_notion_sync_job(eng, repo, viewer, false, 350, false),
     }
 }
 
@@ -4348,14 +4350,8 @@ fn run_single_automation_job<W: Write>(
 }
 
 /// Notion DB configurations: (slug, Notion DB UUID)
-const NOTION_DB_X_BOOKMARK: (&str, &str) = (
-    "x_bookmark",
-    "0d305291-2a5d-426c-8db8-903ed5bb7ddb",
-);
-const NOTION_DB_WECHAT: (&str, &str) = (
-    "wechat",
-    "16470107-4b68-810a-bc81-f90795cc29ad",
-);
+const NOTION_DB_X_BOOKMARK: (&str, &str) = ("x_bookmark", "0d305291-2a5d-426c-8db8-903ed5bb7ddb");
+const NOTION_DB_WECHAT: (&str, &str) = ("wechat", "16470107-4b68-810a-bc81-f90795cc29ad");
 
 fn run_notion_sync_cmd(
     eng: &mut LlmWikiEngine<NoopWikiHook>,
@@ -4396,8 +4392,14 @@ fn run_notion_sync_cmd(
 
     for (slug, notion_id) in dbs {
         let mut runner = NotionSyncRunner::new(&mut client, repo, eng, viewer.clone(), verbose);
-        let result =
-            runner.run_sync(slug, notion_id, since_time, limit, dry_run, writeback.as_ref())?;
+        let result = runner.run_sync(
+            slug,
+            notion_id,
+            since_time,
+            limit,
+            dry_run,
+            writeback.as_ref(),
+        )?;
         println!(
             "notion-sync db={} fetched={} new={} skipped={} errors={} duration={:.1}s{}",
             result.db_id,

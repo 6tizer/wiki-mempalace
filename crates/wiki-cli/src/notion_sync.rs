@@ -126,10 +126,7 @@ impl<'a> NotionSyncRunner<'a> {
                         .insert_notion_page_index(&page.id, db_id, &source_id)?;
 
                     if let Err(e) = writeback.mark_compiled(&page.id) {
-                        eprintln!(
-                            "notion-sync: writeback warn page_id={}: {e}",
-                            page.id
-                        );
+                        eprintln!("notion-sync: writeback warn page_id={}: {e}", page.id);
                     }
 
                     result.new += 1;
@@ -164,9 +161,13 @@ impl<'a> NotionSyncRunner<'a> {
     ) -> Result<wiki_core::SourceId, SyncError> {
         let uri = format!("notion://{}/{}", db_id, page.id);
         let body = build_body(page);
-        let source_id = self
-            .engine
-            .ingest_raw_with_tags(&uri, &body, self.scope.clone(), "notion-sync", &page.tags)?;
+        let source_id = self.engine.ingest_raw_with_tags(
+            &uri,
+            &body,
+            self.scope.clone(),
+            "notion-sync",
+            &page.tags,
+        )?;
         Ok(source_id)
     }
 }
@@ -370,10 +371,7 @@ mod tests {
         let schema = DomainSchema::permissive_default();
         let mut engine = LlmWikiEngine::new(schema);
 
-        let pages = vec![
-            make_page("page-1", "Page 1"),
-            make_page("page-2", "Page 2"),
-        ];
+        let pages = vec![make_page("page-1", "Page 1"), make_page("page-2", "Page 2")];
         let result = run_sync_with_pages(
             "x_bookmark",
             pages,

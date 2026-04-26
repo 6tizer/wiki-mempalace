@@ -3,7 +3,9 @@ use serde::{Deserialize, Serialize};
 use time::{
     format_description, format_description::well_known::Rfc3339, OffsetDateTime, PrimitiveDateTime,
 };
-use wiki_core::{AuditRecord, Claim, Entity, RawArtifact, SourceId, TypedEdge, WikiEvent, WikiPage};
+use wiki_core::{
+    AuditRecord, Claim, Entity, RawArtifact, SourceId, TypedEdge, WikiEvent, WikiPage,
+};
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct StorageSnapshot {
@@ -96,10 +98,7 @@ pub trait WikiRepository {
 
     // --- Notion incremental sync ---
 
-    fn get_notion_sync_cursor(
-        &self,
-        db_id: &str,
-    ) -> Result<Option<OffsetDateTime>, StorageError>;
+    fn get_notion_sync_cursor(&self, db_id: &str) -> Result<Option<OffsetDateTime>, StorageError>;
 
     fn upsert_notion_sync_cursor(
         &self,
@@ -805,10 +804,7 @@ impl WikiRepository for SqliteRepository {
         result
     }
 
-    fn get_notion_sync_cursor(
-        &self,
-        db_id: &str,
-    ) -> Result<Option<OffsetDateTime>, StorageError> {
+    fn get_notion_sync_cursor(&self, db_id: &str) -> Result<Option<OffsetDateTime>, StorageError> {
         let result = self
             .conn
             .query_row(
@@ -842,13 +838,11 @@ impl WikiRepository for SqliteRepository {
     }
 
     fn notion_page_exists(&self, notion_page_id: &str) -> Result<bool, StorageError> {
-        let count: i64 = self
-            .conn
-            .query_row(
-                "SELECT COUNT(*) FROM notion_page_index WHERE notion_page_id = ?1",
-                params![notion_page_id],
-                |row| row.get(0),
-            )?;
+        let count: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM notion_page_index WHERE notion_page_id = ?1",
+            params![notion_page_id],
+            |row| row.get(0),
+        )?;
         Ok(count > 0)
     }
 
