@@ -278,12 +278,27 @@ pub fn run_consistency_plan(
         });
     }
     for stale in &audit.vault.stale_notion_links {
+        let report_only = stale.reason == "notion_url";
         actions.push(ConsistencyPlanAction {
-            kind: ConsistencyActionKind::NeedsHuman,
+            kind: if report_only {
+                ConsistencyActionKind::Deferred
+            } else {
+                ConsistencyActionKind::NeedsHuman
+            },
             path: format!("wiki://page/{}", stale.page_id),
-            operation: "review_stale_notion_link".to_string(),
+            operation: if report_only {
+                "record_legacy_notion_url"
+            } else {
+                "review_stale_notion_link"
+            }
+            .to_string(),
             value: Some(stale.raw_target.clone()),
-            reason: "旧 Notion 链接意图不能从文件名安全判断，先人工看。".to_string(),
+            reason: if report_only {
+                "旧 Notion URL 是来源脚印，本轮只报告，不要求人工逐条处理。"
+            } else {
+                "旧 Notion 导出文件名意图不能安全判断，先保留人工复核项。"
+            }
+            .to_string(),
             executable: false,
         });
     }
@@ -592,7 +607,7 @@ pub fn find_stale_notion_link_candidates(
         for raw_target in markdown_link_targets(&page.markdown) {
             let decoded = percent_decode(&raw_target);
             let mut reasons = Vec::new();
-            if decoded != raw_target {
+            if raw_target.contains('%') && decoded != raw_target {
                 reasons.push("url_encoded");
             }
             if raw_target.contains("notion.so") || decoded.contains("notion.so") {
@@ -1276,21 +1291,24 @@ fn frontmatter_value(markdown: &str, key: &str) -> Option<String> {
 }
 
 fn percent_decode(input: &str) -> String {
-    let mut out = String::new();
+    if !input.contains('%') {
+        return input.to_string();
+    }
+    let mut out = Vec::new();
     let bytes = input.as_bytes();
     let mut i = 0usize;
     while i < bytes.len() {
         if bytes[i] == b'%' && i + 2 < bytes.len() {
             if let Ok(value) = u8::from_str_radix(&input[i + 1..i + 3], 16) {
-                out.push(value as char);
+                out.push(value);
                 i += 3;
                 continue;
             }
         }
-        out.push(bytes[i] as char);
+        out.push(bytes[i]);
         i += 1;
     }
-    out
+    String::from_utf8_lossy(&out).into_owned()
 }
 
 fn looks_like_notion_export_filename(target: &str) -> bool {

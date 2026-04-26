@@ -13,7 +13,7 @@ fn stale_notion_style_links_are_candidates_only() {
     let pages = vec![DbPageEvidence {
         id: "page-a".into(),
         title: "Page A".into(),
-        markdown: "See [[AGENTS%20md]], [[Encoded%2EPage.md]] and [old](Legacy%20Export%20abcdef1234567890abcdef1234567890.md).\nAlso [normal](pages/summary/current.md).".into(),
+        markdown: "See [[AGENTS%20md]], [[Encoded%2EPage.md]] and [old](Legacy%20Export%20abcdef1234567890abcdef1234567890.md).\nAlso [normal](pages/summary/current.md) and [中文](../concept/混合检索.md).".into(),
         entry_type: Some("concept".into()),
     }];
 
@@ -33,6 +33,9 @@ fn stale_notion_style_links_are_candidates_only() {
         "Legacy Export abcdef1234567890abcdef1234567890.md"
     );
     assert!(candidates[2].reason.contains("notion_export_filename"));
+    assert!(!candidates
+        .iter()
+        .any(|candidate| candidate.raw_target == "../concept/混合检索.md"));
 }
 
 #[test]
@@ -478,6 +481,34 @@ mod plan_apply_coverage {
         let markdown = std::fs::read_to_string(files.markdown_path).unwrap();
         assert!(markdown.contains("# 一致性治理计划"));
         assert!(markdown.contains("动作"));
+    }
+
+    #[test]
+    fn consistency_plan_treats_plain_notion_urls_as_report_only() {
+        let temp = tempfile::tempdir().unwrap();
+        let vault = temp.path().join("vault");
+        let (_repo, _store, source_id, page_id) = seed_repo(&temp.path().join("wiki.db"));
+        let mut audit = audit_json(&vault, &page_id, &source_id);
+        audit["vault"]["stale_notion_links"] = serde_json::json!([{
+            "page_id": page_id,
+            "page_title": "Summary A",
+            "raw_target": "https://www.notion.so/Example-abcdef1234567890abcdef1234567890?pvs=21",
+            "decoded_target": "https://www.notion.so/Example-abcdef1234567890abcdef1234567890?pvs=21",
+            "reason": "notion_url",
+            "action": "candidate_only"
+        }]);
+        audit["candidates"]["safe_cleanup_candidates"] = serde_json::json!([]);
+        audit["candidates"]["source_summary_exact_matches"] = serde_json::json!([]);
+        let audit_path = vault.join("reports/consistency-audit-20260426T000000Z.json");
+        write_file(&audit_path, &serde_json::to_string_pretty(&audit).unwrap());
+
+        let (plan, _files) =
+            run_consistency_plan(&audit_path, None, OffsetDateTime::now_utc()).unwrap();
+
+        assert_eq!(plan.actions.len(), 1);
+        assert_eq!(plan.actions[0].kind, ConsistencyActionKind::Deferred);
+        assert_eq!(plan.actions[0].operation, "record_legacy_notion_url");
+        assert!(!plan.actions[0].executable);
     }
 
     #[test]

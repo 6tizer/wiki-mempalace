@@ -78,4 +78,4 @@
 - What caused rework: 初版 audit 把所有 DB page 都要求进 Mempalace，误报 45 个 index/lint-report 等非 eligible page；应直接复用 sink eligibility 口径。
 - Spec changes needed: Mempalace audit 必须写清 “source drawers out of scope” 和 “只有 summary/concept/entity/synthesis/qa page 进入 palace”。
 - Tests or reviews that caught issues: 生产复查 audit 抓到 45 个误报；新增 ineligible page 不要求 palace drawer 的回归测试。
-- Next plan note: 剩余 12578 个旧 Notion link 只报告为 needs_human；要自动修，需另开规则/LLM 目标解析模块。
+- Next plan note: 旧 Notion URL 只应作为 report-only 来源脚印，不应标成 needs_human；真正需要人工判断的是旧导出文件名或无法证明目标的局部链接。
