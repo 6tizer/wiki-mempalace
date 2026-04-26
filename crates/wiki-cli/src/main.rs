@@ -384,6 +384,30 @@ enum Cmd {
         #[command(subcommand)]
         cmd: AutomationCmd,
     },
+    /// Incrementally sync Notion databases into wiki.db.
+    NotionSync {
+        /// Which DB to sync: x_bookmark | wechat | all
+        #[arg(long, default_value = "all")]
+        db_id: NotionDbTarget,
+        /// Override incremental cursor start time (ISO 8601 UTC)
+        #[arg(long)]
+        since: Option<String>,
+        /// Max pages to fetch per DB
+        #[arg(long)]
+        limit: Option<usize>,
+        /// Print what would be synced without writing to DB
+        #[arg(long, default_value_t = false)]
+        dry_run: bool,
+        /// Milliseconds between Notion API requests (minimum 100)
+        #[arg(long, default_value_t = 350)]
+        request_delay_ms: u64,
+        /// Write back to Notion after sync (marks 已编译到Wiki checkbox)
+        #[arg(long, default_value_t = false)]
+        writeback_notion: bool,
+        /// Print per-page processing details
+        #[arg(long, default_value_t = false)]
+        verbose: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -453,6 +477,16 @@ enum AutomationCmd {
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, ValueEnum)]
+enum NotionDbTarget {
+    #[value(name = "x_bookmark")]
+    XBookmark,
+    #[value(name = "wechat")]
+    Wechat,
+    #[value(name = "all")]
+    All,
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq, ValueEnum)]
 enum AutomationJob {
     #[value(name = "batch-ingest")]
     BatchIngest,
@@ -464,6 +498,8 @@ enum AutomationJob {
     ConsumeToMempalace,
     #[value(name = "llm-smoke")]
     LlmSmoke,
+    #[value(name = "notion-sync")]
+    NotionSync,
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -504,6 +540,12 @@ const AUTOMATION_JOB_SPECS: &[AutomationJobSpec] = &[
         in_daily: false,
         requires_network: true,
         description: "Check the configured LLM endpoint with a minimal chat completion.",
+    },
+    AutomationJobSpec {
+        job: AutomationJob::NotionSync,
+        in_daily: true,
+        requires_network: true,
+        description: "Incrementally sync Notion databases (X书签 and 微信文章) into wiki.db.",
     },
 ];
 
@@ -589,6 +631,7 @@ fn automation_job_name(job: AutomationJob) -> &'static str {
         AutomationJob::Maintenance => "maintenance",
         AutomationJob::ConsumeToMempalace => "consume-to-mempalace",
         AutomationJob::LlmSmoke => "llm-smoke",
+        AutomationJob::NotionSync => "notion-sync",
     }
 }
 
@@ -2722,6 +2765,28 @@ fn run_with_engine(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         }
         // SchemaValidate 已在 main() 中短路，此处不可达
         Cmd::SchemaValidate { .. } => unreachable!(),
+        Cmd::NotionSync {
+            db_id,
+            since,
+            limit,
+            dry_run,
+            request_delay_ms,
+            writeback_notion,
+            verbose,
+        } => {
+            run_notion_sync_cmd(
+                &mut eng,
+                &repo,
+                &viewer,
+                db_id,
+                since.as_deref(),
+                limit,
+                dry_run,
+                request_delay_ms,
+                writeback_notion,
+                verbose,
+            )?;
+        }
     }
     Ok(())
 }
@@ -4242,6 +4307,9 @@ fn dispatch_automation_job(
             println!("{out}");
             Ok(())
         }
+        AutomationJob::NotionSync => {
+            run_notion_sync_job(eng, repo, viewer, false, 350, false)
+        }
     }
 }
 
@@ -4277,6 +4345,94 @@ fn run_single_automation_job<W: Write>(
         format_automation_record(&latest)
     )?;
     Ok(())
+}
+
+/// Notion DB configurations: (slug, Notion DB UUID)
+const NOTION_DB_X_BOOKMARK: (&str, &str) = (
+    "x_bookmark",
+    "0d305291-2a5d-426c-8db8-903ed5bb7ddb",
+);
+const NOTION_DB_WECHAT: (&str, &str) = (
+    "wechat",
+    "16470107-4b68-810a-bc81-f90795cc29ad",
+);
+
+fn run_notion_sync_cmd(
+    eng: &mut LlmWikiEngine<NoopWikiHook>,
+    repo: &SqliteRepository,
+    viewer: &Scope,
+    db_id: NotionDbTarget,
+    since: Option<&str>,
+    limit: Option<usize>,
+    dry_run: bool,
+    request_delay_ms: u64,
+    writeback_notion: bool,
+    verbose: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use crate::notion_client::NotionApiClient;
+    use crate::notion_sync::NotionSyncRunner;
+    use crate::notion_writeback::{HttpNotionWriteBack, NoopWriteBack};
+    use time::format_description::well_known::Rfc3339;
+
+    let since_time = since
+        .map(|s| OffsetDateTime::parse(s, &Rfc3339))
+        .transpose()
+        .map_err(|e| format!("invalid --since value: {e}"))?;
+
+    let mut client = NotionApiClient::from_env()?.with_request_delay_ms(request_delay_ms);
+
+    let writeback: Box<dyn crate::notion_writeback::NotionWriteBackClient> = if writeback_notion {
+        let token = std::env::var("NOTION_TOKEN").unwrap_or_default();
+        Box::new(HttpNotionWriteBack::new(token))
+    } else {
+        Box::new(NoopWriteBack)
+    };
+
+    let dbs: Vec<(&str, &str)> = match db_id {
+        NotionDbTarget::XBookmark => vec![NOTION_DB_X_BOOKMARK],
+        NotionDbTarget::Wechat => vec![NOTION_DB_WECHAT],
+        NotionDbTarget::All => vec![NOTION_DB_X_BOOKMARK, NOTION_DB_WECHAT],
+    };
+
+    for (slug, notion_id) in dbs {
+        let mut runner = NotionSyncRunner::new(&mut client, repo, eng, viewer.clone(), verbose);
+        let result =
+            runner.run_sync(slug, notion_id, since_time, limit, dry_run, writeback.as_ref())?;
+        println!(
+            "notion-sync db={} fetched={} new={} skipped={} errors={} duration={:.1}s{}",
+            result.db_id,
+            result.fetched,
+            result.new,
+            result.skipped,
+            result.errors,
+            result.duration_secs,
+            if dry_run { " [dry-run]" } else { "" }
+        );
+    }
+
+    Ok(())
+}
+
+fn run_notion_sync_job(
+    eng: &mut LlmWikiEngine<NoopWikiHook>,
+    repo: &SqliteRepository,
+    viewer: &Scope,
+    dry_run: bool,
+    request_delay_ms: u64,
+    verbose: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    run_notion_sync_cmd(
+        eng,
+        repo,
+        viewer,
+        NotionDbTarget::All,
+        None,
+        None,
+        dry_run,
+        request_delay_ms,
+        false,
+        verbose,
+    )
 }
 
 fn run_daily_automation(

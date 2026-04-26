@@ -33,6 +33,7 @@ pub enum NotionClientError {
 pub struct NotionPage {
     /// Notion page UUID (hyphenated, e.g. "abc-123-...")
     pub id: String,
+    #[allow(dead_code)]
     pub last_edited_time: OffsetDateTime,
     pub title: String,
     pub url: Option<String>,
@@ -66,6 +67,12 @@ impl NotionApiClient {
             last_request_at: None,
             base_url: NOTION_API_BASE.to_string(),
         })
+    }
+
+    /// Override the request delay (useful when the CLI passes `--request-delay-ms`).
+    pub fn with_request_delay_ms(mut self, ms: u64) -> Self {
+        self.request_delay = Duration::from_millis(ms.max(MIN_REQUEST_DELAY_MS));
+        self
     }
 
     #[cfg(test)]

@@ -7,7 +7,7 @@ use crate::notion_client::{NotionApiClient, NotionClientError, NotionPage};
 use crate::notion_writeback::NotionWriteBackClient;
 use std::time::Instant;
 use time::OffsetDateTime;
-use wiki_core::{DomainSchema, Scope};
+use wiki_core::Scope;
 use wiki_kernel::{EngineError, LlmWikiEngine, NoopWikiHook};
 use wiki_storage::{SqliteRepository, WikiRepository};
 
@@ -198,6 +198,7 @@ mod tests {
     use crate::notion_writeback::NoopWriteBack;
     use tempfile::tempdir;
     use time::OffsetDateTime;
+    use wiki_core::DomainSchema;
     use wiki_storage::SqliteRepository;
 
     fn private_scope() -> Scope {
