@@ -3,7 +3,7 @@
 **批次**: notion-incremental-sync  
 **状态**: 已完成  
 **关联 roadmap**: `Notion Incremental Sync ✅ 已合入`  
-**背景**: architecture.md §0 "C. 未来: Notion API 增量同步"
+**背景**: architecture.md §0 "C. Notion API 增量同步"
 
 ---
 

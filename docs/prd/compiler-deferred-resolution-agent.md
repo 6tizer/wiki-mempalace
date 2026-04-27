@@ -1,6 +1,6 @@
 # PRD: Compiler Deferred Resolution Agent
 
-**Status**: implemented on branch `codex/compiler-deferred-resolution-agent`
+**Status**: implemented, merged in PR #54, and production apply smoke completed
 **Related**: `Production Wiki Compiler`, `Compiler Canonicalization v2`
 
 ## Goal
@@ -64,3 +64,15 @@ cargo run -p wiki-cli -- \
 - Low-confidence cases remain machine-deferred.
 - Noise is ignored with report evidence.
 - Apply run follows DB -> Vault -> Mempalace -> audit.
+
+## Production Closeout
+
+2026-04-27 production checks confirmed the agent is operational:
+
+- real report apply completed with DB -> Vault -> Mempalace -> lint/audit order;
+- follow-up dry-run had no additional aliases/creates/changes to apply;
+- remaining low-confidence items stayed as machine-deferred decisions;
+- no new broken wikilinks or duplicate concept/entity groups were introduced;
+- `wiki.db` and `palace.db` integrity checks returned `ok`;
+- `consistency-audit` reported `vault_empty_unmanaged=0` and
+  `palace_missing_page_drawers=0`.

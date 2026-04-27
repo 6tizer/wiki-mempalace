@@ -31,28 +31,48 @@
 | Notion Archived Source Retirement | 💤 未开始 | 待 PRD/spec；Notion 已归档 source 应同步退役到本地 DB/Vault。已知样本：`sources/wechat/微信公众号文章链接汇总.md`，Notion `is_archived=true`，本地仍在 `wiki.db.sources` 和 Vault 中 |
 | Notion Incremental Sync | ✅ 已合入 | PR #36 / PR #38 / PR #42；`wiki-cli notion-sync`、automation `notion-sync` daily job 已实现；增量游标 `notion_sync_cursors`/`notion_page_index`；速率限制 350ms + 429 重试；`--refresh-existing` 刷新已有 source body/tags；`--writeback-notion` 接口完整默认关闭；PRD: `docs/prd/notion-incremental-sync.md` |
 | Notion Source Vault Projection | ✅ 已合入并已跑生产 apply | PR #42 已 merge；`notion-sync` 已支持 Notion block 正文抓取、`--refresh-existing`、Obsidian-safe tag projection 和 automation 默认刷新；生产 refresh 覆盖 X 782 / WeChat 485 个窗口内页面，刷新 161 个已有 source，最终 `notion-source-vault-sync --dry-run --refresh-existing --repair-tags` 为 planned=0 / tags_rewritten=0；176 个 DB-backed Notion source 已投影到 `sources/x` / `sources/wechat` |
-| Production Wiki Compiler | ✅ 已合入，tiny sample 已跑 | PR #44 已 merge；本地 compiler contract 已实现：raw source -> summary + concept/entity pages -> Vault projection -> outbox；PR #46 安全修复验证了 X + WeChat tiny sample，也暴露出 broad scale 前必须补 canonical resolver |
+| Production Wiki Compiler | ✅ 已合入，scale-up 已开始 | PR #44/#46/#47/#54 已 merge；compiler 已支持 raw source -> resolver -> summary + concept/entity pages -> Vault projection -> Mempalace -> lint/audit；2026-04-27 已跑两轮真实 10-source 批次，均 success=10 / failed=0；剩余未编译 source 132 条 |
 | Compiler Canonicalization v2 | ✅ 已合入 | PR #47 已 merge；在 compiler draft 和 DB 写入之间插入 pre-write resolver；新增 bounded candidate retrieval、`wiki_canonical_alias` persisted alias/canonical mapping、small LLM fallback、machine-owned `deferred_resolutions` JSON；低置信度/模糊项不污染 active graph，交给后续 resolver/lint/fixer agent lane |
-| Compiler Deferred Resolution Agent | 🚧 开发中 | PRD/spec 已补；`compiler-resolve-deferred` 已实现为机器-only 后置治理：消费 `deferred_resolutions`，判断 alias / safe create / ignore / keep-deferred；apply 顺序为 DB -> Vault -> Mempalace -> lint/audit |
+| Compiler Deferred Resolution Agent | ✅ 已合入并已跑生产 apply | PR #54 已 merge；`compiler-resolve-deferred` 机器-only 后置治理已实现并用于真实 production reports；apply 顺序为 DB -> Vault -> Mempalace -> lint/audit；最新复查 deferred dry-run 为 aliases=0 / creates=0 / changed=0，低置信 `keep_deferred` 保留不污染 active graph |
 | Scheduled Vault Reports | 💤 未开始 | 待 PRD；把 `vault-audit`、`metrics`、`dashboard`、`automation health`、`suggest` 等报告接入定时生成和保留策略 |
 | C16A Atomic snapshot + outbox | ✅ 已合入 | PR #25 已 merge；新增 `save_snapshot_and_append_outbox` 单事务持久化路径；CLI/MCP/backfill 写路径已切到原子提交 |
 | C16B Embedding ANN index | 💤 未开始 | 仍保留在 [embedding-ann-index](specs/embedding-ann-index/)；可单独规划，不和存储一致性混在一个 PR |
 
 ## 当前下一阶段
 
-1. Compiler Deferred Resolution Agent：新增 PRD/spec；消费 `deferred_resolutions` JSON，不把模糊概念交给人工，也不直接写 active graph；机器判定 alias / new canonical / ignore 后按 DB -> Vault -> Mempalace -> audit 应用。
-2. Production Wiki Compiler scale-up：deferred resolver/fixer agent 通过 X/WeChat regression sample 后，再决定 5 篇、单 origin lane，或定时小批量。
-3. Notion Archived Source Retirement：新增 Notion archived 状态同步治理，识别已归档 source，生成退役 plan，并通过 DB 原点更新 + Vault 投影清理处理，不手工删除单个 Markdown。
-4. Scheduled Vault Reports：新增定时报告流水线 PRD，明确哪些报告由 cron/automation 生成、生成频率、输出目录、latest 指针和历史保留/清理策略。
-5. CR-01 延后项（按优先级）：
-   - MCP Vault Sync — 写操作后自动 vault projection；需独立 PRD。
-   - Outbox Consumer Cursors — at-exactly-once 消费语义；需独立 outbox-v2 PRD。
-   - Embedding Tx Atomicity — embedding 纳入 snapshot 事务；需存储层改造 PRD。
-   - Benchmark Reproducibility — random 模式确定性种子；需独立配置 PRD。
-6. C16B Embedding ANN index 如需推进，单独从 PRD/spec 开新分支。
-7. 观察 J13 scheduled artifacts：先积累至少 7 份 nightly report 和 1 份 weekly full report，确认 artifact 稳定和 full run 真实耗时。
-8. J14 Semantic Fusion Benchmark：只有在 J13 报告显示同义表达/词面不匹配是主要错因，且运行预算明确后，再评估 `wiki-cli --vectors --palace-db` 语义融合 lane。
-9. M12 后续 operator/executor、dashboard latest suggestion report、QueryServed scope/hash schema 改进单独规划，不混入首版 suggest。
+### P0：Production Compiler scale-up（先做，非新功能）
+
+继续用小批量真实编译剩余 source。每批后固定跑 deferred resolver/fixer、Vault
+projection、Mempalace consume、lint/audit、重复 concept/entity 检查和 Obsidian
+抽查。不要在这一阶段混入新功能开发；scale-up 的目标是暴露真实质量问题。
+
+### P1：Source 生命周期治理（同一批规划，分 PR 实现）
+
+1. Notion Archived Source Retirement：同步 Notion archived 状态，生成退役 plan，通过 DB 原点更新 + Vault 投影清理处理，不手工删除 Markdown。
+2. MCP Vault Sync：MCP 写操作后自动触发 Vault projection；和 archived retirement 同属 DB -> Vault 生命周期治理，但建议独立 PR。
+
+### P2：报告自动化（低风险独立批次）
+
+Scheduled Vault Reports：把 `vault-audit`、`metrics`、`dashboard`、
+`automation health`、`suggest` 接入定时生成、latest 指针、输出目录和历史保留/清理策略。
+`dashboard latest suggestion report` 可放进同一批次。
+
+### P3：Outbox 消费语义（独立批次）
+
+Outbox Consumer Cursors：新增 consumer-scoped cursor / at-exactly-once 语义，
+减少重复派发。该项触碰 outbox 协议和 Mempalace 消费边界，不和 reporting 或 compiler
+scale-up 混做。
+
+### P4：Embedding / Retrieval 线（同一方向，按阶段实现）
+
+1. Embedding Tx Atomicity：先把 embedding 写入纳入 snapshot/outbox 事务。
+2. C16B Embedding ANN index：再做 bounded-work vector search。
+3. J14 Semantic Fusion Benchmark：等 J13 报告证明语义不匹配是主因后再启动。
+4. Benchmark Reproducibility：`--mode random` 加 `--seed`，可作为 P4 前置小 PR 或同批第一步。
+
+### P5：M12 executor（最后）
+
+M12 operator/executor 属于自动行动层。等 compiler、source 生命周期、outbox 和报告自动化稳定后再规划，避免自动放大错误。
 
 执行计划见 [automation-issue-batch-3.md](automation-issue-batch-3.md)。开发流程见
 [dev-workflow.md](dev-workflow.md)，batch-3 PRD 见 [prd/batch-3.md](prd/batch-3.md)。

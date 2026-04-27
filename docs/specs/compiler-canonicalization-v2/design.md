@@ -170,9 +170,11 @@ constant in this PR.
 - Exact alias mapping hit wins.
 - Exact single candidate in preferred type wins.
 - Exact single candidate in concept/entity cross-type wins.
-- Multiple exact or fuzzy candidates require LLM fallback or review.
+- Multiple exact or fuzzy candidates require bounded LLM fallback or
+  machine-deferred output.
 - No clear candidate creates a new page with normalized output title.
-- Low-confidence LLM decision becomes review warning and does not create a page.
+- Low-confidence LLM decision becomes machine-owned deferred output and does not
+  create a page.
 - Source references remain deduped by summary title/source URL.
 
 ## Post-Write Lint/Fixer Contract
@@ -204,7 +206,7 @@ truth.
   - alias key persistence lookup,
   - candidate scoring and top-K bound,
   - concept/entity cross-type fallback,
-  - low-confidence unresolved stop,
+  - low-confidence machine-deferred output,
   - LLM fallback JSON parsing,
   - source reference dedup.
 - Integration:

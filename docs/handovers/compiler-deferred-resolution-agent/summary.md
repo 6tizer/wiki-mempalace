@@ -11,6 +11,9 @@
   -> lint/audit report`.
 - Implemented `compiler-resolve-deferred`.
 - Compiler run JSON now emits deferred candidate `page_id`.
+- PR #54 merged.
+- Production apply smoke completed on real compiler reports, with DB/Vault/Palace
+  post-checks clean.
 
 ## Planned CLI
 
@@ -66,6 +69,11 @@ Use global:
 - PRD/spec/branch/plan/subagent assignment: done.
 - Implementation/tests/temp smoke: done.
 - Focused/integration review: done.
+- PR/CI/merge: done in PR #54.
+- Production closeout: done. Latest verified state had no new broken wikilinks,
+  no new duplicate concept/entity groups, `wiki.db` and `palace.db` integrity
+  `ok`, and `consistency-audit` reported `vault_empty_unmanaged=0` /
+  `palace_missing_page_drawers=0`.
 
 ## Verification
 
@@ -76,3 +84,13 @@ Use global:
 - `cargo clippy --workspace --all-targets -- -D warnings` - passed.
 - `git diff --check` - passed.
 - Temp X + WeChat apply smoke on `/tmp/wiki-deferred-smoke.*` - passed; DB -> projection -> Mempalace -> lint/audit completed; no `page.broken_wikilink`.
+- Production apply report:
+  `/Users/mac-mini/Documents/wiki/reports/compiler-deferred-resolution-2026-04-27T15-41-13-182717Z.json`
+  - `aliases_applied=1`
+  - `pages_created=19`
+  - `mempalace unresolved=0`
+- Production follow-up dry-run report:
+  `/Users/mac-mini/Documents/wiki/reports/compiler-deferred-resolution-2026-04-27T15-42-59-700555Z.json`
+  - no additional aliases/creates/changes applied;
+  - remaining 4 `keep_deferred` items stayed low-confidence and did not pollute
+    the active graph.

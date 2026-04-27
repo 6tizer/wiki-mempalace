@@ -3,7 +3,7 @@
 ## Goal
 
 Implement the local Wiki Compiler so it matches the user's Notion Wiki Compiler
-Instructions, then prove it with a tiny production sample.
+Instructions, then operate it through controlled production batches.
 
 ## Plain-Language Summary
 
@@ -48,10 +48,12 @@ Instructions, then prove it with a tiny production sample.
 - Ambiguous canonical decisions may use a small LLM call, but that call must
   compare the draft item against retrieved candidates only. It must not re-read
   or recompile the full article.
-- Confirmed alias/canonical decisions must be stored as data in a future
-  mapping layer, not only in code and not inside the main compiler prompt.
-- Low-confidence canonical decisions must stop that source or record a review
-  finding; they must not silently create duplicate pages.
+- Confirmed alias/canonical decisions must be stored as data in
+  `wiki_canonical_alias`, not only in code and not inside the main compiler
+  prompt.
+- Low-confidence canonical decisions must become machine-owned
+  `deferred_resolutions`; they must not silently create duplicate pages or
+  enter a human/manual lane.
 - Existing concept/entity pages must be updated incrementally, not rewritten from
   scratch.
 - References must be structured for Obsidian and system audit:
@@ -67,7 +69,7 @@ Instructions, then prove it with a tiny production sample.
   separate wiki tags.
 - After a successful local compile, the source Markdown must be marked
   `compiled_to_wiki: true`.
-- Notion writeback stays disabled for the first production sample.
+- Notion writeback stays disabled unless explicitly enabled later.
 - `batch-ingest` must remain the automation-compatible entrypoint, but its
   internals must use the new compiler contract.
 - The first production run must support a tiny sample of one X source and one
@@ -83,7 +85,10 @@ Instructions, then prove it with a tiny production sample.
 - No broad schema redesign.
 - No direct `palace.db` writes.
 - No manual editing of generated Markdown as the fix path.
-- No unattended hourly automation until the tiny sample passes.
+- No unattended hourly automation until repeated small production batches pass
+  audit and Vault spot-checks.
+- No unattended broad compile until repeated small batches pass post-run audit
+  and Vault spot-checks.
 - No direct Vault or `palace.db` patching from Lint/Fixer.
 - No whole-wiki context dump into the compiler prompt.
 
@@ -104,6 +109,8 @@ Instructions, then prove it with a tiny production sample.
 ## Acceptance Criteria
 
 - A tiny sample with one X source and one WeChat source compiles successfully.
+- Controlled small production batches compile successfully before any broad
+  unattended run.
 - Each compiled source has one summary page.
 - Each non-trivial sample produces visible concept/entity pages or updates
   existing ones with deduplicated source references.
@@ -112,6 +119,8 @@ Instructions, then prove it with a tiny production sample.
 - `query` and `query/explain --palace-db` can surface the compiled content.
 - A run report records backup path, sample identity, commands, counts, and known
   issues.
+- For scale-up batches, deferred resolver apply, lint/audit, duplicate checks,
+  and Mempalace consume all complete before the next batch starts.
 
 ## Checklist
 
@@ -124,7 +133,7 @@ Instructions, then prove it with a tiny production sample.
 
 - User approval needed:
   - spec approval before code,
-  - production tiny sample apply,
+  - production apply beyond controlled small batches,
   - scale decision after Obsidian review.
 - Agent can automate:
   - implementation,

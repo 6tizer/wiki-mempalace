@@ -13,7 +13,8 @@ projection.
 - Resolver checks each draft concept/entity against existing `wiki.db` pages.
 - Clear match updates existing page. Clear miss creates one new page.
 - Ambiguous match uses a small LLM pairwise/candidate-set judgment.
-- Unsafe match stops the item or source instead of creating a duplicate.
+- Unsafe match emits a machine-owned deferred item instead of creating a
+  duplicate.
 
 ## Functional Requirements
 
@@ -39,7 +40,7 @@ projection.
   4. exact candidate match across concept/entity when clearly canonical,
   5. conservative fuzzy/content candidate ranking,
   6. small LLM fallback for bounded ambiguous candidates,
-  7. unresolved stop/review warning.
+  7. unresolved machine-deferred output.
 - Concept/entity cross-type fallback is allowed only for `concept` <-> `entity`;
   no other page type may be used as canonical target.
 - Low-confidence unresolved candidates must not create duplicate pages.

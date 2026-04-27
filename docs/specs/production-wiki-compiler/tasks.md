@@ -36,29 +36,32 @@
 
 ## Follow-Up: Compiler Canonicalization v2
 
-This is the next compiler work before broad production scale-up. The tiny sample
-showed that prompt-only naming is not enough; the same page can come back as
-`MCP connectors`, `MCP连接器`, or `MCP 协议`. The fix should be a resolver layer,
-not a growing alias list in code or prompt.
+This follow-up is complete. The tiny sample showed that prompt-only naming is
+not enough; the same page can come back as `MCP connectors`, `MCP连接器`, or
+`MCP 协议`. PR #47 added the resolver layer, and PR #54 added the deferred
+resolver/fixer lane for production reports.
 
 | Task | Grade | Owner | Files | Depends on | Status |
 | --- | --- | --- | --- | --- | --- |
 | T8 Resolver PRD/spec refresh | Script | main agent | `docs/prd/production-wiki-compiler.md`, `docs/specs/production-wiki-compiler/*`, `docs/references/notion-wiki-agent-contract.md` | T7 | Done |
-| T9 Candidate retrieval design | Agent | worker | `crates/wiki-cli/src/wiki_compiler.rs`, storage/search helpers, tests | T8 | Planned |
-| T10 Alias/canonical mapping storage | Agent | worker | `crates/wiki-storage/src/lib.rs`, migration/tests, compiler integration | T8/T9 | Planned |
-| T11 Small LLM fallback | Agent | worker | `crates/wiki-cli/src/wiki_compiler.rs`, LLM prompt/tests | T9/T10 | Planned |
-| T12 Lint/Fixer propagation contract | Agent | worker | `crates/wiki-cli/src/main.rs`, fixer/consistency docs/tests | T8 | Planned |
-| T13 Production regression sample set | Skill | main agent | X/WeChat sample commands, run report, handoff | T9-T12 | Planned |
+| T9 Candidate retrieval design | Agent | worker | `crates/wiki-cli/src/wiki_compiler.rs`, storage/search helpers, tests | T8 | Done in PR #47 |
+| T10 Alias/canonical mapping storage | Agent | worker | `crates/wiki-storage/src/lib.rs`, migration/tests, compiler integration | T8/T9 | Done in PR #47 |
+| T11 Small LLM fallback | Agent | worker | `crates/wiki-cli/src/wiki_compiler.rs`, LLM prompt/tests | T9/T10 | Done in PR #47 |
+| T12 Lint/Fixer propagation contract | Agent | worker | `crates/wiki-cli/src/main.rs`, fixer/consistency docs/tests | T8 | Done in PR #54 |
+| T13 Production regression sample set | Skill | main agent | X/WeChat sample commands, run report, handoff | T9-T12 | Done; scale-up started |
 
 ## Implementation Notes
 
 - Prefer extracting `WikiCompilerRunner` into a new `wiki_compiler.rs` module
   instead of growing `main.rs`.
 - Keep `batch-ingest` as the public job/automation entrypoint.
-- Do not run production apply until implementation tests pass and the user
-  approves the tiny sample.
-- Do not mark Notion `已编译到Wiki` during the first sample.
-- Do not scale beyond tiny samples until canonicalization v2 exists.
+- Do not run production apply beyond controlled small batches until post-run
+  checks and user-facing Vault spot-checks pass.
+- Do not mark Notion `已编译到Wiki` unless Notion writeback is explicitly
+  enabled.
+- Do not scale beyond small backed-up batches until repeated batches show no new
+  duplicate groups, no new broken wikilinks, and acceptable Vault content
+  quality.
 - Do not solve dedup by adding every observed alias to the compiler prompt.
 
 ## Review Notes
@@ -79,7 +82,10 @@ not a growing alias list in code or prompt.
 - PR #44 merged on 2026-04-27. Production apply was intentionally not run in
   the implementation PR.
 - PR #46 production safety follow-up found and fixed immediate sample issues,
-  but it also confirmed the need for canonicalization v2 before broad scale-up.
+  and confirmed the need for canonicalization v2 before broad scale-up.
+- PR #47 implemented canonicalization v2.
+- PR #54 implemented deferred resolver/fixer hardening and production apply
+  closeout.
 
 ## Stop Conditions
 
@@ -88,7 +94,7 @@ not a growing alias list in code or prompt.
 - Stop after 3 failed attempts at the same compile/test error and summarize
   evidence.
 - Stop before production apply if backup path is not verified.
-- Stop before scale-up if Obsidian human check fails.
+- Stop before the next production batch if Obsidian spot-check fails.
 - Stop if the resolver needs whole-wiki prompt context to decide one page.
 - Stop if the proposed fix grows a manual alias list instead of adding
   candidate retrieval or persisted canonical mapping.
@@ -99,6 +105,6 @@ not a growing alias list in code or prompt.
 - `cargo clippy --workspace --all-targets -- -D warnings`
 - `git diff --check`
 - Production dry-run on `/Users/mac-mini/Documents/wiki`
-- Production tiny sample apply only after user approval
+- Production broad apply only after user approval
 - Mempalace consume smoke
 - `query` and `query/explain --palace-db` smoke

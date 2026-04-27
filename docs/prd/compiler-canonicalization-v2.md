@@ -122,11 +122,11 @@ concept/entity against bounded existing DB candidates before any page write.
 - Tests require touching real production vault.
 - Fixer proposal edits generated Markdown or `palace.db` directly.
 
-## Open Questions
+## Resolved Decisions
 
-1. Alias mapping shape: prefer DB table plus snapshot exposure, or DB table only
-   with compiler repository queries.
-2. LLM fallback apply policy: persist only deterministic/exact matches in this
-   PR, or also persist accepted LLM `same_page=true` decisions.
-3. Review-required behavior: fail the current source hard, or skip the item and
-   still write summary with warning.
+1. Alias mapping uses durable `wiki_canonical_alias` storage and compiler
+   repository queries.
+2. LLM fallback is used only for bounded ambiguous candidate decisions; durable
+   alias persistence is reserved for safe accepted decisions.
+3. Low-confidence items become machine-owned `deferred_resolutions`; they do not
+   fail the full source compile and do not create active graph pages.

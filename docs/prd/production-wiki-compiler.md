@@ -1,6 +1,6 @@
 # PRD: Production Wiki Compiler
 
-**Status**: implementation merged in PR #44; PR #46 production tiny sample and safety follow-up in progress; canonicalization v2 planned before scale-up
+**Status**: implementation merged; canonicalization v2 and deferred resolver merged; production scale-up started
 **Related**: `Notion Incremental Sync`, `Notion Source Vault Projection`, `Vault Backfill + Palace Init`, `DB/Vault/Palace Consistency Governance`
 
 ## Goal
@@ -18,11 +18,12 @@ human-readable reports.
 - `/Users/mac-mini/Documents/wiki/.wiki/palace.db` is the Mempalace projection layer.
 - 176 DB-backed Notion sources exist and are visible under `sources/x` and
   `sources/wechat`.
-- Most DB-backed Notion sources are still raw sources. PR #46 used a tiny
-  production sample to test the compiler path, but broad compile has not begun.
+- Most DB-backed Notion sources are still raw sources. Production scale-up has
+  started with controlled 10-source batches; the latest dry-run found 132
+  uncompiled sources remaining.
 - Mempalace has page drawers from historical backfill. PR #46 exercised the
-  source compilation path on tiny samples; broad production scale-up remains
-  blocked on canonicalization v2.
+  source compilation path on tiny samples; PR #47 added canonicalization v2 and
+  PR #54 added the deferred resolver/fixer lane needed for controlled scale-up.
 
 ## Target Business Flow
 
@@ -42,8 +43,7 @@ For each real article, the compiler should normally produce:
   - append a deduplicated source reference back to the summary
 - Source writeback:
   - after a successful compile, mark the original source as compiled
-  - Notion writeback remains disabled for the first production sample unless
-    explicitly enabled later
+  - Notion writeback remains disabled unless explicitly enabled later
 
 The important distinction: claims/entities/relations stored only inside
 `wiki.db` are not enough for the target user workflow. Concepts and entities
@@ -51,16 +51,19 @@ must become visible wiki entries when they are meaningful.
 
 ## Problem
 
-The system has many pieces implemented and individually verified, but the actual
-compiler contract still does not match the user's Notion Wiki Compiler
-Instructions. The current local
-`batch-ingest` path mainly materializes a summary page and stores claims /
-entities / relations structurally; it does not fully match the Notion compiler
-workflow that creates or updates visible concept/entity pages with backlink
-references. This PRD upgrades the compiler contract first, then proves it with a
-tiny production run.
+The original gap was that `batch-ingest` behaved like a summary-first ingest
+path instead of the user's Notion Wiki Compiler workflow. PR #44 closed that
+contract gap by producing visible summary/concept/entity pages with backlinks.
+PR #47 and PR #54 then added the resolver/fixer safety layer needed to scale
+without creating duplicate concept/entity clutter.
+
+The remaining problem is operational, not architectural: continue compiling the
+remaining source queue in small batches while proving that each batch preserves
+DB/Vault/Palace consistency and Vault content quality.
 
 ## Follow-Up: Canonicalization v2
+
+Status: completed in PR #47 and hardened by PR #54.
 
 The first production samples showed that prompt-only dedup is not enough. The
 LLM can describe the same page with several names, such as `MCP connectors`,
@@ -68,7 +71,7 @@ LLM can describe the same page with several names, such as `MCP connectors`,
 scale; 100+ sources would turn the compiler into a hand-maintained glossary and
 would spend context before the article is even read.
 
-The next compiler step is a pre-write resolver:
+The current compiler path now includes a pre-write resolver:
 
 ```text
 raw source
@@ -90,6 +93,21 @@ entry. Confirmed aliases should become data, not an ever-growing prompt.
 Lint/Fixer still matter, but they are post-write governance. Their fixes must
 apply to `wiki.db` first, then trigger Vault projection, Mempalace sync, and a
 fresh audit. They must not patch Vault Markdown or `palace.db` directly.
+
+The current production operation loop is:
+
+```text
+batch-ingest small batch
+ -> compiler-resolve-deferred --allow-create --apply
+ -> Vault projection
+ -> consume-to-mempalace
+ -> lint/audit
+ -> duplicate/broken-link/content spot checks
+```
+
+Do not switch to unattended broad compilation until multiple small batches pass
+with no new duplicate groups, no new broken wikilinks, and acceptable Vault
+content quality.
 
 ## Scope
 
@@ -199,11 +217,11 @@ fresh audit. They must not patch Vault Markdown or `palace.db` directly.
 - Canonicalization needs a whole-wiki prompt or a large hardcoded alias list to
   pass a sample.
 
-## Open Questions
+## Resolved Decisions
 
-1. Sample selection: default to recent high-signal sources, unless the user
-   names specific files before the production run.
-2. Page type policy: create both concept and entity pages in the first compiler
-   implementation, because the Notion contract already distinguishes them.
-3. Writeback: mark the local source as compiled; keep Notion writeback disabled
-   for the first production sample.
+1. Sample selection started with controlled X/WeChat samples and then moved to
+   10-source batches.
+2. Page type policy creates both concept and entity pages because the Notion
+   contract distinguishes them.
+3. Local source writeback marks successful compiles as `compiled_to_wiki: true`;
+   Notion writeback remains disabled unless explicitly enabled.

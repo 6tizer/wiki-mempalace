@@ -132,8 +132,9 @@ Resolver order:
    opposite direction.
 5. Use a small LLM fallback only when deterministic checks return a small
    ambiguous candidate set.
-6. If still ambiguous, stop the source or record a review finding. Do not create
-   a duplicate just to keep the batch moving.
+6. If still ambiguous, record a machine-owned `deferred_resolutions` item and
+   omit that unresolved page from the active graph. Do not create a duplicate
+   just to keep the batch moving, and do not route it to a human/manual lane.
 
 The small LLM fallback receives only:
 
