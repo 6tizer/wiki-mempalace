@@ -133,3 +133,11 @@
 - Spec changes needed: 以后 compiler/fixer 相关 spec 要明确区分 `duplicate`、`ambiguous/deferred`、`noise/ignore` 三类；deferred 产物必须是 machine-readable artifact，不只是 Markdown warning。
 - Tests or reviews that caught issues: live temp-vault smoke 抓到 LLM 返回 `null` 导致 parser 失败；lint 抓到 unresolved `related_names` 被直接写成 wikilink 会产生 broken link；focused security/architecture review 抓到 alias poisoning 与 transaction split 风险。本地 `fmt`、`wiki_compiler`、`cargo test --workspace`、`clippy -D warnings`、`git diff --check` 和 GitHub quick CI 均通过。
 - Next plan note: 下一步先做 Compiler Deferred Resolution Agent，让 lint/fixer agent 消费 `deferred_resolutions` 并按 alias / new canonical / ignore 处理；通过 X/WeChat 临时样本后，才进入 production compiler 小批量 scale-up。
+
+## 2026-04-27 / Compiler Deferred Resolution Agent
+
+- Scope: 新增 `compiler-resolve-deferred`，消费 compiler run JSON 的 `deferred_resolutions`，机器判定 alias existing / safe create / ignore noise / keep deferred；无人工 lane。
+- What worked: 直接用 temp X + WeChat apply smoke 验证 DB -> Vault -> Mempalace -> lint/audit，省掉口头验收步骤。
+- What caused rework: 首版 safe create 的来源引用写成 `[[摘要：...]]`，临时库没有 summary 页，lint 抓到 broken wikilink；后置 resolver 创建页时不能假设 summary 已存在。
+- Spec changes needed: deferred candidate 必须带 `page_id`；旧 report 只能在 scope + title + entry_type 唯一时 fallback。
+- Tests or reviews that caught issues: 新增 `compiler_resolve_deferred` 单测覆盖 alias、ambiguous、noise、allow-create；temp X + WeChat smoke 确认 no `page.broken_wikilink`。
