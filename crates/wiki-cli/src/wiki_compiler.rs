@@ -1,8 +1,9 @@
 use crate::llm;
 use crate::{parse_scope, timestamp_slug};
+use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use time::format_description::well_known::Rfc3339;
+use time::{format_description::well_known::Rfc3339, OffsetDateTime};
 use wiki_core::llm_ingest_plan::LlmConceptDraft;
 use wiki_core::{
     normalize_and_validate_tag_groups, parse_memory_tier, Confidence, DomainSchema, Entity,
@@ -12,7 +13,7 @@ use wiki_core::{
 use wiki_kernel::{
     format_claim_doc_id, initial_status_for, write_projection_pages, LlmWikiEngine, NoopWikiHook,
 };
-use wiki_storage::SqliteRepository;
+use wiki_storage::{CanonicalAliasMapping, SqliteRepository};
 
 pub(crate) struct BatchIngestOptions<'a> {
     pub(crate) vault: &'a Path,
@@ -52,7 +53,9 @@ struct PageMaterializationStats {
     entities_created: usize,
     entities_updated: usize,
     written_page_ids: Vec<PageId>,
+    alias_mappings: Vec<CanonicalAliasMapping>,
     warnings: Vec<String>,
+    deferred_resolutions: Vec<DeferredResolutionItem>,
 }
 
 /// 单条 source 编译结果。
@@ -63,6 +66,67 @@ struct IngestOneStats {
     source_id: SourceId,
     written_page_ids: Vec<PageId>,
     page_stats: PageMaterializationStats,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct DeferredResolutionItem {
+    source_title: Option<String>,
+    source_url: Option<String>,
+    draft_title: String,
+    draft_entry_type: String,
+    reason: String,
+    candidate_count: usize,
+    candidates: Vec<DeferredResolutionCandidate>,
+    owner: &'static str,
+    next_step: &'static str,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct DeferredResolutionCandidate {
+    title: String,
+    entry_type: String,
+    score: i32,
+    match_reasons: Vec<String>,
+}
+
+impl DeferredResolutionItem {
+    fn from_candidates(
+        title: &str,
+        entry_type: &EntryType,
+        reason: &str,
+        candidates: &[CompilerCandidate],
+    ) -> Self {
+        Self {
+            source_title: None,
+            source_url: None,
+            draft_title: title.to_string(),
+            draft_entry_type: entry_type_label(entry_type).to_string(),
+            reason: reason.to_string(),
+            candidate_count: candidates.len(),
+            candidates: candidates
+                .iter()
+                .map(|candidate| DeferredResolutionCandidate {
+                    title: candidate.title.clone(),
+                    entry_type: entry_type_label(&candidate.entry_type).to_string(),
+                    score: candidate.score,
+                    match_reasons: candidate.match_reasons.clone(),
+                })
+                .collect(),
+            owner: "resolver-lint-fixer",
+            next_step: "machine_resolution",
+        }
+    }
+
+    fn with_source(&self, source: &SourceEntry) -> Self {
+        let mut item = self.clone();
+        item.source_title = Some(source.title.clone());
+        item.source_url = if source.url.trim().is_empty() {
+            None
+        } else {
+            Some(source.url.clone())
+        };
+        item
+    }
 }
 
 pub(crate) fn default_vault_path() -> PathBuf {
@@ -148,6 +212,8 @@ pub(crate) fn batch_ingest_cmd(
 
     let mut compiled_paths: Vec<(PathBuf, SourceId)> = Vec::new();
     let mut written_page_ids: HashSet<PageId> = HashSet::new();
+    let mut report_warnings = Vec::new();
+    let mut report_deferred_resolutions = Vec::new();
     let mut ok_count = 0usize;
     let mut err_count = 0usize;
 
@@ -171,6 +237,17 @@ pub(crate) fn batch_ingest_cmd(
                 );
                 for warning in &stats.page_stats.warnings {
                     eprintln!("  ! {warning}");
+                    report_warnings.push(format!("{}: {warning}", src.title));
+                }
+                for deferred in &stats.page_stats.deferred_resolutions {
+                    eprintln!(
+                        "  ? defer resolver item: {} {} ({}; candidates={})",
+                        deferred.draft_entry_type,
+                        deferred.draft_title,
+                        deferred.reason,
+                        deferred.candidate_count
+                    );
+                    report_deferred_resolutions.push(deferred.with_source(src));
                 }
                 compiled_paths.push((src.path.clone(), stats.source_id));
                 written_page_ids.extend(stats.written_page_ids);
@@ -197,7 +274,13 @@ pub(crate) fn batch_ingest_cmd(
         }
     }
     if ok_count > 0 {
-        write_run_report(opts.wiki_root.or(Some(opts.vault)), ok_count, err_count)?;
+        write_run_report(
+            opts.wiki_root.or(Some(opts.vault)),
+            ok_count,
+            err_count,
+            &report_warnings,
+            &report_deferred_resolutions,
+        )?;
         for (path, source_id) in compiled_paths {
             mark_source_compiled(&path, source_id)?;
         }
@@ -308,10 +391,27 @@ impl WikiCompilerRunner<'_> {
             }
         }
 
-        let page_stats =
-            materialize_compiler_pages(self.eng, &plan, &batch, &uri, &self.scope, self.schema);
-        self.eng
-            .save_to_repo_and_flush_outbox_with_policy(self.repo, 128, 3)?;
+        let alias_mappings =
+            load_compiler_alias_mappings(self.repo, &self.eng.store.pages, &self.scope)?;
+        let mut resolver = CompilerResolver::new(&self.eng.store.pages, &self.scope)
+            .with_mappings(alias_mappings)
+            .with_llm(self.cfg);
+        let page_stats = materialize_compiler_pages_with_resolver(
+            self.eng,
+            &plan,
+            &batch,
+            &uri,
+            &self.scope,
+            self.schema,
+            &mut resolver,
+        );
+        let snapshot = self.eng.store.to_snapshot(&self.eng.audits);
+        self.repo.save_snapshot_and_append_outbox_with_aliases(
+            &snapshot,
+            &self.eng.outbox,
+            &page_stats.alias_mappings,
+        )?;
+        self.eng.outbox.clear();
 
         Ok(IngestOneStats {
             claims: plan.claims.len(),
@@ -451,6 +551,7 @@ fn parse_source_id(raw: Option<&String>) -> Option<SourceId> {
         .map(SourceId)
 }
 
+#[cfg(test)]
 fn materialize_compiler_pages(
     eng: &mut LlmWikiEngine<NoopWikiHook>,
     plan: &LlmIngestPlanV1,
@@ -458,6 +559,19 @@ fn materialize_compiler_pages(
     uri: &str,
     scope: &Scope,
     schema: &DomainSchema,
+) -> PageMaterializationStats {
+    let mut resolver = CompilerResolver::new(&eng.store.pages, scope);
+    materialize_compiler_pages_with_resolver(eng, plan, batch, uri, scope, schema, &mut resolver)
+}
+
+fn materialize_compiler_pages_with_resolver(
+    eng: &mut LlmWikiEngine<NoopWikiHook>,
+    plan: &LlmIngestPlanV1,
+    batch: &BatchIngestContext,
+    uri: &str,
+    scope: &Scope,
+    schema: &DomainSchema,
+    resolver: &mut CompilerResolver<'_>,
 ) -> PageMaterializationStats {
     let mut stats = PageMaterializationStats::default();
     let summary_title = format!("摘要：{}", batch.source_title);
@@ -490,36 +604,79 @@ fn materialize_compiler_pages(
                 .push(format!("skip generic entity/concept: {name}"));
             continue;
         }
-        let (resolved, resolved_kind) =
-            resolve_compiler_page_with_fallback(&eng.store.pages, &EntryType::Concept, name, scope);
-        if let Some(pid) = resolved.page_id {
-            let mut updated_page = None;
-            if let Some(page) = eng.store.pages.get_mut(&pid) {
-                if append_source_reference(page, &source_ref) {
-                    updated_page = Some(page.clone());
+        let decision = resolver.resolve(&DraftResolverItem::concept(concept));
+        match decision {
+            ResolverDecision::ResolvedExisting(resolved) => {
+                if resolved.persist_alias {
+                    if let Some(mapping) = canonical_alias_mapping_for_resolution(
+                        name,
+                        &resolved,
+                        scope,
+                        "compiler-resolver",
+                    ) {
+                        stats.alias_mappings.push(mapping);
+                    }
+                }
+                let mut updated_page = None;
+                if let Some(page) = eng.store.pages.get_mut(&resolved.page_id) {
+                    if append_source_reference(page, &source_ref) {
+                        updated_page = Some(page.clone());
+                    }
+                    push_unique_link(&mut summary_links, &mut seen_summary_links, &page.title);
+                }
+                if let Some(page) = updated_page {
+                    let page_id = page.id;
+                    eng.write_page(page, "batch-ingest");
+                    stats.written_page_ids.push(page_id);
+                    match resolved.entry_type {
+                        EntryType::Concept => stats.concepts_updated += 1,
+                        EntryType::Entity => stats.entities_updated += 1,
+                        _ => {}
+                    }
+                }
+                continue;
+            }
+            ResolverDecision::DeferredResolution {
+                title,
+                entry_type,
+                candidates,
+                reason,
+            } => {
+                stats
+                    .deferred_resolutions
+                    .push(DeferredResolutionItem::from_candidates(
+                        &title,
+                        &entry_type,
+                        &reason,
+                        &candidates,
+                    ));
+                continue;
+            }
+            ResolverDecision::CreateNew {
+                title,
+                confidence,
+                reason,
+                ..
+            } => {
+                let _create_note = (&confidence, &reason);
+                let page = build_concept_page(concept, &title, &source_ref, scope, schema);
+                let page_id = page.id;
+                if let Some(mapping) = canonical_alias_mapping_for_new_page(
+                    name,
+                    &page,
+                    scope,
+                    "compiler-resolver: create-new",
+                ) {
+                    stats.alias_mappings.push(mapping);
                 }
                 push_unique_link(&mut summary_links, &mut seen_summary_links, &page.title);
-            }
-            if let Some(page) = updated_page {
-                let page_id = page.id;
+                resolver.register_page(&page);
                 eng.write_page(page, "batch-ingest");
                 stats.written_page_ids.push(page_id);
-                match resolved_kind {
-                    EntryType::Concept => stats.concepts_updated += 1,
-                    EntryType::Entity => stats.entities_updated += 1,
-                    _ => {}
-                }
+                stats.concepts_created += 1;
+                continue;
             }
-            continue;
         }
-
-        let title = resolved.canonical_title;
-        let page = build_concept_page(concept, &title, &source_ref, scope, schema);
-        let page_id = page.id;
-        push_unique_link(&mut summary_links, &mut seen_summary_links, &page.title);
-        eng.write_page(page, "batch-ingest");
-        stats.written_page_ids.push(page_id);
-        stats.concepts_created += 1;
     }
 
     for ed in &plan.entities {
@@ -529,40 +686,88 @@ fn materialize_compiler_pages(
                 .push(format!("skip generic entity/concept: {}", ed.label));
             continue;
         };
-        let label = ed.canonical_or_label();
-        let (resolved, resolved_kind) =
-            resolve_compiler_page_with_fallback(&eng.store.pages, &kind, label, scope);
-        if let Some(pid) = resolved.page_id {
-            let mut updated_page = None;
-            if let Some(page) = eng.store.pages.get_mut(&pid) {
-                if append_source_reference(page, &source_ref) {
-                    updated_page = Some(page.clone());
+        let decision = resolver.resolve(&DraftResolverItem::entity(ed, kind.clone()));
+        match decision {
+            ResolverDecision::ResolvedExisting(resolved) => {
+                if resolved.persist_alias {
+                    if let Some(mapping) = canonical_alias_mapping_for_resolution(
+                        ed.canonical_or_label(),
+                        &resolved,
+                        scope,
+                        "compiler-resolver",
+                    ) {
+                        stats.alias_mappings.push(mapping);
+                    }
+                }
+                let mut updated_page = None;
+                if let Some(page) = eng.store.pages.get_mut(&resolved.page_id) {
+                    if append_source_reference(page, &source_ref) {
+                        updated_page = Some(page.clone());
+                    }
+                    push_unique_link(&mut summary_links, &mut seen_summary_links, &page.title);
+                }
+                if let Some(page) = updated_page {
+                    let page_id = page.id;
+                    eng.write_page(page, "batch-ingest");
+                    stats.written_page_ids.push(page_id);
+                    match resolved.entry_type {
+                        EntryType::Concept => stats.concepts_updated += 1,
+                        EntryType::Entity => stats.entities_updated += 1,
+                        _ => {}
+                    }
+                }
+                continue;
+            }
+            ResolverDecision::DeferredResolution {
+                title,
+                entry_type,
+                candidates,
+                reason,
+            } => {
+                stats
+                    .deferred_resolutions
+                    .push(DeferredResolutionItem::from_candidates(
+                        &title,
+                        &entry_type,
+                        &reason,
+                        &candidates,
+                    ));
+                continue;
+            }
+            ResolverDecision::CreateNew {
+                title,
+                entry_type,
+                confidence,
+                reason,
+            } => {
+                let _create_note = (&confidence, &reason);
+                let page = build_concept_entity_page(
+                    ed,
+                    &title,
+                    entry_type.clone(),
+                    &source_ref,
+                    scope,
+                    schema,
+                );
+                let page_id = page.id;
+                if let Some(mapping) = canonical_alias_mapping_for_new_page(
+                    ed.canonical_or_label(),
+                    &page,
+                    scope,
+                    "compiler-resolver: create-new",
+                ) {
+                    stats.alias_mappings.push(mapping);
                 }
                 push_unique_link(&mut summary_links, &mut seen_summary_links, &page.title);
-            }
-            if let Some(page) = updated_page {
-                let page_id = page.id;
+                resolver.register_page(&page);
                 eng.write_page(page, "batch-ingest");
                 stats.written_page_ids.push(page_id);
-                match resolved_kind {
-                    EntryType::Concept => stats.concepts_updated += 1,
-                    EntryType::Entity => stats.entities_updated += 1,
+                match entry_type {
+                    EntryType::Concept => stats.concepts_created += 1,
+                    EntryType::Entity => stats.entities_created += 1,
                     _ => {}
                 }
             }
-            continue;
-        }
-
-        let title = resolved.canonical_title;
-        let page = build_concept_entity_page(ed, &title, kind.clone(), &source_ref, scope, schema);
-        let page_id = page.id;
-        push_unique_link(&mut summary_links, &mut seen_summary_links, &page.title);
-        eng.write_page(page, "batch-ingest");
-        stats.written_page_ids.push(page_id);
-        match kind {
-            EntryType::Concept => stats.concepts_created += 1,
-            EntryType::Entity => stats.entities_created += 1,
-            _ => {}
         }
     }
 
@@ -608,7 +813,7 @@ fn build_concept_page(
         .with_tags(concept.tags.clone())
         .with_section("定义", definition)
         .with_section("关键要点", render_bullets(&concept.key_points))
-        .with_section("本文语境", render_wikilinks(&concept.related_names))
+        .with_section("本文语境", render_related_names(&concept.related_names))
         .with_section("来源引用", source_reference_line(source_ref))
         .into_page(scope.clone(), status)
 }
@@ -634,7 +839,7 @@ fn build_concept_entity_page(
         .with_tags(ed.tags.clone())
         .with_section("定义", definition)
         .with_section("关键要点", render_bullets(&ed.key_points))
-        .with_section("本文语境", render_wikilinks(&ed.related_names))
+        .with_section("本文语境", render_related_names(&ed.related_names))
         .with_section("来源引用", source_reference_line(source_ref))
         .into_page(scope.clone(), status)
 }
@@ -653,12 +858,12 @@ fn render_bullets(items: &[String]) -> String {
     }
 }
 
-fn render_wikilinks(names: &[String]) -> String {
+fn render_related_names(names: &[String]) -> String {
     let lines: Vec<_> = names
         .iter()
         .map(|s| s.trim())
         .filter(|s| !s.is_empty())
-        .map(|s| format!("- [[{s}]]"))
+        .map(|s| format!("- {s}"))
         .collect();
     if lines.is_empty() {
         "（暂无）".to_string()
@@ -706,88 +911,558 @@ fn is_generic_concept(label: &str) -> bool {
 }
 
 #[derive(Debug, Clone)]
-struct ResolvedCompilerPage {
-    page_id: Option<PageId>,
+struct ResolvedExistingPage {
+    page_id: PageId,
+    title: String,
+    entry_type: EntryType,
+    confidence: ResolutionConfidence,
+    reason: String,
+    persist_alias: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ResolutionConfidence {
+    High,
+    Medium,
+    Low,
+}
+
+#[derive(Debug, Clone)]
+enum ResolverDecision {
+    ResolvedExisting(ResolvedExistingPage),
+    CreateNew {
+        title: String,
+        entry_type: EntryType,
+        confidence: ResolutionConfidence,
+        reason: String,
+    },
+    DeferredResolution {
+        title: String,
+        entry_type: EntryType,
+        candidates: Vec<CompilerCandidate>,
+        reason: String,
+    },
+}
+
+#[derive(Debug, Clone)]
+struct DraftResolverItem {
+    title: String,
+    entry_type: EntryType,
+    body_hint: String,
+}
+
+impl DraftResolverItem {
+    fn concept(concept: &LlmConceptDraft) -> Self {
+        Self {
+            title: concept.canonical_name.trim().to_string(),
+            entry_type: EntryType::Concept,
+            body_hint: truncate_chars(&concept.definition, 700),
+        }
+    }
+
+    fn entity(entity: &LlmEntityDraft, entry_type: EntryType) -> Self {
+        Self {
+            title: entity.canonical_or_label().trim().to_string(),
+            entry_type,
+            body_hint: truncate_chars(entity.profile_or_definition(), 700),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct CompilerAliasMapping {
+    normalized_alias_key: String,
+    canonical_page_id: PageId,
     canonical_title: String,
+    entry_type: EntryType,
+    scope_key: String,
+    confidence: ResolutionConfidence,
 }
 
-fn resolve_compiler_page(
-    pages: &HashMap<PageId, WikiPage>,
-    kind: &EntryType,
-    requested_title: &str,
-    scope: &Scope,
-) -> ResolvedCompilerPage {
-    let canonical_title = canonical_output_title(kind, requested_title);
-    let requested_keys = dedup_keys_for_title(requested_title);
-    let canonical_keys = dedup_keys_for_title(&canonical_title);
-    let alias_keys = alias_keys_for_title(requested_title);
-    let all_keys: HashSet<String> = requested_keys
-        .iter()
-        .chain(canonical_keys.iter())
-        .chain(alias_keys.iter())
-        .cloned()
-        .collect();
+#[derive(Debug, Clone)]
+struct CompilerCandidate {
+    page_id: PageId,
+    title: String,
+    entry_type: EntryType,
+    aliases: Vec<String>,
+    excerpt: String,
+    score: i32,
+    match_reasons: Vec<String>,
+}
 
-    let candidates: Vec<_> = pages
-        .iter()
-        .filter(|(_, p)| p.entry_type.as_ref() == Some(kind) && p.scope == *scope)
-        .map(|(pid, p)| (*pid, p))
-        .collect();
+struct CompilerResolver<'a> {
+    candidates: Vec<CompilerCandidate>,
+    mappings: Vec<CompilerAliasMapping>,
+    scope_key: String,
+    top_k: usize,
+    llm: Option<&'a llm::LlmConfig>,
+}
 
-    if let Some((pid, page)) = candidates.iter().find(|(_, p)| {
-        let page_keys = dedup_keys_for_title(&p.title);
-        page_keys.iter().any(|key| all_keys.contains(key))
-    }) {
-        return ResolvedCompilerPage {
-            page_id: Some(*pid),
-            canonical_title: page.title.clone(),
-        };
+const COMPILER_RESOLVER_TOP_K: usize = 5;
+
+impl<'a> CompilerResolver<'a> {
+    fn new(pages: &HashMap<PageId, WikiPage>, scope: &Scope) -> Self {
+        let scope_key = scope_key(scope);
+        let candidates = pages
+            .iter()
+            .filter_map(|(pid, page)| {
+                let entry_type = page.entry_type.clone()?;
+                if page.scope != *scope || !is_resolver_page_type(&entry_type) {
+                    return None;
+                }
+                Some(CompilerCandidate {
+                    page_id: *pid,
+                    title: page.title.clone(),
+                    entry_type,
+                    aliases: extract_page_alias_hints(page),
+                    excerpt: truncate_chars(&page.markdown, 360),
+                    score: 0,
+                    match_reasons: Vec::new(),
+                })
+            })
+            .collect();
+        Self {
+            candidates,
+            mappings: Vec::new(),
+            scope_key,
+            top_k: COMPILER_RESOLVER_TOP_K,
+            llm: None,
+        }
     }
 
-    let fuzzy: Vec<_> = candidates
-        .iter()
-        .filter(|(_, p)| page_matches_alias_text(p, &all_keys))
-        .collect();
-    if fuzzy.len() == 1 {
-        let (pid, page) = fuzzy[0];
-        return ResolvedCompilerPage {
-            page_id: Some(*pid),
-            canonical_title: page.title.clone(),
-        };
+    fn with_mappings(mut self, mappings: Vec<CompilerAliasMapping>) -> Self {
+        self.mappings = mappings;
+        self
     }
 
-    ResolvedCompilerPage {
-        page_id: None,
-        canonical_title,
+    fn with_llm(mut self, cfg: &'a llm::LlmConfig) -> Self {
+        self.llm = Some(cfg);
+        self
+    }
+
+    fn register_page(&mut self, page: &WikiPage) {
+        let Some(entry_type) = page.entry_type.clone() else {
+            return;
+        };
+        if !is_resolver_page_type(&entry_type) || scope_key(&page.scope) != self.scope_key {
+            return;
+        }
+        self.candidates.push(CompilerCandidate {
+            page_id: page.id,
+            title: page.title.clone(),
+            entry_type,
+            aliases: extract_page_alias_hints(page),
+            excerpt: truncate_chars(&page.markdown, 360),
+            score: 0,
+            match_reasons: Vec::new(),
+        });
+    }
+
+    fn resolve(&self, item: &DraftResolverItem) -> ResolverDecision {
+        let canonical_title = canonical_output_title(&item.entry_type, &item.title);
+        let requested_keys = dedup_keys_for_title(&item.title);
+        let canonical_keys = dedup_keys_for_title(&canonical_title);
+        let all_keys: HashSet<String> = requested_keys
+            .iter()
+            .chain(canonical_keys.iter())
+            .cloned()
+            .collect();
+
+        if let Some(mapped) = self.find_mapping(&all_keys) {
+            return ResolverDecision::ResolvedExisting(ResolvedExistingPage {
+                page_id: mapped.canonical_page_id,
+                title: mapped.canonical_title.clone(),
+                entry_type: mapped.entry_type.clone(),
+                confidence: mapped.confidence.clone(),
+                reason: "alias mapping".to_string(),
+                persist_alias: true,
+            });
+        }
+
+        let candidates = self.retrieve_candidates(item, &all_keys);
+        if let Some(resolved) = self.resolve_deterministic(item, &candidates, true) {
+            return ResolverDecision::ResolvedExisting(resolved);
+        }
+        if let Some(resolved) = self.resolve_deterministic(item, &candidates, false) {
+            return ResolverDecision::ResolvedExisting(resolved);
+        }
+        if candidates.is_empty() {
+            return ResolverDecision::CreateNew {
+                title: canonical_title,
+                entry_type: item.entry_type.clone(),
+                confidence: ResolutionConfidence::Medium,
+                reason: "no candidates".to_string(),
+            };
+        }
+        if let Some(resolved) = self.resolve_with_llm(item, &candidates) {
+            return ResolverDecision::ResolvedExisting(resolved);
+        }
+        ResolverDecision::DeferredResolution {
+            title: canonical_title,
+            entry_type: item.entry_type.clone(),
+            candidates,
+            reason: "ambiguous candidates".to_string(),
+        }
+    }
+
+    fn find_mapping(&self, keys: &HashSet<String>) -> Option<&CompilerAliasMapping> {
+        self.mappings.iter().find(|mapping| {
+            mapping.scope_key == self.scope_key
+                && keys.contains(&mapping.normalized_alias_key)
+                && mapping.confidence != ResolutionConfidence::Low
+        })
+    }
+
+    fn retrieve_candidates(
+        &self,
+        item: &DraftResolverItem,
+        keys: &HashSet<String>,
+    ) -> Vec<CompilerCandidate> {
+        let item_hint_key = compact_title_key(&item.body_hint);
+        let mut scored = Vec::new();
+        for candidate in &self.candidates {
+            let mut c = candidate.clone();
+            let mut exact = false;
+            let candidate_keys = candidate_keys(candidate);
+            if candidate_keys.iter().any(|key| keys.contains(key)) {
+                c.score += 100;
+                c.match_reasons.push("exact key".to_string());
+                exact = true;
+            }
+            if candidate.entry_type == item.entry_type {
+                c.score += 15;
+                c.match_reasons.push("preferred type".to_string());
+            } else {
+                c.score -= 15;
+                c.match_reasons.push("cross type".to_string());
+            }
+            let text_key = compact_title_key(&format!(
+                "{} {} {}",
+                candidate.title,
+                candidate.aliases.join(" "),
+                candidate.excerpt
+            ));
+            if keys
+                .iter()
+                .any(|key| key.len() >= 5 && text_key.contains(key))
+            {
+                c.score += if exact { 10 } else { 45 };
+                c.match_reasons.push("page text hint".to_string());
+            }
+            if !item_hint_key.is_empty()
+                && item_hint_key.len() >= 5
+                && text_key.contains(&item_hint_key)
+            {
+                c.score += 20;
+                c.match_reasons.push("draft hint".to_string());
+            }
+            if c.score > 0 {
+                scored.push(c);
+            }
+        }
+        scored.sort_by(|a, b| {
+            b.score
+                .cmp(&a.score)
+                .then_with(|| {
+                    preferred_type_rank(&b.entry_type, &item.entry_type)
+                        .cmp(&preferred_type_rank(&a.entry_type, &item.entry_type))
+                })
+                .then_with(|| a.title.cmp(&b.title))
+        });
+        scored.truncate(self.top_k);
+        scored
+    }
+
+    fn resolve_deterministic(
+        &self,
+        item: &DraftResolverItem,
+        candidates: &[CompilerCandidate],
+        preferred_only: bool,
+    ) -> Option<ResolvedExistingPage> {
+        let exact: Vec<_> = candidates
+            .iter()
+            .filter(|c| c.match_reasons.iter().any(|reason| reason == "exact key"))
+            .filter(|c| !preferred_only || c.entry_type == item.entry_type)
+            .collect();
+        if exact.len() != 1 {
+            return None;
+        }
+        let candidate = exact[0];
+        Some(ResolvedExistingPage {
+            page_id: candidate.page_id,
+            title: candidate.title.clone(),
+            entry_type: candidate.entry_type.clone(),
+            confidence: ResolutionConfidence::High,
+            reason: if candidate.entry_type == item.entry_type {
+                "single exact candidate".to_string()
+            } else {
+                "single exact cross-type candidate".to_string()
+            },
+            persist_alias: true,
+        })
+    }
+
+    fn resolve_with_llm(
+        &self,
+        item: &DraftResolverItem,
+        candidates: &[CompilerCandidate],
+    ) -> Option<ResolvedExistingPage> {
+        let cfg = self.llm?;
+        let user = render_llm_fallback_user_prompt(item, candidates);
+        let reply = llm::complete_chat(cfg, llm_fallback_system_prompt(), &user, 512).ok()?;
+        let decision = parse_llm_fallback_decision(&reply).ok()?;
+        if !decision.same_page || decision.confidence == ResolutionConfidence::Low {
+            return None;
+        }
+        let canonical_title = decision.canonical_title.trim();
+        let candidate = candidates.iter().find(|c| {
+            c.title == canonical_title
+                || compact_title_key(&c.title) == compact_title_key(canonical_title)
+        })?;
+        Some(ResolvedExistingPage {
+            page_id: candidate.page_id,
+            title: candidate.title.clone(),
+            entry_type: candidate.entry_type.clone(),
+            confidence: decision.confidence,
+            reason: format!("llm fallback: {}", decision.reason),
+            persist_alias: false,
+        })
     }
 }
 
-fn resolve_compiler_page_with_fallback(
-    pages: &HashMap<PageId, WikiPage>,
-    preferred_kind: &EntryType,
-    requested_title: &str,
-    scope: &Scope,
-) -> (ResolvedCompilerPage, EntryType) {
-    let primary = resolve_compiler_page(pages, preferred_kind, requested_title, scope);
-    if primary.page_id.is_some() {
-        return (primary, preferred_kind.clone());
-    }
+fn is_resolver_page_type(entry_type: &EntryType) -> bool {
+    matches!(entry_type, EntryType::Concept | EntryType::Entity)
+}
 
-    let fallback_kind = match preferred_kind {
-        EntryType::Concept => EntryType::Entity,
-        EntryType::Entity => EntryType::Concept,
-        other => other.clone(),
+fn preferred_type_rank(entry_type: &EntryType, preferred: &EntryType) -> i32 {
+    if entry_type == preferred {
+        1
+    } else {
+        0
+    }
+}
+
+fn candidate_keys(candidate: &CompilerCandidate) -> HashSet<String> {
+    let mut keys = dedup_keys_for_title(&candidate.title);
+    for alias in &candidate.aliases {
+        keys.extend(dedup_keys_for_title(alias));
+    }
+    keys
+}
+
+fn extract_page_alias_hints(page: &WikiPage) -> Vec<String> {
+    let mut aliases = Vec::new();
+    aliases.extend(page.outbound_page_titles.iter().cloned());
+    for line in page.markdown.lines() {
+        let trimmed = line.trim();
+        let is_alias_line = ["aliases:", "alias:", "别名：", "别名:"]
+            .iter()
+            .any(|prefix| trimmed.to_ascii_lowercase().starts_with(prefix));
+        if !is_alias_line {
+            continue;
+        }
+        let raw = trimmed
+            .split_once(':')
+            .map(|(_, raw)| raw)
+            .or_else(|| trimmed.split_once('：').map(|(_, raw)| raw));
+        if let Some(raw) = raw {
+            aliases.extend(
+                raw.split([',', '，', '/', '|'])
+                    .map(clean_yaml_scalar)
+                    .filter(|s| !s.is_empty()),
+            );
+        }
+    }
+    aliases.sort();
+    aliases.dedup();
+    aliases
+}
+
+fn scope_key(scope: &Scope) -> String {
+    match scope {
+        Scope::Private { agent_id } => format!("private:{agent_id}"),
+        Scope::Shared { team_id } => format!("shared:{team_id}"),
+    }
+}
+
+fn entry_type_label(entry_type: &EntryType) -> &'static str {
+    match entry_type {
+        EntryType::Concept => "concept",
+        EntryType::Entity => "entity",
+        EntryType::Summary => "summary",
+        EntryType::Synthesis => "synthesis",
+        EntryType::Qa => "qa",
+        EntryType::LintReport => "lint_report",
+        EntryType::Index => "index",
+    }
+}
+
+fn llm_fallback_system_prompt() -> &'static str {
+    r#"You decide if one draft wiki item and one candidate wiki page are the same canonical page.
+Return only JSON:
+{"same_page":true,"canonical_title":"...","confidence":"high|medium|low","reason":"..."}
+Use only the provided draft item and bounded candidates. Do not assume full wiki context."#
+}
+
+fn render_llm_fallback_user_prompt(
+    item: &DraftResolverItem,
+    candidates: &[CompilerCandidate],
+) -> String {
+    let candidates_json: Vec<_> = candidates
+        .iter()
+        .map(|candidate| {
+            serde_json::json!({
+                "title": candidate.title,
+                "type": entry_type_label(&candidate.entry_type),
+                "aliases": candidate.aliases,
+                "excerpt": candidate.excerpt,
+                "score": candidate.score,
+                "match_reasons": candidate.match_reasons,
+            })
+        })
+        .collect();
+    serde_json::json!({
+        "draft": {
+            "title": item.title,
+            "type": entry_type_label(&item.entry_type),
+            "definition_or_profile": item.body_hint,
+        },
+        "candidates": candidates_json,
+    })
+    .to_string()
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct LlmFallbackDecision {
+    same_page: bool,
+    canonical_title: String,
+    confidence: ResolutionConfidence,
+    reason: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct RawLlmFallbackDecision {
+    same_page: bool,
+    canonical_title: String,
+    confidence: String,
+    reason: String,
+}
+
+fn parse_llm_fallback_decision(
+    raw: &str,
+) -> Result<LlmFallbackDecision, Box<dyn std::error::Error>> {
+    let parsed: RawLlmFallbackDecision = serde_json::from_str(llm::parse_json_object_slice(raw))?;
+    Ok(LlmFallbackDecision {
+        same_page: parsed.same_page,
+        canonical_title: parsed.canonical_title,
+        confidence: parse_resolution_confidence(&parsed.confidence),
+        reason: parsed.reason,
+    })
+}
+
+fn parse_resolution_confidence(raw: &str) -> ResolutionConfidence {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "high" => ResolutionConfidence::High,
+        "low" => ResolutionConfidence::Low,
+        _ => ResolutionConfidence::Medium,
+    }
+}
+
+fn load_compiler_alias_mappings(
+    repo: &SqliteRepository,
+    pages: &HashMap<PageId, WikiPage>,
+    scope: &Scope,
+) -> Result<Vec<CompilerAliasMapping>, Box<dyn std::error::Error>> {
+    let page_ids: Vec<_> = pages
+        .values()
+        .filter(|page| page.scope == *scope)
+        .filter(|page| page.entry_type.as_ref().is_some_and(is_resolver_page_type))
+        .map(|page| page.id)
+        .collect();
+    let page_ids: HashSet<_> = page_ids.into_iter().collect();
+    let mappings = repo
+        .list_canonical_aliases_for_scope(scope)?
+        .into_iter()
+        .filter(|mapping| page_ids.contains(&mapping.canonical_page_id))
+        .filter(|mapping| is_resolver_page_type(&mapping.entry_type))
+        .map(compiler_alias_from_storage)
+        .collect();
+    Ok(mappings)
+}
+
+fn compiler_alias_from_storage(mapping: CanonicalAliasMapping) -> CompilerAliasMapping {
+    CompilerAliasMapping {
+        normalized_alias_key: mapping.normalized_alias_key,
+        canonical_page_id: mapping.canonical_page_id,
+        canonical_title: mapping.canonical_title,
+        entry_type: mapping.entry_type,
+        scope_key: scope_key(&mapping.scope),
+        confidence: confidence_from_score(mapping.confidence),
+    }
+}
+
+fn confidence_from_score(score: f64) -> ResolutionConfidence {
+    if score >= 0.85 {
+        ResolutionConfidence::High
+    } else if score >= 0.5 {
+        ResolutionConfidence::Medium
+    } else {
+        ResolutionConfidence::Low
+    }
+}
+
+fn confidence_score(confidence: &ResolutionConfidence) -> f64 {
+    match confidence {
+        ResolutionConfidence::High => 0.95,
+        ResolutionConfidence::Medium => 0.75,
+        ResolutionConfidence::Low => 0.25,
+    }
+}
+
+fn canonical_alias_mapping_for_resolution(
+    alias_text: &str,
+    resolved: &ResolvedExistingPage,
+    scope: &Scope,
+    source: &str,
+) -> Option<CanonicalAliasMapping> {
+    let alias_text = alias_text.trim();
+    let normalized_alias_key = compact_title_key(alias_text);
+    if alias_text.is_empty()
+        || normalized_alias_key.is_empty()
+        || normalized_alias_key == compact_title_key(&resolved.title)
+    {
+        return None;
+    }
+    let now = OffsetDateTime::now_utc();
+    Some(CanonicalAliasMapping {
+        alias_text: alias_text.to_string(),
+        normalized_alias_key,
+        canonical_page_id: resolved.page_id,
+        canonical_title: resolved.title.clone(),
+        entry_type: resolved.entry_type.clone(),
+        scope: scope.clone(),
+        source: format!("{source}: {}", resolved.reason),
+        confidence: confidence_score(&resolved.confidence),
+        created_at: now,
+        updated_at: now,
+    })
+}
+
+fn canonical_alias_mapping_for_new_page(
+    alias_text: &str,
+    page: &WikiPage,
+    scope: &Scope,
+    source: &str,
+) -> Option<CanonicalAliasMapping> {
+    let resolved = ResolvedExistingPage {
+        page_id: page.id,
+        title: page.title.clone(),
+        entry_type: page.entry_type.clone()?,
+        confidence: ResolutionConfidence::High,
+        reason: "new canonical page".to_string(),
+        persist_alias: true,
     };
-    if fallback_kind == *preferred_kind {
-        return (primary, preferred_kind.clone());
-    }
-
-    let fallback = resolve_compiler_page(pages, &fallback_kind, requested_title, scope);
-    if fallback.page_id.is_some() {
-        return (fallback, fallback_kind);
-    }
-
-    (primary, preferred_kind.clone())
+    canonical_alias_mapping_for_resolution(alias_text, &resolved, scope, source)
 }
 
 fn push_unique_link(out: &mut Vec<String>, seen: &mut HashSet<String>, title: &str) {
@@ -840,45 +1515,6 @@ fn dedup_keys_for_title(title: &str) -> HashSet<String> {
         keys.extend(dedup_keys_for_title(repo));
     }
     keys
-}
-
-fn alias_keys_for_title(title: &str) -> HashSet<String> {
-    let compact = compact_title_key(title);
-    let mut keys = HashSet::new();
-    let aliases: &[&str] = match compact.as_str() {
-        "rag" | "检索增强生成" | "rag检索增强生成" | "检索增强生成rag" => {
-            &["RAG", "检索增强生成", "RAG/检索"]
-        }
-        "mcp"
-        | "mcp协议"
-        | "mcp模型上下文协议"
-        | "mcpmodelcontextprotocol"
-        | "mcp连接器"
-        | "mcpconnectors"
-        | "modelcontextprotocol" => &["MCP", "MCP 协议", "MCP协议", "Model Context Protocol"],
-        "skills" | "skills机制" | "skills技能文件" => {
-            &["Agent Skills", "Skills", "Skills（技能文件）"]
-        }
-        "本地优先策略" => &["本地优先", "local first"],
-        "产品品味" | "ai产品品味" => &["品味", "taste"],
-        "ollama" => &["Ollama", "ollama/ollama"],
-        "n8n" => &["n8n", "n8n-io/n8n"],
-        "comfyui" => &["ComfyUI", "comfyanonymous/ComfyUI"],
-        "crewai" => &["CrewAI", "crewAIInc/crewAI"],
-        "dify" => &["Dify", "langgenius/dify"],
-        "perplexica" | "itzcrazyknsperplexica" => &["Perplexica", "Vane"],
-        _ => &[],
-    };
-    for alias in aliases {
-        keys.extend(dedup_keys_for_title(alias));
-    }
-    keys
-}
-
-fn page_matches_alias_text(page: &WikiPage, keys: &HashSet<String>) -> bool {
-    let text_key = compact_title_key(&format!("{} {}", page.title, page.markdown));
-    keys.iter()
-        .any(|key| key.len() >= 5 && text_key.contains(key))
 }
 
 fn find_summary_page(
@@ -1115,6 +1751,8 @@ fn write_run_report(
     wiki_root: Option<&Path>,
     ok_count: usize,
     err_count: usize,
+    warnings: &[String],
+    deferred_resolutions: &[DeferredResolutionItem],
 ) -> Result<(), Box<dyn std::error::Error>> {
     let Some(root) = wiki_root else {
         return Ok(());
@@ -1123,12 +1761,64 @@ fn write_run_report(
     std::fs::create_dir_all(&report_dir)?;
     let now = time::OffsetDateTime::now_utc();
     let now_str = now.format(&Rfc3339)?;
-    let path = report_dir.join(format!("production-wiki-compiler-{}.md", timestamp_slug()));
+    let slug = timestamp_slug();
+    let path = report_dir.join(format!("production-wiki-compiler-{slug}.md"));
+    let json_path = report_dir.join(format!("production-wiki-compiler-{slug}.json"));
+    let warning_block = if warnings.is_empty() {
+        "- warnings: `0`\n".to_string()
+    } else {
+        let lines = warnings
+            .iter()
+            .map(|warning| format!("  - {warning}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        format!("- warnings: `{}`\n{lines}\n", warnings.len())
+    };
+    let deferred_block = if deferred_resolutions.is_empty() {
+        "- deferred_resolutions: `0`\n".to_string()
+    } else {
+        let lines = deferred_resolutions
+            .iter()
+            .map(|item| {
+                format!(
+                    "  - {} {} -> {} ({})",
+                    item.draft_entry_type, item.draft_title, item.next_step, item.reason
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        format!(
+            "- deferred_resolutions: `{}`\n{lines}\n",
+            deferred_resolutions.len()
+        )
+    };
     let body = format!(
         "# Production Wiki Compiler Run\n\n- at: `{now_str}`\n- successful_sources: `{ok_count}`\n- failed_sources: `{err_count}`\n- note: current implementation uses existing `LlmIngestPlanV1`; concept/entity definition, key_points, related names, and typed compiler tags are expected future fields and are represented conservatively in page bodies.\n"
     );
+    let body = format!("{body}{warning_block}{deferred_block}");
     std::fs::write(path, body)?;
+    let json = CompilerRunReportJson {
+        version: 1,
+        kind: "production_wiki_compiler_run",
+        at: now_str,
+        successful_sources: ok_count,
+        failed_sources: err_count,
+        warnings,
+        deferred_resolutions,
+    };
+    std::fs::write(json_path, serde_json::to_string_pretty(&json)?)?;
     Ok(())
+}
+
+#[derive(Serialize)]
+struct CompilerRunReportJson<'a> {
+    version: u32,
+    kind: &'static str,
+    at: String,
+    successful_sources: usize,
+    failed_sources: usize,
+    warnings: &'a [String],
+    deferred_resolutions: &'a [DeferredResolutionItem],
 }
 
 fn parse_frontmatter_tags(frontmatter: &str, key: &str) -> Vec<String> {
@@ -1282,6 +1972,147 @@ mod tests {
         }
     }
 
+    fn alias_mapping(alias: &str, page: &WikiPage) -> CompilerAliasMapping {
+        CompilerAliasMapping {
+            normalized_alias_key: compact_title_key(alias),
+            canonical_page_id: page.id,
+            canonical_title: page.title.clone(),
+            entry_type: page.entry_type.clone().unwrap(),
+            scope_key: scope_key(&page.scope),
+            confidence: ResolutionConfidence::High,
+        }
+    }
+
+    #[test]
+    fn compiler_alias_mappings_load_from_sqlite_for_scope_pages() {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = SqliteRepository::open(dir.path().join("wiki.db")).unwrap();
+        let page = WikiPage::new("MCP 协议", "# MCP 协议\n", test_scope())
+            .with_entry_type(EntryType::Concept)
+            .with_status(EntryStatus::Draft);
+        let other_scope_page = WikiPage::new("MCP private", "# MCP private\n", private_scope())
+            .with_entry_type(EntryType::Concept)
+            .with_status(EntryStatus::Draft);
+        let now = OffsetDateTime::from_unix_timestamp(1_700_000_000).unwrap();
+        repo.upsert_canonical_alias(&CanonicalAliasMapping {
+            alias_text: "MCP connectors".into(),
+            normalized_alias_key: compact_title_key("MCP connectors"),
+            canonical_page_id: page.id,
+            canonical_title: page.title.clone(),
+            entry_type: EntryType::Concept,
+            scope: test_scope(),
+            source: "unit-test".into(),
+            confidence: 0.95,
+            created_at: now,
+            updated_at: now,
+        })
+        .unwrap();
+        repo.upsert_canonical_alias(&CanonicalAliasMapping {
+            alias_text: "MCP private".into(),
+            normalized_alias_key: compact_title_key("MCP private"),
+            canonical_page_id: other_scope_page.id,
+            canonical_title: other_scope_page.title.clone(),
+            entry_type: EntryType::Concept,
+            scope: private_scope(),
+            source: "unit-test".into(),
+            confidence: 0.95,
+            created_at: now,
+            updated_at: now,
+        })
+        .unwrap();
+        let pages = HashMap::from([(page.id, page), (other_scope_page.id, other_scope_page)]);
+
+        let loaded = load_compiler_alias_mappings(&repo, &pages, &test_scope()).unwrap();
+
+        assert_eq!(loaded.len(), 1);
+        assert_eq!(loaded[0].canonical_title, "MCP 协议");
+        assert_eq!(
+            loaded[0].normalized_alias_key,
+            compact_title_key("MCP connectors")
+        );
+    }
+
+    #[test]
+    fn temp_vault_smoke_scans_x_and_wechat_samples_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let x_dir = dir.path().join("sources/x");
+        let wechat_dir = dir.path().join("sources/wechat");
+        std::fs::create_dir_all(&x_dir).unwrap();
+        std::fs::create_dir_all(&wechat_dir).unwrap();
+        std::fs::write(
+            x_dir.join("x-sample.md"),
+            "---\ntitle: \"X MCP sample\"\nurl: https://x.com/example/status/1\ncompiled_to_wiki: false\ntags: [x, MCP]\n---\n\nThis X sample discusses MCP connectors and canonical resolver behavior with enough body text for scanning.\n",
+        )
+        .unwrap();
+        std::fs::write(
+            wechat_dir.join("wechat-sample.md"),
+            "---\ntitle: \"WeChat MCP sample\"\nurl: https://mp.weixin.qq.com/s/example\ncompiled_to_wiki: false\ntags:\n  - wechat\n  - MCP\n---\n\nThis WeChat sample discusses MCP连接器 and Agent Skills canonicalization with enough body text for scanning.\n",
+        )
+        .unwrap();
+
+        let all = scan_uncompiled_sources(dir.path(), Some("all"), None).unwrap();
+        let x = scan_uncompiled_sources(dir.path(), Some("x"), None).unwrap();
+        let wechat = scan_uncompiled_sources(dir.path(), Some("wechat"), None).unwrap();
+
+        assert_eq!(all.len(), 2);
+        assert_eq!(x.len(), 1);
+        assert_eq!(wechat.len(), 1);
+        assert_eq!(x[0].origin.as_deref(), Some("x"));
+        assert_eq!(wechat[0].origin.as_deref(), Some("wechat"));
+    }
+
+    #[test]
+    fn run_report_persists_machine_deferred_resolutions() {
+        let dir = tempfile::tempdir().unwrap();
+        let deferred = DeferredResolutionItem {
+            source_title: Some("Source A".to_string()),
+            source_url: Some("https://example.test/a".to_string()),
+            draft_title: "MCP connectors".to_string(),
+            draft_entry_type: "concept".to_string(),
+            reason: "ambiguous candidates".to_string(),
+            candidate_count: 1,
+            candidates: vec![DeferredResolutionCandidate {
+                title: "MCP 协议".to_string(),
+                entry_type: "concept".to_string(),
+                score: 100,
+                match_reasons: vec!["exact key".to_string()],
+            }],
+            owner: "resolver-lint-fixer",
+            next_step: "machine_resolution",
+        };
+
+        write_run_report(Some(dir.path()), 1, 0, &[], &[deferred]).unwrap();
+
+        let report_dir = dir.path().join("reports");
+        let md_path = std::fs::read_dir(&report_dir)
+            .unwrap()
+            .filter_map(Result::ok)
+            .map(|entry| entry.path())
+            .find(|path| path.extension().and_then(|s| s.to_str()) == Some("md"))
+            .unwrap();
+        let report = std::fs::read_to_string(md_path).unwrap();
+        assert!(report.contains("- warnings: `0`"));
+        assert!(report.contains("- deferred_resolutions: `1`"));
+        assert!(report.contains("concept MCP connectors -> machine_resolution"));
+
+        let json_path = std::fs::read_dir(&report_dir)
+            .unwrap()
+            .filter_map(Result::ok)
+            .map(|entry| entry.path())
+            .find(|path| path.extension().and_then(|s| s.to_str()) == Some("json"))
+            .unwrap();
+        let json: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(json_path).unwrap()).unwrap();
+        assert_eq!(
+            json["deferred_resolutions"][0]["owner"],
+            "resolver-lint-fixer"
+        );
+        assert_eq!(
+            json["deferred_resolutions"][0]["next_step"],
+            "machine_resolution"
+        );
+    }
+
     #[test]
     fn title_normalization_folds_ascii_case_punctuation_and_space() {
         assert_eq!(
@@ -1359,6 +2190,79 @@ mod tests {
                 .filter(|event| matches!(event, wiki_core::WikiEvent::PageWritten { .. }))
                 .count(),
             3
+        );
+    }
+
+    #[test]
+    fn related_names_are_plain_text_until_resolved() {
+        let mut eng = LlmWikiEngine::new(DomainSchema::permissive_default());
+        let mut plan = plan_with_entities(Vec::new());
+        plan.concepts = vec![LlmConceptDraft {
+            canonical_name: "Token计费模式".into(),
+            kind: "concept".into(),
+            definition: "按 token 数量计费的方式".into(),
+            key_points: vec!["缓存命中可降低成本".into()],
+            tags: Vec::new(),
+            related_names: vec!["输入token".into(), "缓存命中".into()],
+            category: None,
+        }];
+        let batch = BatchIngestContext {
+            source_title: "Source A".into(),
+            source_url: "https://example.test/a".into(),
+            source_tags: vec![],
+        };
+
+        let stats = materialize_compiler_pages(
+            &mut eng,
+            &plan,
+            &batch,
+            "https://example.test/a",
+            &test_scope(),
+            &DomainSchema::permissive_default(),
+        );
+
+        assert_eq!(stats.concepts_created, 1);
+        let page = eng
+            .store
+            .pages
+            .values()
+            .find(|p| p.title == "Token计费模式")
+            .unwrap();
+        assert!(page.markdown.contains("- 输入token"));
+        assert!(page.markdown.contains("- 缓存命中"));
+        assert!(!page.markdown.contains("[[输入token]]"));
+        assert!(!page.markdown.contains("[[缓存命中]]"));
+    }
+
+    #[test]
+    fn in_run_created_page_is_reused_for_duplicate_draft_item() {
+        let mut eng = LlmWikiEngine::new(DomainSchema::permissive_default());
+        let mut plan = plan_with_entities(Vec::new());
+        plan.concepts = vec![concept("Local Context"), concept("Local Context")];
+        let batch = BatchIngestContext {
+            source_title: "Source Duplicate Draft".into(),
+            source_url: "https://example.test/duplicate-draft".into(),
+            source_tags: vec![],
+        };
+
+        let stats = materialize_compiler_pages(
+            &mut eng,
+            &plan,
+            &batch,
+            "https://example.test/duplicate-draft",
+            &test_scope(),
+            &DomainSchema::permissive_default(),
+        );
+
+        assert_eq!(stats.concepts_created, 1);
+        assert_eq!(stats.concepts_updated, 0);
+        assert_eq!(
+            eng.store
+                .pages
+                .values()
+                .filter(|p| p.entry_type == Some(EntryType::Concept) && p.title == "Local Context")
+                .count(),
+            1
         );
     }
 
@@ -1454,7 +2358,7 @@ mod tests {
     #[test]
     fn compiler_dedup_resolves_notion_style_aliases_before_creating_pages() {
         let mut eng = LlmWikiEngine::new(DomainSchema::permissive_default());
-        let existing_pages = [
+        let existing_pages = vec![
             WikiPage::new("MCP-协议", "# MCP-协议\n", test_scope())
                 .with_entry_type(EntryType::Concept)
                 .with_status(EntryStatus::Draft),
@@ -1471,8 +2375,16 @@ mod tests {
                 .with_entry_type(EntryType::Entity)
                 .with_status(EntryStatus::Draft),
         ];
-        for page in existing_pages {
-            eng.store.pages.insert(page.id, page);
+        let mappings = vec![
+            alias_mapping("MCP协议", &existing_pages[0]),
+            alias_mapping("MCP（Model Context Protocol）", &existing_pages[0]),
+            alias_mapping("检索增强生成", &existing_pages[1]),
+            alias_mapping("ollama/ollama", &existing_pages[2]),
+            alias_mapping("langgenius/dify", &existing_pages[3]),
+            alias_mapping("ItzCrazyKns/Perplexica", &existing_pages[4]),
+        ];
+        for page in &existing_pages {
+            eng.store.pages.insert(page.id, page.clone());
         }
         let mut plan = plan_with_entities(vec![
             entity("ollama/ollama"),
@@ -1490,13 +2402,16 @@ mod tests {
             source_tags: vec![],
         };
 
-        let stats = materialize_compiler_pages(
+        let mut resolver =
+            CompilerResolver::new(&eng.store.pages, &test_scope()).with_mappings(mappings);
+        let stats = materialize_compiler_pages_with_resolver(
             &mut eng,
             &plan,
             &batch,
             "https://example.test/alias",
             &test_scope(),
             &DomainSchema::permissive_default(),
+            &mut resolver,
         );
 
         assert!(stats.summary_created);
@@ -1614,9 +2529,103 @@ mod tests {
     }
 
     #[test]
+    fn ambiguous_candidates_skip_without_duplicate_page() {
+        let mut eng = LlmWikiEngine::new(DomainSchema::permissive_default());
+        for title in ["MCP 协议", "MCP 连接器"] {
+            let page = WikiPage::new(
+                title,
+                format!("# {title}\n\naliases: MCP connectors\n"),
+                test_scope(),
+            )
+            .with_entry_type(EntryType::Concept)
+            .with_status(EntryStatus::Draft);
+            eng.store.pages.insert(page.id, page);
+        }
+        let mut plan = plan_with_entities(Vec::new());
+        plan.concepts = vec![concept("MCP connectors")];
+        let batch = BatchIngestContext {
+            source_title: "Source Ambiguous".into(),
+            source_url: "https://example.test/ambiguous".into(),
+            source_tags: vec![],
+        };
+
+        let stats = materialize_compiler_pages(
+            &mut eng,
+            &plan,
+            &batch,
+            "https://example.test/ambiguous",
+            &test_scope(),
+            &DomainSchema::permissive_default(),
+        );
+
+        assert_eq!(stats.concepts_created, 0);
+        assert_eq!(stats.concepts_updated, 0);
+        assert!(stats.warnings.is_empty());
+        assert_eq!(stats.deferred_resolutions.len(), 1);
+        assert_eq!(stats.deferred_resolutions[0].draft_title, "MCP connectors");
+        assert_eq!(
+            stats.deferred_resolutions[0].next_step,
+            "machine_resolution"
+        );
+        assert!(!eng
+            .store
+            .pages
+            .values()
+            .any(|p| p.title == "MCP connectors"));
+        let summary = eng
+            .store
+            .pages
+            .values()
+            .find(|p| p.title == "摘要：Source Ambiguous")
+            .unwrap();
+        assert!(!summary.markdown.contains("[[MCP connectors]]"));
+    }
+
+    #[test]
+    fn candidate_retrieval_is_bounded_top_k() {
+        let mut pages = HashMap::new();
+        for i in 0..8 {
+            let page = WikiPage::new(
+                format!("Candidate {i}"),
+                "# Candidate\n\naliases: shared alias\n",
+                test_scope(),
+            )
+            .with_entry_type(EntryType::Concept)
+            .with_status(EntryStatus::Draft);
+            pages.insert(page.id, page);
+        }
+        let resolver = CompilerResolver::new(&pages, &test_scope());
+        let item = DraftResolverItem {
+            title: "shared alias".into(),
+            entry_type: EntryType::Concept,
+            body_hint: String::new(),
+        };
+        let keys = dedup_keys_for_title(&item.title);
+
+        let candidates = resolver.retrieve_candidates(&item, &keys);
+
+        assert_eq!(candidates.len(), COMPILER_RESOLVER_TOP_K);
+    }
+
+    #[test]
+    fn llm_fallback_parser_accepts_json_object_slice() {
+        let parsed = parse_llm_fallback_decision(
+            r#"```json
+{"same_page":true,"canonical_title":"MCP 协议","confidence":"medium","reason":"same protocol"}
+```"#,
+        )
+        .unwrap();
+
+        assert!(parsed.same_page);
+        assert_eq!(parsed.canonical_title, "MCP 协议");
+        assert_eq!(parsed.confidence, ResolutionConfidence::Medium);
+        assert_eq!(parsed.reason, "same protocol");
+    }
+
+    #[test]
     fn compiler_dedup_resolves_wechat_concept_aliases() {
         let mut eng = LlmWikiEngine::new(DomainSchema::permissive_default());
-        let existing_pages = [
+        let existing_pages = vec![
             WikiPage::new("MCP 协议", "# MCP 协议\n", test_scope())
                 .with_entry_type(EntryType::Concept)
                 .with_status(EntryStatus::Draft),
@@ -1630,8 +2639,16 @@ mod tests {
                 .with_entry_type(EntryType::Concept)
                 .with_status(EntryStatus::Draft),
         ];
-        for page in existing_pages {
-            eng.store.pages.insert(page.id, page);
+        let mappings = vec![
+            alias_mapping("MCP connectors", &existing_pages[0]),
+            alias_mapping("MCP连接器", &existing_pages[0]),
+            alias_mapping("Skills机制", &existing_pages[1]),
+            alias_mapping("本地优先策略", &existing_pages[2]),
+            alias_mapping("产品品味", &existing_pages[3]),
+            alias_mapping("AI产品品味", &existing_pages[3]),
+        ];
+        for page in &existing_pages {
+            eng.store.pages.insert(page.id, page.clone());
         }
         let mut plan = plan_with_entities(Vec::new());
         plan.concepts = vec![
@@ -1648,13 +2665,16 @@ mod tests {
             source_tags: vec![],
         };
 
-        let stats = materialize_compiler_pages(
+        let mut resolver =
+            CompilerResolver::new(&eng.store.pages, &test_scope()).with_mappings(mappings);
+        let stats = materialize_compiler_pages_with_resolver(
             &mut eng,
             &plan,
             &batch,
             "https://example.test/wechat",
             &test_scope(),
             &DomainSchema::permissive_default(),
+            &mut resolver,
         );
 
         assert_eq!(stats.concepts_created, 0);

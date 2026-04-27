@@ -15,7 +15,8 @@ where
         Str(String),
     }
 
-    let items: Vec<ClaimOrString> = Vec::deserialize(deserializer)?;
+    let items: Vec<ClaimOrString> =
+        Option::<Vec<ClaimOrString>>::deserialize(deserializer)?.unwrap_or_default();
     Ok(items
         .into_iter()
         .map(|item| match item {
@@ -29,6 +30,21 @@ where
         .collect())
 }
 
+fn deserialize_string_or_default<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    Ok(Option::<String>::deserialize(deserializer)?.unwrap_or_default())
+}
+
+fn deserialize_vec_or_default<'de, D, T>(deserializer: D) -> Result<Vec<T>, D::Error>
+where
+    D: Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    Ok(Option::<Vec<T>>::deserialize(deserializer)?.unwrap_or_default())
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LlmIngestPlanV1 {
     pub version: u32,
@@ -36,21 +52,21 @@ pub struct LlmIngestPlanV1 {
     /// fields below stay valid for existing callers.
     #[serde(default)]
     pub summary: LlmSummaryDraft,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_string_or_default")]
     pub summary_title: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_string_or_default")]
     pub summary_markdown: String,
     /// 一句话摘要（vault `## 一句话摘要`；优先于 legacy `summary_markdown` 单独成段）
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_string_or_default")]
     pub one_sentence_summary: String,
     /// 关键洞察列表（vault `## 关键洞察` 以列表呈现）
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_vec_or_default")]
     pub key_insights: Vec<String>,
     /// 对整篇 summary 的置信度：`high` | `medium` | `low`
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_string_or_default")]
     pub confidence: String,
     /// 建议写入 summary frontmatter 的 wiki 标签
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_vec_or_default")]
     pub tags: Vec<String>,
     /// 从正文识别的作者（可选）
     #[serde(default)]
@@ -227,17 +243,17 @@ impl LlmIngestPlanV1 {
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct LlmSummaryDraft {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_string_or_default")]
     pub title: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_string_or_default")]
     pub one_sentence_summary: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_vec_or_default")]
     pub key_insights: Vec<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_string_or_default")]
     pub confidence: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_vec_or_default")]
     pub tags: Vec<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_string_or_default")]
     pub personal_note: String,
     #[serde(default)]
     pub source_author: Option<String>,
@@ -270,18 +286,23 @@ pub struct LlmClaimDraft {
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct LlmConceptDraft {
-    #[serde(default, alias = "name", alias = "title")]
+    #[serde(
+        default,
+        alias = "name",
+        alias = "title",
+        deserialize_with = "deserialize_string_or_default"
+    )]
     pub canonical_name: String,
     /// Always `concept` for the production compiler contract.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_string_or_default")]
     pub kind: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_string_or_default")]
     pub definition: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_vec_or_default")]
     pub key_points: Vec<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_vec_or_default")]
     pub tags: Vec<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_vec_or_default")]
     pub related_names: Vec<String>,
     #[serde(default)]
     pub category: Option<String>,
@@ -310,23 +331,23 @@ impl<'de> Deserialize<'de> for LlmEntityDraft {
     {
         #[derive(Default, Deserialize)]
         struct Raw {
-            #[serde(default)]
+            #[serde(default, deserialize_with = "deserialize_string_or_default")]
             label: String,
-            #[serde(default)]
+            #[serde(default, deserialize_with = "deserialize_string_or_default")]
             kind: String,
-            #[serde(default)]
+            #[serde(default, deserialize_with = "deserialize_string_or_default")]
             canonical_name: String,
             #[serde(default)]
             category: Option<String>,
-            #[serde(default)]
+            #[serde(default, deserialize_with = "deserialize_string_or_default")]
             definition: String,
-            #[serde(default)]
+            #[serde(default, deserialize_with = "deserialize_string_or_default")]
             profile: String,
-            #[serde(default)]
+            #[serde(default, deserialize_with = "deserialize_vec_or_default")]
             key_points: Vec<String>,
-            #[serde(default)]
+            #[serde(default, deserialize_with = "deserialize_vec_or_default")]
             tags: Vec<String>,
-            #[serde(default)]
+            #[serde(default, deserialize_with = "deserialize_vec_or_default")]
             related_names: Vec<String>,
         }
 
@@ -503,6 +524,58 @@ mod tests {
         assert_eq!(p.normalized_summary_confidence(), "medium");
         assert!(p.tags.is_empty());
         assert!(p.source_author.is_none());
+    }
+
+    #[test]
+    fn parses_compiler_null_string_fields_as_empty_defaults() {
+        let j = r###"{
+            "version": 1,
+            "summary": {
+                "title": "t",
+                "personal_note": null,
+                "tags": null
+            },
+            "summary_title": "t",
+            "summary_markdown": null,
+            "one_sentence_summary": null,
+            "key_insights": null,
+            "confidence": null,
+            "tags": null,
+            "claims": null,
+            "concepts": [
+                {
+                    "canonical_name": "API定价策略",
+                    "kind": "concept",
+                    "definition": null,
+                    "key_points": null,
+                    "tags": null,
+                    "related_names": null,
+                    "category": null
+                }
+            ],
+            "entities": [
+                {
+                    "label": "DeepSeek-V4-Pro",
+                    "kind": "other",
+                    "canonical_name": "DeepSeek-V4-Pro",
+                    "category": "model",
+                    "definition": "模型 API 服务",
+                    "profile": null,
+                    "key_points": null,
+                    "tags": null,
+                    "related_names": null
+                }
+            ],
+            "relationships": []
+        }"###;
+
+        let p: LlmIngestPlanV1 = serde_json::from_str(j).unwrap();
+
+        assert!(p.summary_markdown.is_empty());
+        assert!(p.claims.is_empty());
+        assert!(p.concepts[0].definition.is_empty());
+        assert!(p.entities[0].profile.is_empty());
+        assert!(p.entities[0].key_points.is_empty());
     }
 
     #[test]
