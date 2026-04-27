@@ -1,6 +1,6 @@
 # PRD: Production Wiki Compiler
 
-**Status**: implementation complete pending PR/CI and production tiny sample  
+**Status**: implementation merged in PR #44; production tiny sample pending
 **Related**: `Notion Incremental Sync`, `Notion Source Vault Projection`, `Vault Backfill + Palace Init`, `DB/Vault/Palace Consistency Governance`
 
 ## Goal
