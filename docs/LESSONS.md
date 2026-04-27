@@ -124,3 +124,12 @@
 - Spec changes needed: PRD 已完成实现部分，但 production tiny sample 仍是单独 operational gate；不要把 “代码已合并” 误写成 “生产闭环已跑通”。
 - Tests or reviews that caught issues: integration review subagent 抓到 P1/P2/P3；新增 wiki_compiler、projection duplicate title、rich fixture、frontmatter metadata 回归测试；本地 `cargo clippy --workspace --all-targets -- -D warnings`、`cargo test --workspace`、`git diff --check` 和 GitHub CI 均通过。
 - Next plan note: 下一步不是继续做新功能，而是备份真实 vault 后执行 1 X + 1 WeChat tiny production sample，再 consume to Mempalace 并让用户在 Obsidian 检查。tiny sample 通过前不要 scale-up。
+
+## 2026-04-27 / PR #47 Compiler Canonicalization v2
+
+- Scope: 在 compiler draft 和 DB 写入之间加入 canonical resolver；新增 bounded candidate retrieval、`wiki_canonical_alias`、small LLM fallback、temp-vault regression，以及 machine-owned `deferred_resolutions` JSON。
+- What worked: 用户的 Vault 验收标准比命令清单更有效；用 main vs v2 的临时 Vault 可视化对比，直接看出旧结果会产生 broken wikilink/incomplete entity，而 v2 把模糊项 defer 出 active graph。
+- What caused rework: “模糊项人工确认”这个表述不符合产品方向；正确语义是机器后置治理，模糊项不污染 active graph，但也不甩给人工，而是进入 resolver/lint/fixer 可消费队列。
+- Spec changes needed: 以后 compiler/fixer 相关 spec 要明确区分 `duplicate`、`ambiguous/deferred`、`noise/ignore` 三类；deferred 产物必须是 machine-readable artifact，不只是 Markdown warning。
+- Tests or reviews that caught issues: live temp-vault smoke 抓到 LLM 返回 `null` 导致 parser 失败；lint 抓到 unresolved `related_names` 被直接写成 wikilink 会产生 broken link；focused security/architecture review 抓到 alias poisoning 与 transaction split 风险。本地 `fmt`、`wiki_compiler`、`cargo test --workspace`、`clippy -D warnings`、`git diff --check` 和 GitHub quick CI 均通过。
+- Next plan note: 下一步先做 Compiler Deferred Resolution Agent，让 lint/fixer agent 消费 `deferred_resolutions` 并按 alias / new canonical / ignore 处理；通过 X/WeChat 临时样本后，才进入 production compiler 小批量 scale-up。

@@ -1,6 +1,6 @@
 # PRD: Compiler Canonicalization v2
 
-**Status**: active planning
+**Status**: implemented and merged in PR #47
 **Related**: `Production Wiki Compiler`, `DB/Vault/Palace Consistency Governance`, `Notion Wiki Agent Contract`
 
 ## Goal
