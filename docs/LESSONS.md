@@ -141,3 +141,12 @@
 - What caused rework: 首版 safe create 的来源引用写成 `[[摘要：...]]`，临时库没有 summary 页，lint 抓到 broken wikilink；后置 resolver 创建页时不能假设 summary 已存在。
 - Spec changes needed: deferred candidate 必须带 `page_id`；旧 report 只能在 scope + title + entry_type 唯一时 fallback。
 - Tests or reviews that caught issues: 新增 `compiler_resolve_deferred` 单测覆盖 alias、ambiguous、noise、allow-create；temp X + WeChat smoke 确认 no `page.broken_wikilink`。
+
+## 2026-04-27 / Compiler Model Candidate Trial
+
+- Scope: 用临时 DB/Vault 对比 compiler 模型，不触碰真实 `/Users/mac-mini/Documents/wiki`。
+- What worked: `deepseek/deepseek-v4-flash` 在 OpenRouter 小 JSON smoke 1.83s；同一 `Avatar V` full compiler 成功 117.0s；再跑 3 条 X source 全部成功，单条 89.5-99.1s。
+- What caused rework: 速度和 JSON 稳定性够用，但仍会产生归一化质量问题：重复近义概念、主实体 deferred、人名 Unicode 标题异常。
+- Spec changes needed: 模型替换不能只看成功率和速度，compiler temp-vault regression 要加入“主实体页存在、近义 concept 不重复、人名/文件名 Unicode 正常化”验收项。
+- Tests or reviews that caught issues: 临时 3-source smoke 抓到 `自愈式浏览器自动化` / `自愈浏览器自动化` 重复，以及 `Magnus M ü ller` 标题异常；`compiler-resolve-deferred` dry-run 仍保持低置信 deferred。
+- Next plan note: 记录 `deepseek/deepseek-v4-flash` 为待选模型；生产默认暂不切换，先补 resolver/fixer 归一化能力。
