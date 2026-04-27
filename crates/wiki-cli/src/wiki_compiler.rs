@@ -1125,11 +1125,13 @@ impl<'a> CompilerResolver<'a> {
         for candidate in &self.candidates {
             let mut c = candidate.clone();
             let mut exact = false;
+            let mut has_substantive_match = false;
             let candidate_keys = candidate_keys(candidate);
             if candidate_keys.iter().any(|key| keys.contains(key)) {
                 c.score += 100;
                 c.match_reasons.push("exact key".to_string());
                 exact = true;
+                has_substantive_match = true;
             }
             if candidate.entry_type == item.entry_type {
                 c.score += 15;
@@ -1150,6 +1152,7 @@ impl<'a> CompilerResolver<'a> {
             {
                 c.score += if exact { 10 } else { 45 };
                 c.match_reasons.push("page text hint".to_string());
+                has_substantive_match = true;
             }
             if !item_hint_key.is_empty()
                 && item_hint_key.len() >= 5
@@ -1157,8 +1160,9 @@ impl<'a> CompilerResolver<'a> {
             {
                 c.score += 20;
                 c.match_reasons.push("draft hint".to_string());
+                has_substantive_match = true;
             }
-            if c.score > 0 {
+            if has_substantive_match && c.score > 0 {
                 scored.push(c);
             }
         }
@@ -1526,16 +1530,21 @@ fn find_summary_page(
     scope: &Scope,
 ) -> Option<PageId> {
     let normalized_title = normalize_title_for_dedup(summary_title);
+    let source_url = source_url.trim();
     pages
         .iter()
         .find(|(_, p)| {
+            let source_matches = !source_url.is_empty()
+                && (p.source_url.as_deref() == Some(source_url) || p.markdown.contains(source_url));
+            let has_stored_source_url = p
+                .source_url
+                .as_deref()
+                .is_some_and(|stored| !stored.trim().is_empty());
+            let title_matches = normalize_title_for_dedup(&p.title) == normalized_title
+                && (source_url.is_empty() || !has_stored_source_url);
             p.entry_type == Some(EntryType::Summary)
                 && p.scope == *scope
-                && if source_url.trim().is_empty() {
-                    normalize_title_for_dedup(&p.title) == normalized_title
-                } else {
-                    p.source_url.as_deref() == Some(source_url) || p.markdown.contains(source_url)
-                }
+                && (title_matches || source_matches)
         })
         .map(|(pid, _)| *pid)
 }
@@ -1582,7 +1591,7 @@ pub(crate) fn normalize_title_for_dedup(title: &str) -> String {
         if ch.is_ascii_alphanumeric() {
             out.push(ch.to_ascii_lowercase());
             last_space = false;
-        } else if ch.is_ascii_punctuation() || ch.is_whitespace() {
+        } else if ch.is_ascii_punctuation() || ch.is_whitespace() || is_cjk_punctuation(ch) {
             if !last_space {
                 out.push(' ');
                 last_space = true;
@@ -2124,6 +2133,33 @@ mod tests {
             normalize_title_for_dedup("  OpenAI--Responses_API  "),
             "openai responses api"
         );
+        assert_eq!(
+            normalize_title_for_dedup("摘要：Nexu（一键）"),
+            "摘要 nexu 一键"
+        );
+    }
+
+    #[test]
+    fn summary_lookup_matches_normalized_title_when_source_url_was_missing() {
+        let mut page = WikiPage::new(
+            "摘要：nexu：一键把 OpenClaw AI Agent 接入微信和飞书的开源桌面客户端",
+            "# old summary\n",
+            test_scope(),
+        )
+        .with_entry_type(EntryType::Summary)
+        .with_status(EntryStatus::Draft);
+        page.source_url = None;
+        let page_id = page.id;
+        let pages = HashMap::from([(page_id, page)]);
+
+        let found = find_summary_page(
+            &pages,
+            "摘要：Nexu：一键把 OpenClaw AI Agent 接入微信和飞书的开源桌面客户端",
+            "https://x.com/nexudotio/status/2036810399341740335",
+            &test_scope(),
+        );
+
+        assert_eq!(found, Some(page_id));
     }
 
     #[test]
@@ -2610,6 +2646,28 @@ mod tests {
         let candidates = resolver.retrieve_candidates(&item, &keys);
 
         assert_eq!(candidates.len(), COMPILER_RESOLVER_TOP_K);
+    }
+
+    #[test]
+    fn candidate_retrieval_ignores_type_only_candidates() {
+        let mut pages = HashMap::new();
+        for title in ["/plan 规划模式", "1-of-1 DVN 配置", "1M 上下文"] {
+            let page = WikiPage::new(title, format!("# {title}\n"), test_scope())
+                .with_entry_type(EntryType::Concept)
+                .with_status(EntryStatus::Draft);
+            pages.insert(page.id, page);
+        }
+        let resolver = CompilerResolver::new(&pages, &test_scope());
+        let item = DraftResolverItem {
+            title: "备用机场策略".into(),
+            entry_type: EntryType::Concept,
+            body_hint: "主力机场不可用时使用备用节点和备用订阅的策略".into(),
+        };
+        let keys = dedup_keys_for_title(&item.title);
+
+        let candidates = resolver.retrieve_candidates(&item, &keys);
+
+        assert!(candidates.is_empty());
     }
 
     #[test]
