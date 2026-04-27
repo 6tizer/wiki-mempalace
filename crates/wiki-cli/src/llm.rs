@@ -68,6 +68,18 @@ pub fn ingest_llm_system_prompt() -> &'static str {
 Reply with ONLY a single JSON object (no markdown fences), schema:
 {
   "version": 1,
+  "summary": {
+    "title": "short title for the summary page",
+    "one_sentence_summary": "one sentence TL;DR in the source language",
+    "key_insights": [ "3-5 bullet-sized insight strings" ],
+    "confidence": "high|medium|low",
+    "tags": [ "2-3 wiki tags across scenario/method/product dimensions when possible" ],
+    "personal_note": "how this relates to Tizer's workflow, or empty string",
+    "source_author": "author if identifiable in text, else null",
+    "source_publisher": "platform or publisher if identifiable, else null",
+    "source_published_at": "publication time if identifiable, else null",
+    "external_url": "source article URL if available, else null"
+  },
   "summary_title": "short title for a wiki page (same language as source)",
   "summary_markdown": "optional extra markdown; if one_sentence_summary is set, put supporting detail here",
   "one_sentence_summary": "one sentence TL;DR in the source language",
@@ -78,21 +90,47 @@ Reply with ONLY a single JSON object (no markdown fences), schema:
   "source_publisher": "platform or publisher if identifiable, else null",
   "source_published_at": "publication time if identifiable, else null",
   "claims": [ { "text": "atomic factual claim in the same language as the source", "tier": "semantic", "tags": [ "short claim-specific wiki tags" ] } ],
-  "entities": [ { "label": "EntityName", "kind": "library" } ],
+  "concepts": [
+    {
+      "canonical_name": "standard concept page title",
+      "kind": "concept",
+      "definition": "one concise Chinese definition",
+      "key_points": [ "2-5 useful points" ],
+      "tags": [ "2-3 wiki tags" ],
+      "related_names": [ "related concept/entity names" ],
+      "category": "scenario|method|product|null"
+    }
+  ],
+  "entities": [
+    {
+      "label": "EntityName",
+      "kind": "person|project|library|file_path|decision|other|concept",
+      "canonical_name": "standard entity page title",
+      "category": "product|company|person|project|library|model|tool|null",
+      "definition": "definition if this is concept-like",
+      "profile": "entity profile if this is a concrete product/company/person/project",
+      "key_points": [ "2-5 useful points" ],
+      "tags": [ "2-3 wiki tags" ],
+      "related_names": [ "related concept/entity names" ]
+    }
+  ],
   "relationships": [ { "from_label": "EntityA", "relation": "uses", "to_label": "EntityB" } ]
 }
 Rules:
 - "tier" must be one of: working, episodic, semantic, procedural
 - "kind" must be one of: person, project, library, concept, file_path, decision, other
 - "relation" must be one of: uses, depends_on, contradicts, caused, fixed, supersedes, related
-- claims: 0–12 items, each one short standalone sentence (these become "extracted concepts" in the vault)
+- Create one summary and extract visible wiki entries.
+- concepts: target 3-7 per detailed article; 3-4 is fine for short articles. Avoid overly generic names like "AI", "工具", "效率".
+- entities: concrete products, companies, people, projects, libraries, models, and tools. If the item is a method or idea, put it in concepts instead.
+- claims: 0–12 items, each one short standalone sentence. Claims support search but do not replace concept/entity pages.
 - claim tags: optional, 0–6 items per claim, specific to that claim
-- entities: 0–10 items, extract named entities (people, projects, libraries, concepts, decisions)
 - relationships: 0–10 items, typed directed edges between entities
 - key_insights: 0–8 items
 - top-level tags: 0–12 items, source/summary-level only
 - confidence must be exactly one of: high, medium, low
 - Prefer filling one_sentence_summary + key_insights; use summary_markdown only when needed for nuance
+- Prefer Chinese content. Keep official English product names and exact capitalization when appropriate.
 - Do not include keys other than those listed."#
 }
 

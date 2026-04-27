@@ -228,6 +228,23 @@ impl<H: WikiHook> LlmWikiEngine<H> {
         Ok(())
     }
 
+    /// Insert or replace a human-readable wiki page and emit PageWritten for
+    /// downstream consumers such as Mempalace.
+    pub fn write_page(&mut self, page: wiki_core::WikiPage, actor: &str) -> PageId {
+        let page_id = page.id;
+        self.store.pages.insert(page_id, page);
+        self.audit(
+            AuditOperation::WritePage,
+            actor,
+            format!("wrote page {}", page_id.0),
+        );
+        self.emit(WikiEvent::PageWritten {
+            page_id,
+            at: OffsetDateTime::now_utc(),
+        });
+        page_id
+    }
+
     pub fn supersede(
         &mut self,
         old_id: ClaimId,
@@ -1449,6 +1466,27 @@ mod tests {
             matches!(
                 event,
                 WikiEvent::LintRunFinished { findings: emitted, .. } if *emitted == findings.len()
+            )
+        }));
+    }
+
+    #[test]
+    fn write_page_emits_page_written_event() {
+        let mut eng = LlmWikiEngine::new(DomainSchema::permissive_default());
+        let page = WikiPage::new(
+            "Compiled",
+            "body",
+            Scope::Private {
+                agent_id: "a".into(),
+            },
+        );
+        let page_id = page.id;
+        eng.write_page(page, "test");
+        assert!(eng.store.pages.contains_key(&page_id));
+        assert!(eng.outbox.iter().any(|event| {
+            matches!(
+                event,
+                WikiEvent::PageWritten { page_id: id, .. } if *id == page_id
             )
         }));
     }

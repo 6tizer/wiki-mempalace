@@ -583,6 +583,12 @@ fn apply_plan_to_repo<R: WikiRepository>(
             status: page.status,
             created_at: Some(now),
             status_entered_at: Some(now),
+            confidence: wiki_core::Confidence::default(),
+            tags: Vec::new(),
+            source_url: None,
+            source_tags: Vec::new(),
+            compiled_by: None,
+            last_compiled_at: None,
         };
         desired.refresh_outbound_links();
 
@@ -631,6 +637,12 @@ fn apply_plan_to_repo<R: WikiRepository>(
                     status: page.status,
                     created_at: Some(now),
                     status_entered_at: Some(now),
+                    confidence: wiki_core::Confidence::default(),
+                    tags: Vec::new(),
+                    source_url: None,
+                    source_tags: Vec::new(),
+                    compiled_by: None,
+                    last_compiled_at: None,
                 });
                 if let Some(inserted) = snapshot.pages.iter_mut().find(|p| p.id == page.page_id) {
                     inserted.refresh_outbound_links();

@@ -6,12 +6,12 @@ use std::path::{Path, PathBuf};
 use time::{format_description::well_known::Rfc3339, Duration, OffsetDateTime};
 use walkdir::WalkDir;
 use wiki_core::{
-    document_visible_to_viewer, normalize_and_validate_tag_groups, parse_memory_tier, ClaimId,
-    CompositeSearchPorts, Confidence, DomainSchema, Entity, EntityId, EntityKind, EntryStatus,
-    EntryType, FixAction, FixActionType, FixPatch, FusionConfig, GapFinding, GapSeverity,
-    LlmIngestPlanV1, MemoryTier, PageContract, PageId, QueryContext, RelationKind, Scope,
-    SessionCrystallizationInput, SourceId, StrategyExecutionPolicy, StrategyReport,
-    StrategySeverity, TypedEdge, WikiEvent, WikiMetricsReport, WikiPage,
+    document_visible_to_viewer, parse_memory_tier, ClaimId, CompositeSearchPorts, Confidence,
+    DomainSchema, Entity, EntityId, EntityKind, EntryStatus, EntryType, FixAction, FixActionType,
+    FixPatch, FusionConfig, GapFinding, GapSeverity, LlmIngestPlanV1, MemoryTier, PageContract,
+    PageId, QueryContext, RelationKind, Scope, SessionCrystallizationInput, SourceId,
+    StrategyExecutionPolicy, StrategyReport, StrategySeverity, TypedEdge, WikiEvent,
+    WikiMetricsReport, WikiPage,
 };
 use wiki_kernel::{
     collect_wiki_metrics, finalize_consumed_page, format_claim_doc_id, initial_status_for,
@@ -42,6 +42,11 @@ mod orphan_governance;
 mod palace_init;
 mod vault_audit;
 mod vault_backfill;
+mod wiki_compiler;
+
+use wiki_compiler::preflight_llm_plan_tags;
+#[cfg(test)]
+use wiki_compiler::{batch_source_tags_for_ingest, BatchIngestContext};
 
 const DEFAULT_MEMPALACE_CONSUMER_TAG: &str = "mempalace";
 const DEFAULT_DASHBOARD_OUTPUT: &str = "wiki/reports/dashboard.html";
@@ -371,6 +376,15 @@ enum Cmd {
         /// vault 根目录（含 sources/）；默认取 $WIKI_VAULT_DIR 或 ~/Documents/wiki
         #[arg(long)]
         vault: Option<PathBuf>,
+        /// 可选：只处理 sources/<origin>/ 下的 source；all 表示不过滤
+        #[arg(long)]
+        origin: Option<String>,
+        /// 可选：只处理指定 source Markdown 路径
+        #[arg(long)]
+        source_path: Option<PathBuf>,
+        /// 编译写入 scope；默认 shared:wiki
+        #[arg(long)]
+        scope: Option<String>,
         /// 限制处理条数（用于测试）
         #[arg(long)]
         limit: Option<usize>,
@@ -2704,27 +2718,38 @@ fn run_with_engine(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         }
         Cmd::BatchIngest {
             ref vault,
+            ref origin,
+            ref source_path,
+            ref scope,
             limit,
             dry_run,
             delay_secs,
         } => {
-            let vault_dir = vault.clone().unwrap_or_else(default_vault_path);
+            let vault_dir = vault
+                .clone()
+                .unwrap_or_else(wiki_compiler::default_vault_path);
             let heartbeat = AutomationHeartbeat {
                 repo: &repo,
                 run_id: None,
             };
-            batch_ingest_cmd(
+            wiki_compiler::batch_ingest_cmd(
                 &mut eng,
                 &repo,
-                &cli,
-                &vault_dir,
-                limit,
-                dry_run,
-                delay_secs,
-                sync_wiki,
-                wiki_root.as_deref(),
+                &cli.llm_config,
+                cli.vectors,
                 &schema,
                 &heartbeat,
+                wiki_compiler::BatchIngestOptions {
+                    vault: &vault_dir,
+                    limit,
+                    dry_run,
+                    delay_secs,
+                    sync_wiki,
+                    wiki_root: wiki_root.as_deref(),
+                    scope: scope.as_deref(),
+                    origin: origin.as_deref(),
+                    source_path: source_path.as_deref(),
+                },
             )?;
         }
         Cmd::Automation {
@@ -3206,6 +3231,7 @@ mod tests {
     fn tag_test_plan_with_claim_tags(claim_tags: Vec<String>) -> LlmIngestPlanV1 {
         LlmIngestPlanV1 {
             version: 1,
+            summary: wiki_core::llm_ingest_plan::LlmSummaryDraft::default(),
             summary_title: String::new(),
             summary_markdown: String::new(),
             one_sentence_summary: String::new(),
@@ -3220,6 +3246,7 @@ mod tests {
                 tier: "semantic".to_string(),
                 tags: claim_tags,
             }],
+            concepts: Vec::new(),
             entities: Vec::new(),
             relationships: Vec::new(),
         }
@@ -4455,9 +4482,28 @@ fn dispatch_automation_job(
     heartbeat.tick();
     match job {
         AutomationJob::BatchIngest => {
-            let vault = cli.wiki_dir.clone().unwrap_or_else(default_vault_path);
-            batch_ingest_cmd(
-                eng, repo, cli, &vault, None, false, 1, sync_wiki, wiki_root, schema, heartbeat,
+            let vault = cli
+                .wiki_dir
+                .clone()
+                .unwrap_or_else(wiki_compiler::default_vault_path);
+            wiki_compiler::batch_ingest_cmd(
+                eng,
+                repo,
+                &cli.llm_config,
+                cli.vectors,
+                schema,
+                heartbeat,
+                wiki_compiler::BatchIngestOptions {
+                    vault: &vault,
+                    limit: None,
+                    dry_run: false,
+                    delay_secs: 1,
+                    sync_wiki,
+                    wiki_root,
+                    scope: None,
+                    origin: None,
+                    source_path: None,
+                },
             )
         }
         AutomationJob::Lint => run_lint_job(eng, repo, viewer, sync_wiki, wiki_root),
@@ -4785,500 +4831,4 @@ impl MempalaceWikiSink for CliMempalaceSink {
         println!("mempalace source_ingested {}", source_id.0);
         Ok(())
     }
-}
-
-// ── batch-ingest 相关 ──
-
-/// 一条 source 的扫描结果
-struct SourceEntry {
-    path: PathBuf,
-    title: String,
-    url: String,
-    body: String,
-    /// 来自 frontmatter `tags`（逗号分隔）
-    source_tags: Vec<String>,
-    created_at: String,
-}
-
-/// batch 单条写入 summary / 引擎时携带的 vault 元数据
-struct BatchIngestContext {
-    source_title: String,
-    source_url: String,
-    source_tags: Vec<String>,
-}
-
-/// 单条 source 编译结果
-struct IngestOneStats {
-    claims: usize,
-    entities: usize,
-    relationships: usize,
-    source_id: String,
-    /// 完整 LLM 计划（用于写 pages/summary 与调试）
-    plan: LlmIngestPlanV1,
-}
-
-/// 解析 frontmatter 中的 tags 字符串（支持中英文逗号）
-fn parse_tags_csv(raw: Option<&String>) -> Vec<String> {
-    raw.map(|s| {
-        s.split([',', '，'])
-            .map(|t| t.trim().to_string())
-            .filter(|t| !t.is_empty())
-            .collect()
-    })
-    .unwrap_or_default()
-}
-
-/// YAML 双引号内转义（与 wiki-kernel 投影一致）
-fn yaml_escape_vault(s: &str) -> String {
-    s.replace('\\', "\\\\").replace('"', "\\\"")
-}
-
-/// 输出 `name:\n  - "..."` 或 `name: []`
-fn yaml_string_list_block(name: &str, items: &[String]) -> String {
-    if items.is_empty() {
-        format!("{name}: []\n")
-    } else {
-        let mut out = format!("{name}:\n");
-        for it in items {
-            out.push_str(&format!("  - \"{}\"\n", yaml_escape_vault(it)));
-        }
-        out
-    }
-}
-
-fn batch_source_tags_for_ingest(batch: &BatchIngestContext) -> &[String] {
-    &batch.source_tags
-}
-
-fn preflight_llm_plan_tags(
-    plan: &LlmIngestPlanV1,
-    source_tags: &[String],
-    schema: &DomainSchema,
-) -> Result<(), wiki_core::TagPolicyError> {
-    let mut groups = Vec::with_capacity(plan.claims.len() + 1);
-    groups.push(source_tags);
-    groups.extend(plan.claims.iter().map(|claim| claim.tags.as_slice()));
-    normalize_and_validate_tag_groups(&groups, schema)?;
-    Ok(())
-}
-
-fn entry_status_yaml(status: EntryStatus) -> &'static str {
-    match status {
-        EntryStatus::Draft => "draft",
-        EntryStatus::InReview => "in_review",
-        EntryStatus::Approved => "approved",
-        EntryStatus::NeedsUpdate => "needs_update",
-    }
-}
-
-/// 扫描 vault/sources/ 中 compiled_to_wiki: false 的 source 文件
-fn scan_uncompiled_sources(
-    vault: &std::path::Path,
-) -> Result<Vec<SourceEntry>, Box<dyn std::error::Error>> {
-    let sources_dir = vault.join("sources");
-    if !sources_dir.exists() {
-        return Err(format!("sources 目录不存在：{}", sources_dir.display()).into());
-    }
-    let re_fm = regex::Regex::new(r"(?s)^---\s*\n(.*?)\n---\s*\n")?;
-    let mut entries = Vec::new();
-
-    for dent in walkdir::WalkDir::new(&sources_dir)
-        .into_iter()
-        .filter_map(|e| e.ok())
-    {
-        let path = dent.path();
-        if path.extension().and_then(|e| e.to_str()) != Some("md") {
-            continue;
-        }
-        let content = std::fs::read_to_string(path)?;
-        let fm_caps = re_fm.captures(&content);
-        let fm_text = fm_caps
-            .as_ref()
-            .and_then(|c| c.get(1))
-            .map(|m| m.as_str())
-            .unwrap_or("");
-        let fm = parse_frontmatter_kv(fm_text);
-
-        if fm.get("compiled_to_wiki").map(|v| v.as_str()) != Some("false") {
-            continue;
-        }
-
-        let title = fm.get("title").cloned().unwrap_or_default();
-        let url = fm.get("url").cloned().unwrap_or_default();
-        let source_tags = parse_tags_csv(fm.get("tags"));
-        let created_at = fm.get("created_at").cloned().unwrap_or_default();
-
-        let body = if let Some(caps) = fm_caps {
-            let fm_end = caps.get(0).unwrap().end();
-            content[fm_end..].trim().to_string()
-        } else {
-            content.trim().to_string()
-        };
-
-        if body.len() < 50 {
-            eprintln!("  跳过（正文过短）：{}", title);
-            continue;
-        }
-
-        entries.push(SourceEntry {
-            path: path.to_path_buf(),
-            title,
-            url,
-            body,
-            source_tags,
-            created_at,
-        });
-    }
-
-    entries.sort_by(|a, b| a.title.cmp(&b.title));
-    Ok(entries)
-}
-
-/// 简易 YAML frontmatter key: value 解析
-fn parse_frontmatter_kv(text: &str) -> std::collections::HashMap<String, String> {
-    let mut map = std::collections::HashMap::new();
-    for line in text.lines() {
-        let line = line.trim();
-        if line.is_empty() || line.starts_with('#') {
-            continue;
-        }
-        if let Some((key, val)) = line.split_once(':') {
-            let key = key.trim().to_string();
-            let val = val.trim().to_string();
-            let val = val
-                .strip_prefix('"')
-                .and_then(|v| v.strip_suffix('"'))
-                .unwrap_or(&val)
-                .to_string();
-            if !key.is_empty() {
-                map.insert(key, val);
-            }
-        }
-    }
-    map
-}
-
-/// 编译单条 source：LLM 抽取 + 写入引擎
-fn ingest_one_source(
-    eng: &mut LlmWikiEngine<NoopWikiHook>,
-    repo: &SqliteRepository,
-    cfg: &llm::LlmConfig,
-    uri: &str,
-    body: &str,
-    scope: &Scope,
-    vectors: bool,
-    llm_config_path: &std::path::Path,
-    schema: &DomainSchema,
-    batch: &BatchIngestContext,
-) -> Result<IngestOneStats, Box<dyn std::error::Error>> {
-    let user = format!("Source URI:\n{uri}\n\nBody:\n{body}");
-    let reply = llm::complete_chat(cfg, llm::ingest_llm_system_prompt(), &user, 8192)?;
-    let slice = llm::parse_json_object_slice(&reply);
-    let plan: LlmIngestPlanV1 =
-        serde_json::from_str(slice).map_err(|e| format!("JSON parse error: {e}; raw={reply}"))?;
-    preflight_llm_plan_tags(&plan, batch_source_tags_for_ingest(batch), schema)?;
-
-    let sid = eng.ingest_raw_with_tags(
-        uri,
-        body,
-        scope.clone(),
-        "batch-ingest",
-        batch_source_tags_for_ingest(batch),
-    )?;
-    eng.save_to_repo_and_flush_outbox_with_policy(repo, 128, 3)?;
-
-    if vectors {
-        let app = llm::load_app_config(llm_config_path)?;
-        let body_short = truncate_chars(body, 16000);
-        let vec = llm::embed_first(&app, &body_short)?;
-        repo.upsert_embedding(&format!("source:{}", sid.0), &vec)?;
-    }
-
-    for c in &plan.claims {
-        let tier = parse_memory_tier(&c.tier).unwrap_or(MemoryTier::Semantic);
-        let cid = eng.file_claim_with_tags(
-            c.text.clone(),
-            scope.clone(),
-            tier,
-            "batch-ingest",
-            c.tags.iter().map(String::as_str),
-        )?;
-        eng.attach_sources(cid, &[sid])?;
-        eng.save_to_repo_and_flush_outbox_with_policy(repo, 128, 3)?;
-        if vectors {
-            let app = llm::load_app_config(llm_config_path)?;
-            let vec = llm::embed_first(&app, &c.text)?;
-            repo.upsert_embedding(&format_claim_doc_id(cid), &vec)?;
-        }
-    }
-
-    for ed in &plan.entities {
-        let kind = EntityKind::parse(&ed.kind);
-        let entity = Entity {
-            id: EntityId(uuid::Uuid::new_v4()),
-            kind,
-            label: ed.label.clone(),
-            scope: scope.clone(),
-        };
-        // schema 可能拒绝不在白名单的 kind，跳过即可
-        let _ = eng.add_entity(entity);
-    }
-
-    for rd in &plan.relationships {
-        let from_id = eng
-            .store
-            .entities
-            .values()
-            .find(|e| e.label.eq_ignore_ascii_case(&rd.from_label))
-            .map(|e| e.id);
-        let to_id = eng
-            .store
-            .entities
-            .values()
-            .find(|e| e.label.eq_ignore_ascii_case(&rd.to_label))
-            .map(|e| e.id);
-        if let (Some(from), Some(to)) = (from_id, to_id) {
-            let rel = RelationKind::parse(&rd.relation);
-            let edge = TypedEdge {
-                from,
-                to,
-                relation: rel,
-                confidence: 0.7,
-                source_ids: vec![sid],
-            };
-            // schema 可能拒绝不在白名单的 relation，跳过即可
-            let _ = eng.add_edge(edge);
-        }
-    }
-    eng.save_to_repo_and_flush_outbox_with_policy(repo, 128, 3)?;
-
-    // summary 页：磁盘与引擎均约定为 EntryType::Summary + 五段正文
-    if plan.should_materialize_summary_page() {
-        let page_title = format!("摘要：{}", batch.source_title);
-        let foot_url = if batch.source_url.trim().is_empty() {
-            uri
-        } else {
-            batch.source_url.as_str()
-        };
-        let md = plan.to_five_section_summary_body(Some(foot_url));
-        let et = EntryType::Summary;
-        let status = initial_status_for(Some(&et), schema);
-        let page = WikiPage::new(page_title, md, scope.clone())
-            .with_entry_type(et)
-            .with_status(status);
-        eng.store.pages.insert(page.id, page);
-        eng.save_to_repo_and_flush_outbox_with_policy(repo, 128, 3)?;
-    }
-
-    Ok(IngestOneStats {
-        claims: plan.claims.len(),
-        entities: plan.entities.len(),
-        relationships: plan.relationships.len(),
-        source_id: sid.0.to_string(),
-        plan: plan.clone(),
-    })
-}
-
-/// 以 Notion / vault-standards 完整契约写 summary 页到 `pages/summary/`
-fn write_batch_summary(
-    wiki_root: &std::path::Path,
-    source_title: &str,
-    plan: &LlmIngestPlanV1,
-    source_url: &str,
-    source_tags: &[String],
-    source_created_at: &str,
-    schema: &DomainSchema,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let summary_dir = wiki_root.join("pages").join("summary");
-    std::fs::create_dir_all(&summary_dir)?;
-
-    // 文件名：中文标题，仅将 `/` 替换为 `-`（与 docs/vault-standards.md 一致）
-    let filename = format!("摘要：{}.md", source_title.replace('/', "-"));
-    let path = summary_dir.join(&filename);
-
-    let now = time::OffsetDateTime::now_utc();
-    let now_str = now.format(&time::format_description::well_known::Rfc3339)?;
-    let created_str = if source_created_at.trim().is_empty() {
-        now_str.clone()
-    } else {
-        source_created_at.trim().to_string()
-    };
-
-    let status = initial_status_for(Some(&EntryType::Summary), schema);
-    let status_s = entry_status_yaml(status);
-    let conf = plan.normalized_summary_confidence();
-    let foot = if source_url.trim().is_empty() {
-        None
-    } else {
-        Some(source_url.trim())
-    };
-    let body_sections = plan.to_five_section_summary_body(foot);
-
-    let title_esc = yaml_escape_vault(&format!("摘要：{source_title}"));
-    let url_esc = yaml_escape_vault(source_url);
-
-    let mut fm = String::from("---\n");
-    fm.push_str(&format!("title: \"{title_esc}\"\n"));
-    fm.push_str("entry_type: summary\n");
-    fm.push_str(&format!("status: {status_s}\n"));
-    fm.push_str(&format!("confidence: {conf}\n"));
-    fm.push_str(&format!("source_url: \"{url_esc}\"\n"));
-    fm.push_str(&yaml_string_list_block("source_tags", source_tags));
-    fm.push_str(&yaml_string_list_block("tags", &plan.tags));
-    fm.push_str(&format!(
-        "created_at: \"{}\"\n",
-        yaml_escape_vault(&created_str)
-    ));
-    fm.push_str(&format!(
-        "updated_at: \"{}\"\n",
-        yaml_escape_vault(&now_str)
-    ));
-    fm.push_str(&format!(
-        "last_compiled_at: \"{}\"\n",
-        yaml_escape_vault(&now_str)
-    ));
-    fm.push_str("compiled_by: batch-ingest\n");
-    fm.push_str("---\n\n");
-
-    let h1_esc = source_title.replace('/', "-");
-    let content = format!(
-        "{fm}# 摘要：{h1_esc}\n\n{body_sections}",
-        fm = fm,
-        h1_esc = h1_esc,
-        body_sections = body_sections
-    );
-
-    std::fs::write(&path, content)?;
-    Ok(())
-}
-
-/// batch-ingest 子命令入口
-fn default_vault_path() -> PathBuf {
-    if let Ok(v) = std::env::var("WIKI_VAULT_DIR") {
-        return PathBuf::from(v);
-    }
-    let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
-    PathBuf::from(home).join("Documents").join("wiki")
-}
-
-fn batch_ingest_cmd(
-    eng: &mut LlmWikiEngine<NoopWikiHook>,
-    repo: &SqliteRepository,
-    cli: &Cli,
-    vault: &std::path::Path,
-    limit: Option<usize>,
-    dry_run: bool,
-    delay_secs: u64,
-    _sync_wiki: bool,
-    wiki_root: Option<&std::path::Path>,
-    schema: &DomainSchema,
-    heartbeat: &AutomationHeartbeat<'_>,
-) -> Result<(), Box<dyn std::error::Error>> {
-    heartbeat.tick();
-    eprintln!("扫描未编译 source...");
-    let mut sources = scan_uncompiled_sources(vault)?;
-    eprintln!("  → 找到 {} 条未编译 source", sources.len());
-
-    if let Some(n) = limit {
-        sources.truncate(n);
-        eprintln!("  → --limit {}，处理前 {} 条", n, sources.len());
-    }
-
-    if dry_run {
-        for (i, s) in sources.iter().enumerate() {
-            println!(
-                "{}/{}) {} ({} 字符)",
-                i + 1,
-                sources.len(),
-                s.title,
-                s.body.len()
-            );
-        }
-        return Ok(());
-    }
-
-    if sources.is_empty() {
-        eprintln!("  → nothing to compile, done.");
-        return Ok(());
-    }
-
-    let cfg = llm::load_llm_config(&cli.llm_config)?;
-    let scope = parse_scope("private:batch-ingest");
-
-    let mut ok_count = 0usize;
-    let mut err_count = 0usize;
-
-    for (i, src) in sources.iter().enumerate() {
-        heartbeat.tick();
-        let uri = if src.url.is_empty() {
-            format!("file://{}", src.path.display())
-        } else {
-            src.url.clone()
-        };
-
-        eprintln!("[{}/{}] {}...", i + 1, sources.len(), src.title);
-
-        let batch_ctx = BatchIngestContext {
-            source_title: src.title.clone(),
-            source_url: src.url.clone(),
-            source_tags: src.source_tags.clone(),
-        };
-
-        match ingest_one_source(
-            eng,
-            repo,
-            &cfg,
-            &uri,
-            &src.body,
-            &scope,
-            cli.vectors,
-            &cli.llm_config,
-            schema,
-            &batch_ctx,
-        ) {
-            Ok(stats) => {
-                eprintln!(
-                    "  ✓ claims={} entities={} rels={} source={}",
-                    stats.claims, stats.entities, stats.relationships, stats.source_id,
-                );
-
-                // 更新 source .md 的 compiled_to_wiki 标记
-                let content = std::fs::read_to_string(&src.path)?;
-                let new_content =
-                    content.replace("compiled_to_wiki: false", "compiled_to_wiki: true");
-                if new_content != content {
-                    std::fs::write(&src.path, new_content)?;
-                }
-
-                // 按 vault-standards 写 summary 页到 pages/summary/
-                if let Some(root) =
-                    wiki_root.filter(|_| stats.plan.should_materialize_summary_page())
-                {
-                    write_batch_summary(
-                        root,
-                        &src.title,
-                        &stats.plan,
-                        &src.url,
-                        &src.source_tags,
-                        &src.created_at,
-                        schema,
-                    )?;
-                }
-
-                ok_count += 1;
-            }
-            Err(e) => {
-                eprintln!("  ✗ 失败：{e}");
-                err_count += 1;
-            }
-        }
-
-        // 限流
-        if i + 1 < sources.len() && delay_secs > 0 {
-            std::thread::sleep(std::time::Duration::from_secs(delay_secs));
-        }
-    }
-
-    eprintln!("\n完成：成功={ok_count} 失败={err_count}");
-    Ok(())
 }

@@ -1050,6 +1050,7 @@ mod tests {
         let source_tags = vec!["new-source".to_string()];
         let plan = wiki_core::LlmIngestPlanV1 {
             version: 1,
+            summary: wiki_core::llm_ingest_plan::LlmSummaryDraft::default(),
             summary_title: String::new(),
             summary_markdown: String::new(),
             one_sentence_summary: String::new(),
@@ -1064,6 +1065,7 @@ mod tests {
                 tier: "semantic".to_string(),
                 tags: vec!["new-claim".to_string()],
             }],
+            concepts: Vec::new(),
             entities: Vec::new(),
             relationships: Vec::new(),
         };

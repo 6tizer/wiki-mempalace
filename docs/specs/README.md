@@ -30,5 +30,6 @@
 - [notion-sync-index-backfill/](notion-sync-index-backfill/) — Historical Notion index backfill for already imported source pages. Merged.
 - [notion-sync-trusted-tag-policy/](notion-sync-trusted-tag-policy/) — Treat Notion AI auto-fill tags as trusted upstream tags during Notion sync. Merged.
 - [notion-source-vault-projection/](notion-source-vault-projection/) — Project DB-backed `notion://` sources into visible Obsidian source Markdown, refresh Notion block bodies, and emit Obsidian-safe source tags. Merged PR #42；production apply completed.
+- [production-wiki-compiler/](production-wiki-compiler/) — Notion-equivalent local compiler: source -> summary + concept/entity pages with backlinks. Implementation ready on `codex/production-wiki-compiler`; production tiny sample still pending.
 - [persist-snapshot-outbox/](persist-snapshot-outbox/) — C16a: `wiki_state` + outbox append in one SQLite transaction; replaces split `save_to_repo` / `flush_outbox` autocommit for crash-safety. Merged PR #25. PRD: [storage-embeddings-followup.md](../prd/storage-embeddings-followup.md).
 - [embedding-ann-index/](embedding-ann-index/) — C16b: bounded-work vector search for `wiki_embedding` (optional extension / ANN; fallback to full scan). PRD: [storage-embeddings-followup.md](../prd/storage-embeddings-followup.md)。
