@@ -606,6 +606,12 @@ fn materialize_compiler_pages_with_resolver(
                 .push(format!("skip generic entity/concept: {name}"));
             continue;
         }
+        if is_low_signal_source_local_concept(name) {
+            stats
+                .warnings
+                .push(format!("skip low-signal concept: {name}"));
+            continue;
+        }
         let decision = resolver.resolve(&DraftResolverItem::concept(concept));
         match decision {
             ResolverDecision::ResolvedExisting(resolved) => {
@@ -682,6 +688,13 @@ fn materialize_compiler_pages_with_resolver(
     }
 
     for ed in &plan.entities {
+        let entity_label = ed.canonical_or_label();
+        if entity_declares_concept_kind(ed) && is_low_signal_source_local_concept(entity_label) {
+            stats
+                .warnings
+                .push(format!("skip low-signal concept: {entity_label}"));
+            continue;
+        }
         let Some(kind) = compiler_page_kind(ed) else {
             stats
                 .warnings
@@ -905,10 +918,24 @@ fn compiler_page_kind(ed: &LlmEntityDraft) -> Option<EntryType> {
     }
 }
 
+fn entity_declares_concept_kind(ed: &LlmEntityDraft) -> bool {
+    matches!(
+        ed.kind.trim().to_ascii_lowercase().as_str(),
+        "concept" | "decision"
+    )
+}
+
 fn is_generic_concept(label: &str) -> bool {
     matches!(
         normalize_title_for_dedup(label).as_str(),
         "ai" | "人工智能" | "效率" | "技术" | "产品" | "工具" | "系统"
+    )
+}
+
+fn is_low_signal_source_local_concept(label: &str) -> bool {
+    matches!(
+        compact_title_key(label).as_str(),
+        "premium付费订阅" | "早期访问" | "话题订阅"
     )
 }
 
@@ -1017,7 +1044,7 @@ impl<'a> CompilerResolver<'a> {
                     title: page.title.clone(),
                     entry_type,
                     aliases: extract_page_alias_hints(page),
-                    excerpt: truncate_chars(&page.markdown, 360),
+                    excerpt: resolver_candidate_excerpt(page),
                     score: 0,
                     match_reasons: Vec::new(),
                 })
@@ -1054,7 +1081,7 @@ impl<'a> CompilerResolver<'a> {
             title: page.title.clone(),
             entry_type,
             aliases: extract_page_alias_hints(page),
-            excerpt: truncate_chars(&page.markdown, 360),
+            excerpt: resolver_candidate_excerpt(page),
             score: 0,
             match_reasons: Vec::new(),
         });
@@ -1284,6 +1311,15 @@ fn extract_page_alias_hints(page: &WikiPage) -> Vec<String> {
     aliases
 }
 
+fn resolver_candidate_excerpt(page: &WikiPage) -> String {
+    let md = page
+        .markdown
+        .split("\n## 来源引用\n")
+        .next()
+        .unwrap_or(&page.markdown);
+    truncate_chars(md, 360)
+}
+
 fn scope_key(scope: &Scope) -> String {
     match scope {
         Scope::Private { agent_id } => format!("private:{agent_id}"),
@@ -1484,8 +1520,11 @@ fn canonical_output_title(kind: &EntryType, requested_title: &str) -> String {
         if let Some(repo) = github_repo_name(title) {
             return canonical_repo_title(repo);
         }
+        if let Some(stripped) = strip_entity_descriptor_suffix(title) {
+            return format_cjk_ascii_boundaries(&stripped);
+        }
     }
-    title.to_string()
+    format_cjk_ascii_boundaries(title)
 }
 
 fn github_repo_name(title: &str) -> Option<&str> {
@@ -1505,6 +1544,100 @@ fn canonical_repo_title(repo: &str) -> String {
         "n8n" => "n8n".to_string(),
         _ => repo.trim().to_string(),
     }
+}
+
+fn strip_entity_descriptor_suffix(title: &str) -> Option<String> {
+    let title = title.trim();
+    let mut split_at = None;
+    for (idx, ch) in title.char_indices() {
+        if idx == 0 {
+            if !ch.is_ascii_alphanumeric() {
+                return None;
+            }
+            continue;
+        }
+        if !(ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.')) {
+            split_at = Some(idx);
+            break;
+        }
+    }
+    let split_at = split_at?;
+    let prefix = title[..split_at].trim();
+    let suffix = title[split_at..].trim();
+    if prefix.is_empty()
+        || suffix.is_empty()
+        || matches!(compact_title_key(prefix).as_str(), "ai" | "api" | "llm")
+    {
+        return None;
+    }
+    if entity_descriptor_suffix_is_generic(suffix) {
+        Some(prefix.to_string())
+    } else {
+        None
+    }
+}
+
+fn entity_descriptor_suffix_is_generic(suffix: &str) -> bool {
+    if !suffix.chars().any(is_cjk_alnum) {
+        return false;
+    }
+    let key = compact_title_key(suffix);
+    matches!(
+        key.as_str(),
+        "统一aiapi聚合平台"
+            | "aiapi聚合平台"
+            | "api聚合平台"
+            | "聚合平台"
+            | "平台原twitter"
+            | "平台"
+            | "应用"
+            | "公众号"
+            | "模型"
+            | "项目"
+            | "工具"
+            | "服务"
+    )
+}
+
+fn format_cjk_ascii_boundaries(title: &str) -> String {
+    let mut out = String::new();
+    let mut prev_kind = CharTitleKind::Other;
+    for ch in title.trim().chars() {
+        let kind = if ch.is_ascii_alphanumeric() {
+            CharTitleKind::AsciiAlnum
+        } else if is_cjk_alnum(ch) {
+            CharTitleKind::CjkAlnum
+        } else if ch.is_whitespace() {
+            CharTitleKind::Space
+        } else {
+            CharTitleKind::Other
+        };
+        if matches!(
+            (prev_kind, kind),
+            (CharTitleKind::AsciiAlnum, CharTitleKind::CjkAlnum)
+                | (CharTitleKind::CjkAlnum, CharTitleKind::AsciiAlnum)
+        ) && !out.ends_with(' ')
+        {
+            out.push(' ');
+        }
+        if kind == CharTitleKind::Space {
+            if !out.ends_with(' ') {
+                out.push(' ');
+            }
+        } else {
+            out.push(ch);
+        }
+        prev_kind = kind;
+    }
+    out.trim().to_string()
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum CharTitleKind {
+    AsciiAlnum,
+    CjkAlnum,
+    Space,
+    Other,
 }
 
 fn dedup_keys_for_title(title: &str) -> HashSet<String> {
@@ -1647,6 +1780,10 @@ fn is_cjk_punctuation(ch: char) -> bool {
             | '·'
             | '—'
     )
+}
+
+fn is_cjk_alnum(ch: char) -> bool {
+    ch.is_alphanumeric() && !ch.is_ascii()
 }
 
 fn replace_section_body(md: &str, section: &str, body: &str) -> Option<String> {
@@ -2140,6 +2277,81 @@ mod tests {
     }
 
     #[test]
+    fn compiler_quality_rules_format_titles_and_strip_entity_descriptors() {
+        assert_eq!(
+            canonical_output_title(&EntryType::Concept, "统一AI API聚合平台"),
+            "统一 AI API 聚合平台"
+        );
+        assert_eq!(
+            canonical_output_title(&EntryType::Concept, "Agent群组"),
+            "Agent 群组"
+        );
+        assert_eq!(
+            canonical_output_title(&EntryType::Entity, "APIMart统一AI API聚合平台"),
+            "APIMart"
+        );
+        assert_eq!(
+            canonical_output_title(&EntryType::Entity, "X平台（原Twitter）"),
+            "X"
+        );
+        assert_eq!(
+            canonical_output_title(&EntryType::Entity, "CodeX Agent"),
+            "CodeX Agent"
+        );
+    }
+
+    #[test]
+    fn materialization_skips_low_signal_feature_concepts() {
+        let mut eng = LlmWikiEngine::new(DomainSchema::permissive_default());
+        let mut feature_entity = entity("话题订阅");
+        feature_entity.kind = "concept".into();
+        let mut plan =
+            plan_with_entities(vec![entity("APIMart统一AI API聚合平台"), feature_entity]);
+        plan.concepts = vec![concept("统一AI API聚合平台"), concept("Premium付费订阅")];
+        let batch = BatchIngestContext {
+            source_title: "APIMart Source".into(),
+            source_url: "https://example.test/apimart".into(),
+            source_tags: vec![],
+        };
+
+        let stats = materialize_compiler_pages(
+            &mut eng,
+            &plan,
+            &batch,
+            "https://example.test/apimart",
+            &test_scope(),
+            &DomainSchema::permissive_default(),
+        );
+
+        assert_eq!(stats.concepts_created, 1);
+        assert_eq!(stats.entities_created, 1);
+        assert!(stats
+            .warnings
+            .contains(&"skip low-signal concept: Premium付费订阅".to_string()));
+        assert!(eng
+            .store
+            .pages
+            .values()
+            .any(|p| p.title == "统一 AI API 聚合平台"));
+        assert!(eng.store.pages.values().any(|p| p.title == "APIMart"));
+        assert!(!eng
+            .store
+            .pages
+            .values()
+            .any(|p| p.title == "Premium付费订阅"));
+        assert!(!eng.store.pages.values().any(|p| p.title == "话题订阅"));
+        let summary = eng
+            .store
+            .pages
+            .values()
+            .find(|p| p.title == "摘要：APIMart Source")
+            .unwrap();
+        assert!(summary.markdown.contains("[[统一 AI API 聚合平台]]"));
+        assert!(summary.markdown.contains("[[APIMart]]"));
+        assert!(!summary.markdown.contains("[[Premium付费订阅]]"));
+    }
+
+    #[test]
     fn summary_lookup_matches_normalized_title_when_source_url_was_missing() {
         let mut page = WikiPage::new(
             "摘要：nexu：一键把 OpenClaw AI Agent 接入微信和飞书的开源桌面客户端",
@@ -2267,7 +2479,7 @@ mod tests {
             .store
             .pages
             .values()
-            .find(|p| p.title == "Token计费模式")
+            .find(|p| p.title == "Token 计费模式")
             .unwrap();
         assert!(page.markdown.contains("- 输入token"));
         assert!(page.markdown.contains("- 缓存命中"));
