@@ -27,4 +27,6 @@ pub use search_ports::{
     EmptySearchPorts, InMemorySearchPorts, SearchPorts,
 };
 pub use strategy::{run_strategy_scan, StrategyScanOptions};
-pub use wiki_writer::{write_lint_report, write_projection, ProjectionStats};
+pub use wiki_writer::{
+    write_lint_report, write_projection, write_projection_pages, ProjectionStats,
+};

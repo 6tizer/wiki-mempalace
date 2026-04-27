@@ -1,6 +1,6 @@
 # PRD: Production Wiki Compiler
 
-**Status**: implementation merged in PR #44; production tiny sample pending
+**Status**: implementation merged in PR #44; PR #46 production tiny sample and safety follow-up in progress; canonicalization v2 planned before scale-up
 **Related**: `Notion Incremental Sync`, `Notion Source Vault Projection`, `Vault Backfill + Palace Init`, `DB/Vault/Palace Consistency Governance`
 
 ## Goal
@@ -18,10 +18,11 @@ human-readable reports.
 - `/Users/mac-mini/Documents/wiki/.wiki/palace.db` is the Mempalace projection layer.
 - 176 DB-backed Notion sources exist and are visible under `sources/x` and
   `sources/wechat`.
-- All 176 DB-backed Notion sources are still raw sources; they have not been
-  compiled into wiki pages.
-- Mempalace currently has page drawers from historical backfill, but the Notion
-  source compilation path has not been exercised as a full production loop.
+- Most DB-backed Notion sources are still raw sources. PR #46 used a tiny
+  production sample to test the compiler path, but broad compile has not begun.
+- Mempalace has page drawers from historical backfill. PR #46 exercised the
+  source compilation path on tiny samples; broad production scale-up remains
+  blocked on canonicalization v2.
 
 ## Target Business Flow
 
@@ -58,6 +59,37 @@ entities / relations structurally; it does not fully match the Notion compiler
 workflow that creates or updates visible concept/entity pages with backlink
 references. This PRD upgrades the compiler contract first, then proves it with a
 tiny production run.
+
+## Follow-Up: Canonicalization v2
+
+The first production samples showed that prompt-only dedup is not enough. The
+LLM can describe the same page with several names, such as `MCP connectors`,
+`MCP连接器`, or `MCP 协议`. Adding every observed alias to code or prompt does not
+scale; 100+ sources would turn the compiler into a hand-maintained glossary and
+would spend context before the article is even read.
+
+The next compiler step is a pre-write resolver:
+
+```text
+raw source
+ -> compiler draft
+ -> canonical resolver
+ -> small LLM only for ambiguous matches
+ -> write Wiki DB
+ -> project Vault
+ -> consume Mempalace
+ -> lint/audit after write
+```
+
+The resolver is the main guard before DB writes. It should use normalized title
+keys, existing page candidates, aliases, page type checks, and a bounded top-K
+candidate set from `wiki.db`. The LLM fallback should answer only the small
+question: whether a draft title and an existing page are the same canonical wiki
+entry. Confirmed aliases should become data, not an ever-growing prompt.
+
+Lint/Fixer still matter, but they are post-write governance. Their fixes must
+apply to `wiki.db` first, then trigger Vault projection, Mempalace sync, and a
+fresh audit. They must not patch Vault Markdown or `palace.db` directly.
 
 ## Scope
 
@@ -122,6 +154,17 @@ tiny production run.
   - schedule a controlled batch job,
   - pause and improve prompt/schema first.
 
+### Phase 6: Compiler Canonicalization v2
+
+- Insert a canonical resolver between compiler draft parsing and DB writes.
+- Retrieve only relevant existing concept/entity candidates per draft item; do
+  not put the whole wiki into the compiler prompt.
+- Add a small LLM fallback for ambiguous candidate decisions.
+- Persist confirmed aliases/canonical decisions outside the prompt and outside
+  hardcoded one-off code paths.
+- Keep Lint/Fixer as a post-write safety net that repairs DB state and then
+  re-runs projection/sync.
+
 ## Non-Goals
 
 - Do not compile all 176 Notion sources in the first run.
@@ -141,6 +184,9 @@ tiny production run.
 - `query` and `query/explain --palace-db` can surface the generated page.
 - A run report records commands, counts, backup path, outputs, and known issues.
 - The next scale decision is explicit and documented.
+- Before any broad compile, repeated concept/entity names from the tiny samples
+  are resolved through a bounded resolver path, not through an unbounded prompt
+  or hardcoded alias list.
 
 ## Stop Conditions
 
@@ -150,6 +196,8 @@ tiny production run.
 - outbox consumer progress does not advance after consume.
 - Mempalace misses an eligible generated page.
 - Obsidian view is confusing enough that the user cannot trust the output.
+- Canonicalization needs a whole-wiki prompt or a large hardcoded alias list to
+  pass a sample.
 
 ## Open Questions
 

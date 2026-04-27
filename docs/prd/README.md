@@ -10,7 +10,7 @@
 
 ## Active PRDs
 
-- [production-wiki-compiler.md](production-wiki-compiler.md) — Notion-equivalent local compiler: raw source -> summary + concept/entity pages -> Vault -> outbox -> Mempalace -> query/explain.
+- [production-wiki-compiler.md](production-wiki-compiler.md) — Notion-equivalent local compiler and canonicalization v2 follow-up: raw source -> summary + concept/entity pages -> Vault -> outbox -> Mempalace -> query/explain.
 - [vault-backfill-and-palace-init.md](vault-backfill-and-palace-init.md) — 历史 vault 回填、`wiki.db` 初始化、`palace.db` 初始化、共享 Agent 运行默认值。
 - [storage-embeddings-followup.md](storage-embeddings-followup.md) — C16 follow-up: single-transaction `wiki_state` + outbox write path; optional ANN/index for `wiki_embedding` search (replaces O(n) scan at scale). Spec: [persist-snapshot-outbox](../specs/persist-snapshot-outbox/requirements.md), [embedding-ann-index](../specs/embedding-ann-index/requirements.md).
 
