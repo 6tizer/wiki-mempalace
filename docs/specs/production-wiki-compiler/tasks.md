@@ -15,11 +15,11 @@
 - [x] Tests added/updated
 - [x] Docs updated
 - [x] Integration review complete
-- [ ] PR opened
-- [ ] Codex/GitHub review addressed
-- [ ] CI green
-- [ ] Merged
-- [ ] Roadmap/PRD updated
+- [x] PR opened
+- [x] Codex/GitHub review addressed
+- [x] CI green
+- [x] Merged
+- [x] Roadmap/PRD updated
 
 ## Subtasks
 
@@ -58,11 +58,10 @@
   - source frontmatter `tags:` supports inline and YAML block lists,
   - relationship entity lookup is scoped,
   - rich `summary.confidence` is preserved in page metadata.
-- P1 risks:
-  - duplicate concept/entity pages,
-  - generated concept/entity hidden only in DB,
-  - source marked compiled before pages/outbox are safely written,
-  - Mempalace ack without page dispatch.
+- PR #44 merged on 2026-04-27. Production apply was intentionally not run in
+  the implementation PR.
+- Remaining gate is operational, not implementation: run a backed-up tiny
+  production sample before any scale-up.
 
 ## Stop Conditions
 

@@ -2,11 +2,11 @@
 
 ## Status
 
-Implementation is complete pending PR and CI.
+Implementation merged in PR #44. Production tiny sample is still pending.
 
 ## Scope
 
-This branch upgrades `batch-ingest` from the old summary-focused flow into a
+PR #44 upgrades `batch-ingest` from the old summary-focused flow into a
 local Wiki Compiler aligned with the user's Notion Wiki Compiler Instructions:
 
 - one source -> one summary page,
@@ -62,8 +62,8 @@ local Wiki Compiler aligned with the user's Notion Wiki Compiler Instructions:
 
 ## Production Apply Boundary
 
-No production write has been run on this branch. Only read-only dry-runs were
-run against `/Users/mac-mini/Documents/wiki`.
+No production write was run in PR #44. Only read-only dry-runs were run against
+`/Users/mac-mini/Documents/wiki`.
 
 Before tiny sample apply:
 

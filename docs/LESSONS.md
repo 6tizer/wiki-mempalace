@@ -115,3 +115,12 @@
 - Spec changes needed: Notion incremental sync spec 必须明确 page blocks 是 source body 的组成部分；automation `notion-sync` 需要在 cursor window 内刷新已有 source，避免自动任务长期保留旧正文/tags。
 - Tests or reviews that caught issues: 用户 Obsidian 复查抓到 tag 和正文问题；新增 projection idempotence、refresh existing、duplicate Notion UUID/source_id 匹配测试；本地 `cargo test --workspace`、`cargo clippy --workspace --all-targets -- -D warnings`、`git diff --check` 和 GitHub quick CI 通过。
 - Next plan note: 现在完成的是 raw source 入库与 Vault 可见，不是 Wiki 编译。下一轮应单独走 Notion Source Compilation：小样本编译 `compiled_to_wiki: false` source，再批量编译、验证 query/mempalace，不要把 archived retirement 混进同一 PR。
+
+## 2026-04-27 / PR #44 Production Wiki Compiler
+
+- Scope: 把 `batch-ingest` 升级为本地 Wiki Compiler，支持 raw source -> summary + concept/entity pages -> Vault projection -> outbox 的 Notion-equivalent 合同，并补齐 PRD/spec/handoff。
+- What worked: 先对照 Notion Wiki Compiler 设置页做 PRD/spec，再用 subagent 分拆 plan contract 和 runner，最后用 review subagent 抓生产风险；这个顺序避免了继续沿用旧的 summary-only 业务流。
+- What caused rework: review 抓到同标题不同 source 在 Vault 投影会互相覆盖、YAML block tags 丢失、relationship lookup 未按 scope、rich `summary.confidence` 没写入 page metadata，以及中断重跑可能重复 raw source；这些都应成为 compiler 类模块的固定 review checklist。
+- Spec changes needed: PRD 已完成实现部分，但 production tiny sample 仍是单独 operational gate；不要把 “代码已合并” 误写成 “生产闭环已跑通”。
+- Tests or reviews that caught issues: integration review subagent 抓到 P1/P2/P3；新增 wiki_compiler、projection duplicate title、rich fixture、frontmatter metadata 回归测试；本地 `cargo clippy --workspace --all-targets -- -D warnings`、`cargo test --workspace`、`git diff --check` 和 GitHub CI 均通过。
+- Next plan note: 下一步不是继续做新功能，而是备份真实 vault 后执行 1 X + 1 WeChat tiny production sample，再 consume to Mempalace 并让用户在 Obsidian 检查。tiny sample 通过前不要 scale-up。
