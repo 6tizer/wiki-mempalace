@@ -31,6 +31,23 @@ Use global:
 - Real `/Users/mac-mini/Documents/wiki` blocked unless user explicitly
   approves.
 
+## Model Candidate Note
+
+- Keep `minimax/minimax-m2.7` as the current production compiler default.
+- Record `deepseek/deepseek-v4-flash` as a candidate compiler model:
+  - OpenRouter route observed: `deepseek/deepseek-v4-flash-20260423`.
+  - Small JSON smoke: 1.83s, valid JSON.
+  - Temp `Avatar V` compile: success, 117.0s, but core entity `Avatar V`
+    stayed machine-deferred.
+  - Temp 3-source compile: success=3, failed=0, per-source elapsed 93.6s,
+    89.5s, 99.1s.
+  - Known quality risks before production switch: near-duplicate concepts such
+    as `自愈式浏览器自动化` / `自愈浏览器自动化`, deferred main entities such as
+    `Browser Harness`, and Unicode/title cleanup issues such as
+    `Magnus M ü ller`.
+- Do not switch production compiler model until resolver/fixer covers these
+  normalization issues in temp-vault regression.
+
 ## Files Seeded
 
 | File | Purpose |
