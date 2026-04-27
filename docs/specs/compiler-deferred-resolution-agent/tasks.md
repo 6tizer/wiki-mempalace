@@ -18,9 +18,11 @@
 - [x] Integration review complete
 - [x] Tests added/updated
 - [x] Handoff updated with verification
-- [ ] PR opened
-- [ ] CI green
-- [ ] PR merged
+- [x] PR opened
+- [x] CI green
+- [x] PR merged
+- [x] Production apply smoke completed
+- [x] Production post-apply audit completed
 
 ## Plan Mode Grading
 
@@ -48,7 +50,7 @@
 - `cargo test --workspace` - passed
 - `cargo clippy --workspace --all-targets -- -D warnings` - passed
 - `git diff --check` - passed
-- `cargo test --workspace`
-- `cargo clippy --workspace --all-targets -- -D warnings`
-- `git diff --check`
 - Temp X + WeChat regression only.
+- PR #54 merged.
+- Production report `/Users/mac-mini/Documents/wiki/reports/production-wiki-compiler-2026-04-27T15-40-49.96509Z.json` resolver apply passed.
+- Production post-apply checks passed: no new broken wikilinks, no new duplicate concept/entity groups, `wiki.db` and `palace.db` integrity `ok`, `consistency-audit` reported `vault_empty_unmanaged=0` and `palace_missing_page_drawers=0`.

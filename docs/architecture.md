@@ -16,7 +16,7 @@
 │  B. Agent / 人工 (通过 MCP 或 CLI)                    │
 │     └─ wiki_ingest / wiki_file_claim / ingest-llm   │
 │                                                     │
-│  C. 未来: Notion API 增量同步 (尚未实现)               │
+│  C. Notion API 增量同步 (已实现 notion-sync)          │
 └───────────────────┬─────────────────────────────────┘
                     │ ingest / file-claim / batch-ingest
                     ▼
@@ -50,11 +50,11 @@
 
 | 来源 | 接入方式 | 状态 | 备注 |
 | --- | --- | --- | --- |
-| Notion DB (X书签) | `wiki-migration-notion` 离线批量迁移 | ✅ 已跑过一次 | 历史数据已导入，无增量同步 |
-| Notion DB (微信文章) | `wiki-migration-notion` 离线批量迁移 | ✅ 已跑过一次 | 同上 |
+| Notion DB (X书签) | `notion-sync` + 历史离线迁移 | ✅ 已接入 | 支持 cursor 增量同步、已有 source refresh、Vault source projection |
+| Notion DB (微信文章) | `notion-sync` + 历史离线迁移 | ✅ 已接入 | 同上 |
 | Agent MCP 写入 | `wiki_ingest` / `wiki_file_claim` / `wiki_ingest_llm` | ✅ 实时生效 | 通过 MCP server 实时写 wiki.db |
 | CLI 手动写入 | `ingest` / `file-claim` / `batch-ingest` | ✅ 实时生效 | 直接调 CLI |
-| Notion API 增量同步 | 待开发 | 💤 未开始 | 需要 Notion token + 增量检测 + 调度；见 roadmap |
+| Notion API 增量同步 | `wiki-cli notion-sync` / automation `notion-sync` | ✅ 已合入 | PR #36/#38/#42；仍待 Notion archived source retirement |
 
 ## 1. Crate 依赖拓扑
 

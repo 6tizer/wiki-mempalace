@@ -3,8 +3,9 @@
 ## Status
 
 Implementation merged in PR #44. PR #46 ran the first backed-up production tiny
-sample and added safety fixes. Broad scale-up is blocked on compiler
-canonicalization v2.
+sample and added safety fixes. PR #47 added compiler canonicalization v2. PR #54
+added the deferred resolver/fixer lane. Controlled production scale-up has
+started with backed-up 10-source batches.
 
 ## Scope
 
@@ -68,16 +69,28 @@ local Wiki Compiler aligned with the user's Notion Wiki Compiler Instructions:
 
 No production write was run in PR #44. PR #46 did run a backed-up tiny sample
 against `/Users/mac-mini/Documents/wiki` and then verified the same X/WeChat
-samples on restored temporary vault copies.
+samples on restored temporary vault copies. After PR #47/#54, production
+scale-up is allowed only as small backed-up batches with post-run checks.
 
-Before broad scale-up:
+Current operation loop:
 
-1. Implement compiler canonicalization v2.
-2. Keep the resolver between compiler draft parsing and DB writes.
-3. Retrieve bounded existing page candidates from `wiki.db`; do not load the
-   whole wiki into the prompt.
-4. Use a small LLM only for ambiguous candidate pairs.
-5. Persist accepted alias/canonical decisions as data.
-6. Keep Lint/Fixer as post-write governance: apply to DB, project Vault, sync
-   Mempalace, then audit again.
-7. Re-run X/WeChat regression samples before compiling more sources.
+1. Back up `/Users/mac-mini/Documents/wiki`.
+2. Run `batch-ingest` with a small `--limit`.
+3. Run `compiler-resolve-deferred --allow-create --apply` on the compiler run
+   report.
+4. Let apply project Vault, consume Mempalace, and write lint/audit reports.
+5. Compare broken wikilinks and duplicate concept/entity groups against the
+   pre-batch baseline.
+6. Spot-check generated Vault pages before the next batch.
+
+Latest production evidence:
+
+- two 10-source real batches completed with `success=10` and `failed=0`;
+- latest remaining uncompiled queue: 132 sources;
+- latest deferred resolver apply created/aliased only through DB-first flow;
+- follow-up deferred dry-run had no additional aliases/creates/changes to
+  apply;
+- no new broken wikilinks or duplicate concept/entity groups were introduced;
+- `wiki.db` and `palace.db` integrity checks returned `ok`;
+- latest consistency audit reported `vault_empty_unmanaged=0` and
+  `palace_missing_page_drawers=0`.

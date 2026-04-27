@@ -123,7 +123,7 @@
 - What caused rework: review 抓到同标题不同 source 在 Vault 投影会互相覆盖、YAML block tags 丢失、relationship lookup 未按 scope、rich `summary.confidence` 没写入 page metadata，以及中断重跑可能重复 raw source；这些都应成为 compiler 类模块的固定 review checklist。
 - Spec changes needed: PRD 已完成实现部分，但 production tiny sample 仍是单独 operational gate；不要把 “代码已合并” 误写成 “生产闭环已跑通”。
 - Tests or reviews that caught issues: integration review subagent 抓到 P1/P2/P3；新增 wiki_compiler、projection duplicate title、rich fixture、frontmatter metadata 回归测试；本地 `cargo clippy --workspace --all-targets -- -D warnings`、`cargo test --workspace`、`git diff --check` 和 GitHub CI 均通过。
-- Next plan note: 下一步不是继续做新功能，而是备份真实 vault 后执行 1 X + 1 WeChat tiny production sample，再 consume to Mempalace 并让用户在 Obsidian 检查。tiny sample 通过前不要 scale-up。
+- Next plan note: 该 operational gate 已由 PR #46/#47/#54 后续链路完成。当前不再回到 tiny sample 阶段；继续小批量 production scale-up。
 
 ## 2026-04-27 / PR #47 Compiler Canonicalization v2
 
@@ -132,15 +132,16 @@
 - What caused rework: “模糊项人工确认”这个表述不符合产品方向；正确语义是机器后置治理，模糊项不污染 active graph，但也不甩给人工，而是进入 resolver/lint/fixer 可消费队列。
 - Spec changes needed: 以后 compiler/fixer 相关 spec 要明确区分 `duplicate`、`ambiguous/deferred`、`noise/ignore` 三类；deferred 产物必须是 machine-readable artifact，不只是 Markdown warning。
 - Tests or reviews that caught issues: live temp-vault smoke 抓到 LLM 返回 `null` 导致 parser 失败；lint 抓到 unresolved `related_names` 被直接写成 wikilink 会产生 broken link；focused security/architecture review 抓到 alias poisoning 与 transaction split 风险。本地 `fmt`、`wiki_compiler`、`cargo test --workspace`、`clippy -D warnings`、`git diff --check` 和 GitHub quick CI 均通过。
-- Next plan note: 下一步先做 Compiler Deferred Resolution Agent，让 lint/fixer agent 消费 `deferred_resolutions` 并按 alias / new canonical / ignore 处理；通过 X/WeChat 临时样本后，才进入 production compiler 小批量 scale-up。
+- Next plan note: Compiler Deferred Resolution Agent 已在 PR #54 完成；后续重点转为 production compiler 小批量 scale-up，并持续检查 deferred、断链、重复页和 Vault 内容质量。
 
-## 2026-04-27 / Compiler Deferred Resolution Agent
+## 2026-04-27 / PR #54 Compiler Deferred Resolution Agent
 
 - Scope: 新增 `compiler-resolve-deferred`，消费 compiler run JSON 的 `deferred_resolutions`，机器判定 alias existing / safe create / ignore noise / keep deferred；无人工 lane。
 - What worked: 直接用 temp X + WeChat apply smoke 验证 DB -> Vault -> Mempalace -> lint/audit，省掉口头验收步骤。
-- What caused rework: 首版 safe create 的来源引用写成 `[[摘要：...]]`，临时库没有 summary 页，lint 抓到 broken wikilink；后置 resolver 创建页时不能假设 summary 已存在。
-- Spec changes needed: deferred candidate 必须带 `page_id`；旧 report 只能在 scope + title + entry_type 唯一时 fallback。
-- Tests or reviews that caught issues: 新增 `compiler_resolve_deferred` 单测覆盖 alias、ambiguous、noise、allow-create；temp X + WeChat smoke 确认 no `page.broken_wikilink`。
+- What caused rework: 首版 safe create 的来源引用写成 `[[摘要：...]]`，临时库没有 summary 页，lint 抓到 broken wikilink；后置 resolver 创建页时不能假设 summary 已存在。真实 scale-up 后又暴露 `Cloud Run Instances` 这类 title-related single candidate 和 `Magnus M ü ller` 这类 Unicode spacing 问题，需要 PR #54 hardening。
+- Spec changes needed: deferred candidate 必须带 `page_id`；旧 report 只能在 scope + title + entry_type 唯一时 fallback。低置信项应继续 machine-deferred，不进入人工 lane，也不直接污染 active graph。
+- Tests or reviews that caught issues: 新增 `compiler_resolve_deferred` 单测覆盖 alias、ambiguous、noise、allow-create、title-related alias、weak-context create、Unicode title cleanup；temp X + WeChat smoke 确认 no `page.broken_wikilink`；真实 production apply 后复查无新增断链、无新增 duplicate concept/entity group，`wiki.db` / `palace.db` integrity 均为 `ok`。
+- Next plan note: 系统开发闭环已完成。下一步不是再补 compiler 架构，而是继续小批量跑剩余 132 条 source；每批固定执行 deferred apply、Mempalace consume、lint/audit、重复页检查和 Vault spot-check。
 
 ## 2026-04-27 / Compiler Model Candidate Trial
 

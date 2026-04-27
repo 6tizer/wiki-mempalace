@@ -28,7 +28,7 @@
 | `docs/specs/compiler-canonicalization-v2/*` | New spec trio | Implementation SSOT |
 | `docs/prd/README.md` | Added PRD index entry | Discoverability |
 | `docs/specs/README.md` | Added spec index entry | Discoverability |
-| `docs/roadmap.md` | Marked module in progress | Current roadmap state |
+| `docs/roadmap.md` | Tracked module status | Current roadmap state |
 | `crates/wiki-storage/src/lib.rs` | Added `wiki_canonical_alias` table and helpers | Persist alias/canonical decisions as data |
 | `crates/wiki-cli/src/wiki_compiler.rs` | Added resolver, candidate ranking, LLM fallback parser, mapping load/persist, deferred JSON reports | Block duplicate concept/entity pages before DB writes |
 | `crates/wiki-core/src/llm_ingest_plan.rs` | Accept `null` for compiler string/list fields | Match prompt contract and live model output |
@@ -48,7 +48,8 @@
 - Full duplicate-merge fixer is not implemented in this PR; fixer apply order is
   documented as DB -> Vault -> Mempalace -> audit. Ambiguous compiler items now
   land in machine-readable `deferred_resolutions` for that later agent lane.
-- Real `/Users/mac-mini/Documents/wiki` production apply was not run.
+- Real `/Users/mac-mini/Documents/wiki` production apply was not run in PR #47;
+  later PR #54 used the deferred resolver/fixer lane on real production reports.
 
 ## Dependencies
 
@@ -83,6 +84,7 @@
 
 ## Next Notes
 
-- Do not run broad production compile immediately. Next module should consume
-  `deferred_resolutions` through resolver/lint/fixer agents, then use
-  user-approved tiny production regression before scale-up.
+- Deferred resolution agent was completed in PR #54. Broad unattended compile is
+  still not recommended, but controlled small production batches are now allowed
+  when each batch runs deferred apply, Mempalace consume, lint/audit, duplicate
+  checks, and Vault spot-checks.
