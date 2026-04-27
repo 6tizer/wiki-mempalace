@@ -733,7 +733,7 @@ fn build_concept_page(
         .with_tags(concept.tags.clone())
         .with_section("定义", definition)
         .with_section("关键要点", render_bullets(&concept.key_points))
-        .with_section("本文语境", render_wikilinks(&concept.related_names))
+        .with_section("本文语境", render_related_names(&concept.related_names))
         .with_section("来源引用", source_reference_line(source_ref))
         .into_page(scope.clone(), status)
 }
@@ -759,7 +759,7 @@ fn build_concept_entity_page(
         .with_tags(ed.tags.clone())
         .with_section("定义", definition)
         .with_section("关键要点", render_bullets(&ed.key_points))
-        .with_section("本文语境", render_wikilinks(&ed.related_names))
+        .with_section("本文语境", render_related_names(&ed.related_names))
         .with_section("来源引用", source_reference_line(source_ref))
         .into_page(scope.clone(), status)
 }
@@ -778,12 +778,12 @@ fn render_bullets(items: &[String]) -> String {
     }
 }
 
-fn render_wikilinks(names: &[String]) -> String {
+fn render_related_names(names: &[String]) -> String {
     let lines: Vec<_> = names
         .iter()
         .map(|s| s.trim())
         .filter(|s| !s.is_empty())
-        .map(|s| format!("- [[{s}]]"))
+        .map(|s| format!("- {s}"))
         .collect();
     if lines.is_empty() {
         "（暂无）".to_string()
@@ -2042,6 +2042,47 @@ mod tests {
                 .count(),
             3
         );
+    }
+
+    #[test]
+    fn related_names_are_plain_text_until_resolved() {
+        let mut eng = LlmWikiEngine::new(DomainSchema::permissive_default());
+        let mut plan = plan_with_entities(Vec::new());
+        plan.concepts = vec![LlmConceptDraft {
+            canonical_name: "Token计费模式".into(),
+            kind: "concept".into(),
+            definition: "按 token 数量计费的方式".into(),
+            key_points: vec!["缓存命中可降低成本".into()],
+            tags: Vec::new(),
+            related_names: vec!["输入token".into(), "缓存命中".into()],
+            category: None,
+        }];
+        let batch = BatchIngestContext {
+            source_title: "Source A".into(),
+            source_url: "https://example.test/a".into(),
+            source_tags: vec![],
+        };
+
+        let stats = materialize_compiler_pages(
+            &mut eng,
+            &plan,
+            &batch,
+            "https://example.test/a",
+            &test_scope(),
+            &DomainSchema::permissive_default(),
+        );
+
+        assert_eq!(stats.concepts_created, 1);
+        let page = eng
+            .store
+            .pages
+            .values()
+            .find(|p| p.title == "Token计费模式")
+            .unwrap();
+        assert!(page.markdown.contains("- 输入token"));
+        assert!(page.markdown.contains("- 缓存命中"));
+        assert!(!page.markdown.contains("[[输入token]]"));
+        assert!(!page.markdown.contains("[[缓存命中]]"));
     }
 
     #[test]

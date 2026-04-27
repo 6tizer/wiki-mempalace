@@ -4,9 +4,13 @@
 
 - Added independent PRD/spec trio for compiler canonicalization v2.
 - Added durable compiler alias/canonical mappings in `wiki.db`.
+- Hardened `LlmIngestPlanV1` parsing for model-returned `null` values in
+  string/list fields covered by the compiler contract.
 - Replaced compiler hardcoded alias fallback with pre-write resolver:
   normalized keys -> persisted aliases -> bounded top-K candidates -> cross-type
   exact fallback -> small LLM fallback -> review skip.
+- Rendered unresolved `related_names` as plain text so compiler output does not
+  create broken wikilinks before resolver confirmation.
 - Focused review fixes:
   - final page snapshot, outbox, and alias mappings commit in one SQLite
     transaction,
@@ -25,6 +29,7 @@
 | `docs/roadmap.md` | Marked module in progress | Current roadmap state |
 | `crates/wiki-storage/src/lib.rs` | Added `wiki_canonical_alias` table and helpers | Persist alias/canonical decisions as data |
 | `crates/wiki-cli/src/wiki_compiler.rs` | Added resolver, candidate ranking, LLM fallback parser, mapping load/persist | Block duplicate concept/entity pages before DB writes |
+| `crates/wiki-core/src/llm_ingest_plan.rs` | Accept `null` for compiler string/list fields | Match prompt contract and live model output |
 
 ## Public Interfaces
 
@@ -36,8 +41,8 @@
 
 ## Known Limits
 
-- LLM fallback is available in the compiler path, but tests cover parser/prompt
-  behavior without live network calls.
+- LLM fallback is available in the compiler path; tests cover parser/prompt
+  behavior and temp-vault live compiler smoke covers one source compile.
 - Full duplicate-merge fixer is not implemented in this PR; fixer apply order is
   documented as DB -> Vault -> Mempalace -> audit.
 - Real `/Users/mac-mini/Documents/wiki` production apply was not run.
@@ -54,11 +59,18 @@
 - Commands:
   - `cargo fmt --all -- --check`
   - `cargo test -p wiki-storage` (18 tests)
-  - `cargo test -p wiki-cli wiki_compiler` (26 tests)
+  - `cargo test -p wiki-core llm_ingest_plan` (10 tests)
+  - `cargo test -p wiki-cli wiki_compiler` (27 tests)
   - `cargo test --workspace`
   - `cargo clippy --workspace --all-targets -- -D warnings`
   - `git diff --check`
-- Result: all passed.
+- Temp-vault live smoke:
+  - copied one WeChat source to `/tmp/wiki-compiler-v2-e2e-final.*`,
+  - ran `batch-ingest` with temp DB/Vault,
+  - ran `consume-to-mempalace` with temp palace,
+  - ran `lint` against temp DB/Vault.
+- Result: all passed; temp lint reported only `xref.missing` info and no broken
+  wikilinks.
 
 ## Spec Status
 
