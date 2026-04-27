@@ -4,7 +4,8 @@ use time::{
     format_description, format_description::well_known::Rfc3339, OffsetDateTime, PrimitiveDateTime,
 };
 use wiki_core::{
-    AuditRecord, Claim, Entity, RawArtifact, SourceId, TypedEdge, WikiEvent, WikiPage,
+    AuditRecord, Claim, Entity, EntryType, PageId, RawArtifact, Scope, SourceId, TypedEdge,
+    WikiEvent, WikiPage,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -79,6 +80,20 @@ pub struct AutomationJobFailureSummary {
     pub latest_failure: Option<AutomationRunRecord>,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CanonicalAliasMapping {
+    pub alias_text: String,
+    pub normalized_alias_key: String,
+    pub canonical_page_id: PageId,
+    pub canonical_title: String,
+    pub entry_type: EntryType,
+    pub scope: Scope,
+    pub source: String,
+    pub confidence: f64,
+    pub created_at: OffsetDateTime,
+    pub updated_at: OffsetDateTime,
+}
+
 pub fn canonical_notion_page_id(raw: &str) -> String {
     raw.trim()
         .chars()
@@ -128,6 +143,26 @@ pub trait WikiRepository {
         &self,
         entries: &[(String, String, SourceId)],
     ) -> Result<(), StorageError>;
+
+    // --- Compiler canonicalization aliases ---
+
+    fn upsert_canonical_alias(&self, mapping: &CanonicalAliasMapping) -> Result<(), StorageError>;
+
+    fn find_canonical_alias(
+        &self,
+        scope: &Scope,
+        normalized_alias_key: &str,
+    ) -> Result<Option<CanonicalAliasMapping>, StorageError>;
+
+    fn list_canonical_aliases_for_pages(
+        &self,
+        page_ids: &[PageId],
+    ) -> Result<Vec<CanonicalAliasMapping>, StorageError>;
+
+    fn list_canonical_aliases_for_scope(
+        &self,
+        scope: &Scope,
+    ) -> Result<Vec<CanonicalAliasMapping>, StorageError>;
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -140,6 +175,8 @@ pub enum StorageError {
     InvalidAutomationRunState(String),
     #[error("automation run not found: {0}")]
     NotFound(String),
+    #[error("invalid canonical alias: {0}")]
+    InvalidCanonicalAlias(String),
 }
 
 pub struct SqliteRepository {
@@ -199,6 +236,21 @@ CREATE TABLE IF NOT EXISTS notion_page_index (
   source_id TEXT NOT NULL,
   synced_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS wiki_canonical_alias (
+  alias_text TEXT NOT NULL,
+  normalized_alias_key TEXT NOT NULL,
+  canonical_page_id TEXT NOT NULL,
+  canonical_title TEXT NOT NULL,
+  entry_type TEXT NOT NULL,
+  scope TEXT NOT NULL,
+  source TEXT NOT NULL,
+  confidence REAL NOT NULL,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY(scope, normalized_alias_key)
+);
+CREATE INDEX IF NOT EXISTS wiki_canonical_alias_page_idx
+  ON wiki_canonical_alias(canonical_page_id);
 "#,
         )?;
         Ok(Self { conn })
@@ -437,6 +489,61 @@ CREATE TABLE IF NOT EXISTS notion_page_index (
         Ok(scored)
     }
 
+    pub fn upsert_canonical_alias(
+        &self,
+        mapping: &CanonicalAliasMapping,
+    ) -> Result<(), StorageError> {
+        <Self as WikiRepository>::upsert_canonical_alias(self, mapping)
+    }
+
+    pub fn find_canonical_alias(
+        &self,
+        scope: &Scope,
+        normalized_alias_key: &str,
+    ) -> Result<Option<CanonicalAliasMapping>, StorageError> {
+        <Self as WikiRepository>::find_canonical_alias(self, scope, normalized_alias_key)
+    }
+
+    pub fn list_canonical_aliases_for_pages(
+        &self,
+        page_ids: &[PageId],
+    ) -> Result<Vec<CanonicalAliasMapping>, StorageError> {
+        <Self as WikiRepository>::list_canonical_aliases_for_pages(self, page_ids)
+    }
+
+    pub fn list_canonical_aliases_for_scope(
+        &self,
+        scope: &Scope,
+    ) -> Result<Vec<CanonicalAliasMapping>, StorageError> {
+        <Self as WikiRepository>::list_canonical_aliases_for_scope(self, scope)
+    }
+
+    pub fn save_snapshot_and_append_outbox_with_aliases(
+        &self,
+        snapshot: &StorageSnapshot,
+        events: &[WikiEvent],
+        aliases: &[CanonicalAliasMapping],
+    ) -> Result<usize, StorageError> {
+        self.conn.execute_batch("BEGIN IMMEDIATE")?;
+        let result = (|| {
+            let n = self.save_snapshot_and_append_outbox_inner(snapshot, events)?;
+            for alias in aliases {
+                self.upsert_canonical_alias_inner(alias)?;
+            }
+            Ok(n)
+        })();
+        match result {
+            Ok(n) => {
+                self.conn.execute_batch("COMMIT")?;
+                Ok(n)
+            }
+            Err(error) => {
+                let _ = self.conn.execute_batch("ROLLBACK");
+                Err(error)
+            }
+        }
+    }
+
     fn start_automation_run_at(
         &self,
         job_name: &str,
@@ -652,6 +759,53 @@ CREATE TABLE IF NOT EXISTS notion_page_index (
         }
         Ok(events.len())
     }
+
+    fn upsert_canonical_alias_inner(
+        &self,
+        mapping: &CanonicalAliasMapping,
+    ) -> Result<(), StorageError> {
+        let canonical_page_id = encode_page_id(&mapping.canonical_page_id)?;
+        let entry_type = encode_entry_type(&mapping.entry_type)?;
+        let scope = encode_scope(&mapping.scope)?;
+        let created_at = encode_time(mapping.created_at)?;
+        let updated_at = encode_time(mapping.updated_at)?;
+        self.conn.execute(
+            "INSERT INTO wiki_canonical_alias(
+               alias_text,
+               normalized_alias_key,
+               canonical_page_id,
+               canonical_title,
+               entry_type,
+               scope,
+               source,
+               confidence,
+               created_at,
+               updated_at
+             )
+             VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+             ON CONFLICT(scope, normalized_alias_key) DO UPDATE SET
+               alias_text = excluded.alias_text,
+               canonical_page_id = excluded.canonical_page_id,
+               canonical_title = excluded.canonical_title,
+               entry_type = excluded.entry_type,
+               source = excluded.source,
+               confidence = excluded.confidence,
+               updated_at = excluded.updated_at",
+            params![
+                mapping.alias_text,
+                mapping.normalized_alias_key,
+                canonical_page_id,
+                mapping.canonical_title,
+                entry_type,
+                scope,
+                mapping.source,
+                mapping.confidence,
+                created_at,
+                updated_at
+            ],
+        )?;
+        Ok(())
+    }
 }
 
 fn try_blob_to_f32(blob: &[u8], expected_len: usize) -> Option<Vec<f32>> {
@@ -729,6 +883,76 @@ fn decode_automation_run_row(
         duration_ms,
         error_summary,
         heartbeat_at,
+    })
+}
+
+fn encode_scope(scope: &Scope) -> Result<String, StorageError> {
+    Ok(serde_json::to_string(scope)?)
+}
+
+fn encode_entry_type(entry_type: &EntryType) -> Result<String, StorageError> {
+    match serde_json::to_value(entry_type)? {
+        serde_json::Value::String(value) => Ok(value),
+        value => Err(StorageError::InvalidCanonicalAlias(format!(
+            "entry_type encoded as non-string JSON: {value}"
+        ))),
+    }
+}
+
+fn encode_page_id(page_id: &PageId) -> Result<String, StorageError> {
+    match serde_json::to_value(page_id)? {
+        serde_json::Value::String(value) => Ok(value),
+        value => Err(StorageError::InvalidCanonicalAlias(format!(
+            "page id encoded as non-string JSON: {value}"
+        ))),
+    }
+}
+
+fn decode_canonical_alias_row(
+    row: &rusqlite::Row<'_>,
+) -> Result<CanonicalAliasMapping, rusqlite::Error> {
+    let alias_text: String = row.get(0)?;
+    let normalized_alias_key: String = row.get(1)?;
+    let canonical_page_id_raw: String = row.get(2)?;
+    let canonical_title: String = row.get(3)?;
+    let entry_type_raw: String = row.get(4)?;
+    let scope_raw: String = row.get(5)?;
+    let source: String = row.get(6)?;
+    let confidence: f64 = row.get(7)?;
+    let created_at_raw: String = row.get(8)?;
+    let updated_at_raw: String = row.get(9)?;
+
+    let canonical_page_id = serde_json::from_value(serde_json::Value::String(
+        canonical_page_id_raw,
+    ))
+    .map_err(|err| {
+        rusqlite::Error::FromSqlConversionFailure(2, rusqlite::types::Type::Text, Box::new(err))
+    })?;
+    let entry_type =
+        serde_json::from_value(serde_json::Value::String(entry_type_raw)).map_err(|err| {
+            rusqlite::Error::FromSqlConversionFailure(4, rusqlite::types::Type::Text, Box::new(err))
+        })?;
+    let scope = serde_json::from_str(&scope_raw).map_err(|err| {
+        rusqlite::Error::FromSqlConversionFailure(5, rusqlite::types::Type::Text, Box::new(err))
+    })?;
+    let created_at = parse_time(&created_at_raw).map_err(|err| {
+        rusqlite::Error::FromSqlConversionFailure(8, rusqlite::types::Type::Text, Box::new(err))
+    })?;
+    let updated_at = parse_time(&updated_at_raw).map_err(|err| {
+        rusqlite::Error::FromSqlConversionFailure(9, rusqlite::types::Type::Text, Box::new(err))
+    })?;
+
+    Ok(CanonicalAliasMapping {
+        alias_text,
+        normalized_alias_key,
+        canonical_page_id,
+        canonical_title,
+        entry_type,
+        scope,
+        source,
+        confidence,
+        created_at,
+        updated_at,
     })
 }
 
@@ -908,6 +1132,99 @@ impl WikiRepository for SqliteRepository {
                 Err(error)
             }
         }
+    }
+
+    fn upsert_canonical_alias(&self, mapping: &CanonicalAliasMapping) -> Result<(), StorageError> {
+        self.upsert_canonical_alias_inner(mapping)
+    }
+
+    fn find_canonical_alias(
+        &self,
+        scope: &Scope,
+        normalized_alias_key: &str,
+    ) -> Result<Option<CanonicalAliasMapping>, StorageError> {
+        let scope = encode_scope(scope)?;
+        let result = self
+            .conn
+            .query_row(
+                "SELECT
+                   alias_text,
+                   normalized_alias_key,
+                   canonical_page_id,
+                   canonical_title,
+                   entry_type,
+                   scope,
+                   source,
+                   confidence,
+                   created_at,
+                   updated_at
+                 FROM wiki_canonical_alias
+                 WHERE scope = ?1 AND normalized_alias_key = ?2",
+                params![scope, normalized_alias_key],
+                decode_canonical_alias_row,
+            )
+            .optional()?;
+        Ok(result)
+    }
+
+    fn list_canonical_aliases_for_pages(
+        &self,
+        page_ids: &[PageId],
+    ) -> Result<Vec<CanonicalAliasMapping>, StorageError> {
+        let mut out = Vec::new();
+        let mut stmt = self.conn.prepare(
+            "SELECT
+               alias_text,
+               normalized_alias_key,
+               canonical_page_id,
+               canonical_title,
+               entry_type,
+               scope,
+               source,
+               confidence,
+               created_at,
+               updated_at
+             FROM wiki_canonical_alias
+             WHERE canonical_page_id = ?1
+             ORDER BY scope ASC, normalized_alias_key ASC",
+        )?;
+        for page_id in page_ids {
+            let page_id = encode_page_id(page_id)?;
+            let rows = stmt.query_map(params![page_id], decode_canonical_alias_row)?;
+            for row in rows {
+                out.push(row?);
+            }
+        }
+        Ok(out)
+    }
+
+    fn list_canonical_aliases_for_scope(
+        &self,
+        scope: &Scope,
+    ) -> Result<Vec<CanonicalAliasMapping>, StorageError> {
+        let scope = encode_scope(scope)?;
+        let mut stmt = self.conn.prepare(
+            "SELECT
+               alias_text,
+               normalized_alias_key,
+               canonical_page_id,
+               canonical_title,
+               entry_type,
+               scope,
+               source,
+               confidence,
+               created_at,
+               updated_at
+             FROM wiki_canonical_alias
+             WHERE scope = ?1
+             ORDER BY normalized_alias_key ASC",
+        )?;
+        let rows = stmt.query_map(params![scope], decode_canonical_alias_row)?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row?);
+        }
+        Ok(out)
     }
 }
 
@@ -1379,5 +1696,265 @@ mod tests {
             })
             .unwrap();
         assert_eq!(count, 1);
+    }
+
+    fn canonical_alias(
+        alias_text: &str,
+        normalized_alias_key: &str,
+        canonical_page_id: PageId,
+        canonical_title: &str,
+        scope: Scope,
+        confidence: f64,
+        at: OffsetDateTime,
+    ) -> CanonicalAliasMapping {
+        CanonicalAliasMapping {
+            alias_text: alias_text.into(),
+            normalized_alias_key: normalized_alias_key.into(),
+            canonical_page_id,
+            canonical_title: canonical_title.into(),
+            entry_type: EntryType::Concept,
+            scope,
+            source: "unit-test".into(),
+            confidence,
+            created_at: at,
+            updated_at: at,
+        }
+    }
+
+    #[test]
+    fn canonical_alias_upsert_is_idempotent_and_updates_existing_key() {
+        let dir = tempdir().unwrap();
+        let db = dir.path().join("wiki.db");
+        let repo = SqliteRepository::open(&db).unwrap();
+        let scope = Scope::Shared {
+            team_id: "wiki".into(),
+        };
+        let page_id = PageId(uuid::Uuid::new_v4());
+        let created_at = OffsetDateTime::from_unix_timestamp(1_700_000_000).unwrap();
+        let updated_at = OffsetDateTime::from_unix_timestamp(1_700_000_120).unwrap();
+
+        let first = canonical_alias(
+            "MCP connectors",
+            "mcpconnectors",
+            page_id,
+            "MCP 协议",
+            scope.clone(),
+            0.8,
+            created_at,
+        );
+        repo.upsert_canonical_alias(&first).unwrap();
+
+        let mut second = first.clone();
+        second.alias_text = "MCP Connectors".into();
+        second.canonical_title = "MCP 协议 canonical".into();
+        second.confidence = 0.95;
+        second.source = "resolver".into();
+        second.updated_at = updated_at;
+        repo.upsert_canonical_alias(&second).unwrap();
+
+        let found = repo
+            .find_canonical_alias(&scope, "mcpconnectors")
+            .unwrap()
+            .unwrap();
+        assert_eq!(found.alias_text, "MCP Connectors");
+        assert_eq!(found.canonical_page_id, page_id);
+        assert_eq!(found.canonical_title, "MCP 协议 canonical");
+        assert_eq!(found.confidence, 0.95);
+        assert_eq!(found.source, "resolver");
+        assert_eq!(found.created_at, created_at);
+        assert_eq!(found.updated_at, updated_at);
+
+        let count: i64 = rusqlite::Connection::open(&db)
+            .unwrap()
+            .query_row("SELECT COUNT(*) FROM wiki_canonical_alias", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn canonical_alias_lookup_is_scoped_by_normalized_key() {
+        let dir = tempdir().unwrap();
+        let db = dir.path().join("wiki.db");
+        let repo = SqliteRepository::open(&db).unwrap();
+        let shared = Scope::Shared {
+            team_id: "wiki".into(),
+        };
+        let private = Scope::Private {
+            agent_id: "cli".into(),
+        };
+        let shared_page = PageId(uuid::Uuid::new_v4());
+        let private_page = PageId(uuid::Uuid::new_v4());
+        let at = OffsetDateTime::from_unix_timestamp(1_700_000_000).unwrap();
+
+        repo.upsert_canonical_alias(&canonical_alias(
+            "MCP 协议",
+            "mcp",
+            shared_page,
+            "MCP 协议",
+            shared.clone(),
+            0.9,
+            at,
+        ))
+        .unwrap();
+        repo.upsert_canonical_alias(&canonical_alias(
+            "MCP private",
+            "mcp",
+            private_page,
+            "Private MCP",
+            private.clone(),
+            0.7,
+            at,
+        ))
+        .unwrap();
+
+        let shared_hit = repo.find_canonical_alias(&shared, "mcp").unwrap().unwrap();
+        let private_hit = repo.find_canonical_alias(&private, "mcp").unwrap().unwrap();
+        assert_eq!(shared_hit.canonical_page_id, shared_page);
+        assert_eq!(private_hit.canonical_page_id, private_page);
+        assert!(repo
+            .find_canonical_alias(&shared, "missing")
+            .unwrap()
+            .is_none());
+    }
+
+    #[test]
+    fn canonical_aliases_can_be_listed_by_page_ids() {
+        let dir = tempdir().unwrap();
+        let db = dir.path().join("wiki.db");
+        let repo = SqliteRepository::open(&db).unwrap();
+        let scope = Scope::Shared {
+            team_id: "wiki".into(),
+        };
+        let page_a = PageId(uuid::Uuid::new_v4());
+        let page_b = PageId(uuid::Uuid::new_v4());
+        let page_c = PageId(uuid::Uuid::new_v4());
+        let at = OffsetDateTime::from_unix_timestamp(1_700_000_000).unwrap();
+
+        repo.upsert_canonical_alias(&canonical_alias(
+            "MCP connectors",
+            "mcpconnectors",
+            page_a,
+            "MCP 协议",
+            scope.clone(),
+            0.9,
+            at,
+        ))
+        .unwrap();
+        repo.upsert_canonical_alias(&canonical_alias(
+            "MCP连接器",
+            "mcp连接器",
+            page_a,
+            "MCP 协议",
+            scope.clone(),
+            0.9,
+            at,
+        ))
+        .unwrap();
+        repo.upsert_canonical_alias(&canonical_alias(
+            "Claude Code",
+            "claudecode",
+            page_b,
+            "Claude Code",
+            scope,
+            0.8,
+            at,
+        ))
+        .unwrap();
+
+        let aliases = repo
+            .list_canonical_aliases_for_pages(&[page_a, page_c])
+            .unwrap();
+        let keys = aliases
+            .iter()
+            .map(|alias| alias.normalized_alias_key.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(keys, vec!["mcpconnectors", "mcp连接器"]);
+        assert!(aliases
+            .iter()
+            .all(|alias| alias.canonical_page_id == page_a));
+    }
+
+    #[test]
+    fn canonical_aliases_can_be_listed_by_scope() {
+        let dir = tempdir().unwrap();
+        let db = dir.path().join("wiki.db");
+        let repo = SqliteRepository::open(&db).unwrap();
+        let shared = Scope::Shared {
+            team_id: "wiki".into(),
+        };
+        let private = Scope::Private {
+            agent_id: "cli".into(),
+        };
+        let at = OffsetDateTime::from_unix_timestamp(1_700_000_000).unwrap();
+
+        repo.upsert_canonical_alias(&canonical_alias(
+            "MCP connectors",
+            "mcpconnectors",
+            PageId(uuid::Uuid::new_v4()),
+            "MCP 协议",
+            shared.clone(),
+            0.9,
+            at,
+        ))
+        .unwrap();
+        repo.upsert_canonical_alias(&canonical_alias(
+            "MCP private",
+            "mcpprivate",
+            PageId(uuid::Uuid::new_v4()),
+            "MCP private",
+            private.clone(),
+            0.9,
+            at,
+        ))
+        .unwrap();
+
+        let shared_aliases = repo.list_canonical_aliases_for_scope(&shared).unwrap();
+        let private_aliases = repo.list_canonical_aliases_for_scope(&private).unwrap();
+
+        assert_eq!(shared_aliases.len(), 1);
+        assert_eq!(shared_aliases[0].alias_text, "MCP connectors");
+        assert_eq!(private_aliases.len(), 1);
+        assert_eq!(private_aliases[0].alias_text, "MCP private");
+    }
+
+    #[test]
+    fn snapshot_outbox_and_aliases_commit_together() {
+        let dir = tempdir().unwrap();
+        let db = dir.path().join("wiki.db");
+        let repo = SqliteRepository::open(&db).unwrap();
+        let scope = Scope::Shared {
+            team_id: "wiki".into(),
+        };
+        let page_id = PageId(uuid::Uuid::new_v4());
+        let at = OffsetDateTime::from_unix_timestamp(1_700_000_000).unwrap();
+        let mut snapshot = StorageSnapshot::default();
+        snapshot
+            .pages
+            .push(WikiPage::new("MCP 协议", "", scope.clone()));
+        let event = WikiEvent::PageWritten { page_id, at };
+        let alias = canonical_alias(
+            "MCP connectors",
+            "mcpconnectors",
+            page_id,
+            "MCP 协议",
+            scope.clone(),
+            0.9,
+            at,
+        );
+
+        repo.save_snapshot_and_append_outbox_with_aliases(&snapshot, &[event], &[alias])
+            .unwrap();
+
+        assert_eq!(repo.load_snapshot().unwrap().pages.len(), 1);
+        assert!(repo
+            .export_outbox_ndjson()
+            .unwrap()
+            .contains("page_written"));
+        assert!(repo
+            .find_canonical_alias(&scope, "mcpconnectors")
+            .unwrap()
+            .is_some());
     }
 }
