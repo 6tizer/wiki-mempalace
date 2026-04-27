@@ -58,7 +58,8 @@ Internal runner responsibilities:
 - select tiny sample or limited batch,
 - call LLM,
 - validate plan,
-- deduplicate summary/concept/entity targets,
+- deduplicate summary targets,
+- resolve concept/entity drafts to canonical pages before writing,
 - write DB pages through `LlmWikiEngine`,
 - write/update managed Vault pages through projection-compatible paths,
 - update source `compiled_to_wiki`,
@@ -96,13 +97,13 @@ cargo run -p wiki-cli -- \
 flowchart TD
     A["Scan sources with compiled_to_wiki=false"] --> B["Select sample or batch"]
     B --> C["Read source body and frontmatter"]
-    C --> D["LLM compiler plan"]
+    C --> D["LLM compiler draft"]
     D --> E["Validate tags, page types, and references"]
     E --> F["Dedup summary by source identity"]
-    F --> G["Create summary page"]
-    G --> H["Dedup concepts/entities by canonical name"]
-    H --> I["Create or update concept/entity pages"]
-    I --> J["Add summary -> concept/entity links"]
+    F --> G["Canonical resolver for concept/entity drafts"]
+    G --> H["Small LLM only for ambiguous candidates"]
+    H --> I["Create or update canonical concept/entity pages"]
+    I --> J["Create summary with canonical wiki links"]
     J --> K["Add concept/entity -> summary source refs"]
     K --> L["Mark source compiled locally"]
     L --> M["Save DB + outbox"]
@@ -111,6 +112,39 @@ flowchart TD
     O --> P["Run query/explain smoke"]
     P --> Q["Write run report"]
 ```
+
+## Canonical Resolver v2
+
+The compiler should stay focused on understanding the article. It produces a
+draft list of summary, concepts, entities, relationships, and tags. The resolver
+decides whether each draft concept/entity maps to an existing wiki page or needs
+a new page.
+
+Resolver order:
+
+1. Normalize title keys: trim, fold ASCII case, remove repeated whitespace, fold
+   ASCII/CJK punctuation, and compare compact keys.
+2. Check persisted alias/canonical mappings.
+3. Retrieve a bounded set of existing page candidates from `wiki.db` by title,
+   alias, wikilink text, and local content hints.
+4. Check page type. A concept draft may resolve to an existing entity when the
+   existing page is clearly the canonical page, and the same applies in the
+   opposite direction.
+5. Use a small LLM fallback only when deterministic checks return a small
+   ambiguous candidate set.
+6. If still ambiguous, stop the source or record a review finding. Do not create
+   a duplicate just to keep the batch moving.
+
+The small LLM fallback receives only:
+
+- draft title, type, definition, and a short context,
+- top-K candidate pages with title, type, aliases, and a short excerpt,
+- the required output: `same_page: true|false`, `canonical_title`, and a short
+  reason.
+
+It does not receive the whole wiki and does not recompile the source article.
+Accepted decisions should be persisted as alias/canonical data so later runs do
+not need the same judgment again.
 
 ## Page Contracts
 
@@ -159,10 +193,37 @@ flowchart TD
   - conservative fuzzy match can update an existing page only when one clear
     candidate exists,
   - multiple fuzzy candidates stop the source and require review.
+- Canonicalization:
+  - do not grow the main compiler prompt with all known aliases,
+  - do not keep adding source-specific aliases in code as the primary strategy,
+  - use persisted alias data and bounded candidate retrieval,
+  - let the LLM judge only ambiguous candidate pairs.
 - Source references:
   - dedup by summary page id first,
   - then source id,
   - then external article URL.
+
+## Post-Write Lint/Fixer Path
+
+The Notion-style Lint Agent and Fixer stay useful, but only after the normal
+compile path writes and syncs. Their job is to catch resolver misses, stale
+drafts, weak references, duplicate summaries, type mistakes, and old historical
+debt.
+
+Fixer apply order:
+
+```text
+lint/audit finding
+ -> fixer plan
+ -> apply to wiki.db
+ -> emit page/outbox changes
+ -> project Vault
+ -> consume Mempalace
+ -> audit again
+```
+
+Fixer must not directly edit generated Vault Markdown as the source of truth and
+must not directly patch `palace.db`.
 
 ## Edge Cases
 

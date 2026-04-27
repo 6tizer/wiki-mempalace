@@ -36,6 +36,22 @@ Instructions, then prove it with a tiny production sample.
 - The compiler must deduplicate before creating pages:
   - summary dedup by source id / source URL / external article URL,
   - concept/entity dedup by normalized title and conservative fuzzy title match.
+- The compiler must not rely on an unbounded prompt glossary or a growing list
+  of one-off aliases for production deduplication.
+- A pre-write canonical resolver must run after the LLM compiler draft and
+  before any concept/entity page write:
+  - deterministic normalization first,
+  - existing page candidate retrieval from `wiki.db`,
+  - alias/canonical mapping lookup,
+  - concept/entity cross-type match check,
+  - bounded top-K candidates only.
+- Ambiguous canonical decisions may use a small LLM call, but that call must
+  compare the draft item against retrieved candidates only. It must not re-read
+  or recompile the full article.
+- Confirmed alias/canonical decisions must be stored as data in a future
+  mapping layer, not only in code and not inside the main compiler prompt.
+- Low-confidence canonical decisions must stop that source or record a review
+  finding; they must not silently create duplicate pages.
 - Existing concept/entity pages must be updated incrementally, not rewritten from
   scratch.
 - References must be structured for Obsidian and system audit:
@@ -56,6 +72,9 @@ Instructions, then prove it with a tiny production sample.
   internals must use the new compiler contract.
 - The first production run must support a tiny sample of one X source and one
   WeChat source.
+- Lint/Fixer remains a post-write governance path. When it fixes duplicate or
+  reference issues, it must apply to `wiki.db`, emit the needed outbox/page
+  changes, re-project Vault, re-sync Mempalace, and then run audit again.
 
 ## Non-Goals
 
@@ -65,6 +84,8 @@ Instructions, then prove it with a tiny production sample.
 - No direct `palace.db` writes.
 - No manual editing of generated Markdown as the fix path.
 - No unattended hourly automation until the tiny sample passes.
+- No direct Vault or `palace.db` patching from Lint/Fixer.
+- No whole-wiki context dump into the compiler prompt.
 
 ## Inputs / Outputs
 

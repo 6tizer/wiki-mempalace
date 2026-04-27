@@ -55,6 +55,35 @@ pub fn write_projection(
     Ok(stats)
 }
 
+pub fn write_projection_pages(
+    wiki_root: &Path,
+    store: &InMemoryStore,
+    page_ids: &HashSet<wiki_core::PageId>,
+) -> io::Result<ProjectionStats> {
+    let pages_dir = wiki_root.join("pages");
+    fs::create_dir_all(&pages_dir)?;
+
+    let mut stats = ProjectionStats::default();
+    let mut pages: Vec<_> = store.pages.values().collect();
+    pages.sort_by(|a, b| a.title.cmp(&b.title).then_with(|| a.id.0.cmp(&b.id.0)));
+    let filename_counts = page_filename_counts(&pages);
+    for page in pages {
+        if !page_ids.contains(&page.id) {
+            continue;
+        }
+        let subdir = page_subdir_for_entry_type(page.entry_type.as_ref());
+        let dir = pages_dir.join(subdir);
+        fs::create_dir_all(&dir)?;
+        let fname = projection_page_filename(page, subdir, &filename_counts);
+        fs::write(
+            dir.join(format!("{fname}.md")),
+            render_page_with_frontmatter(page),
+        )?;
+        stats.pages_written += 1;
+    }
+    Ok(stats)
+}
+
 fn cleanup_stale_managed_pages(pages_dir: &Path, store: &InMemoryStore) -> io::Result<()> {
     // Only files with a valid UUID `id:` frontmatter that is NOT in the current in-memory store
     // are removed. Files without an `id:` field or with an unparseable value are preserved.
@@ -631,6 +660,40 @@ mod tests {
         assert_eq!(files.len(), 2);
         assert!(files.iter().all(|name| name.starts_with("摘要：Same-")));
         assert!(!pages_dir.join("摘要：Same.md").exists());
+    }
+
+    #[test]
+    fn targeted_projection_writes_only_selected_pages_without_cleanup() {
+        let dir = tempdir().unwrap();
+        let wiki_root = dir.path();
+        let stale_dir = wiki_root.join("pages").join("summary");
+        std::fs::create_dir_all(&stale_dir).unwrap();
+        let stale = stale_dir.join("stale.md");
+        std::fs::write(
+            &stale,
+            format!("---\nid: \"{}\"\n---\n\nstale", uuid::Uuid::new_v4()),
+        )
+        .unwrap();
+
+        let mut store = InMemoryStore::default();
+        let selected = WikiPage::new("Selected", "selected body", private_scope())
+            .with_entry_type(EntryType::Summary);
+        let skipped = WikiPage::new("Skipped", "skipped body", private_scope())
+            .with_entry_type(EntryType::Summary);
+        let selected_id = selected.id;
+        store.pages.insert(selected.id, selected);
+        store.pages.insert(skipped.id, skipped);
+
+        let stats =
+            write_projection_pages(wiki_root, &store, &HashSet::from([selected_id])).unwrap();
+
+        assert_eq!(stats.pages_written, 1);
+        assert!(wiki_root.join("pages/summary/Selected.md").exists());
+        assert!(!wiki_root.join("pages/summary/Skipped.md").exists());
+        assert!(
+            stale.exists(),
+            "targeted projection must not clean unrelated files"
+        );
     }
 
     #[test]

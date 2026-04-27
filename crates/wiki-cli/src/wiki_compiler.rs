@@ -10,7 +10,7 @@ use wiki_core::{
     PageId, RawArtifact, RelationKind, Scope, SourceId, TypedEdge, WikiPage,
 };
 use wiki_kernel::{
-    format_claim_doc_id, initial_status_for, write_projection, LlmWikiEngine, NoopWikiHook,
+    format_claim_doc_id, initial_status_for, write_projection_pages, LlmWikiEngine, NoopWikiHook,
 };
 use wiki_storage::SqliteRepository;
 
@@ -51,6 +51,7 @@ struct PageMaterializationStats {
     concepts_updated: usize,
     entities_created: usize,
     entities_updated: usize,
+    written_page_ids: Vec<PageId>,
     warnings: Vec<String>,
 }
 
@@ -60,6 +61,7 @@ struct IngestOneStats {
     entities: usize,
     relationships: usize,
     source_id: SourceId,
+    written_page_ids: Vec<PageId>,
     page_stats: PageMaterializationStats,
 }
 
@@ -132,17 +134,20 @@ pub(crate) fn batch_ingest_cmd(
 
     let cfg = llm::load_llm_config(llm_config_path)?;
     let scope = parse_scope(opts.scope.unwrap_or("shared:wiki"));
+    let compiler_schema = trusted_compiler_schema(schema);
+    eng.schema = compiler_schema.clone();
     let mut runner = WikiCompilerRunner {
         eng,
         repo,
         cfg: &cfg,
         vectors,
         llm_config_path,
-        schema,
+        schema: &compiler_schema,
         scope,
     };
 
     let mut compiled_paths: Vec<(PathBuf, SourceId)> = Vec::new();
+    let mut written_page_ids: HashSet<PageId> = HashSet::new();
     let mut ok_count = 0usize;
     let mut err_count = 0usize;
 
@@ -168,6 +173,7 @@ pub(crate) fn batch_ingest_cmd(
                     eprintln!("  ! {warning}");
                 }
                 compiled_paths.push((src.path.clone(), stats.source_id));
+                written_page_ids.extend(stats.written_page_ids);
                 ok_count += 1;
             }
             Err(e) => {
@@ -181,21 +187,30 @@ pub(crate) fn batch_ingest_cmd(
         }
     }
 
-    if opts.sync_wiki {
+    if ok_count > 0 && opts.sync_wiki {
         if let Some(root) = opts.wiki_root {
-            let stats = write_projection(root, &runner.eng.store, &runner.eng.audits)?;
+            let stats = write_projection_pages(root, &runner.eng.store, &written_page_ids)?;
             println!(
                 "projection pages={} claims={} sources={}",
                 stats.pages_written, stats.claims_written, stats.sources_written
             );
         }
     }
-    write_run_report(opts.wiki_root.or(Some(opts.vault)), ok_count, err_count)?;
-    for (path, source_id) in compiled_paths {
-        mark_source_compiled(&path, source_id)?;
+    if ok_count > 0 {
+        write_run_report(opts.wiki_root.or(Some(opts.vault)), ok_count, err_count)?;
+        for (path, source_id) in compiled_paths {
+            mark_source_compiled(&path, source_id)?;
+        }
     }
     eprintln!("\n完成：成功={ok_count} 失败={err_count}");
     Ok(())
+}
+
+fn trusted_compiler_schema(schema: &DomainSchema) -> DomainSchema {
+    let mut schema = schema.clone();
+    schema.tag_config.max_new_tags_per_ingest = u32::MAX;
+    schema.tag_config.deprecated_tags.clear();
+    schema
 }
 
 struct WikiCompilerRunner<'a> {
@@ -303,6 +318,7 @@ impl WikiCompilerRunner<'_> {
             entities: plan.entities.len(),
             relationships: plan.relationships.len(),
             source_id: sid,
+            written_page_ids: page_stats.written_page_ids.clone(),
             page_stats,
         })
     }
@@ -454,17 +470,104 @@ fn materialize_compiler_pages(
         },
     };
 
-    let entity_links = extracted_entity_links(plan);
-    if plan.should_materialize_summary_page()
-        && find_summary_page(
-            &eng.store.pages,
-            &summary_title,
-            &source_ref.source_url,
-            scope,
-        )
-        .is_none()
-    {
-        let md = render_summary_markdown(plan, &source_ref.source_url, &entity_links);
+    let existing_summary = find_summary_page(
+        &eng.store.pages,
+        &summary_title,
+        &source_ref.source_url,
+        scope,
+    );
+    if existing_summary.is_some() {
+        return stats;
+    }
+
+    let mut summary_links = Vec::new();
+    let mut seen_summary_links = HashSet::new();
+    for concept in &plan.concepts {
+        let name = concept.canonical_name.trim();
+        if name.is_empty() || is_generic_concept(name) {
+            stats
+                .warnings
+                .push(format!("skip generic entity/concept: {name}"));
+            continue;
+        }
+        let (resolved, resolved_kind) =
+            resolve_compiler_page_with_fallback(&eng.store.pages, &EntryType::Concept, name, scope);
+        if let Some(pid) = resolved.page_id {
+            let mut updated_page = None;
+            if let Some(page) = eng.store.pages.get_mut(&pid) {
+                if append_source_reference(page, &source_ref) {
+                    updated_page = Some(page.clone());
+                }
+                push_unique_link(&mut summary_links, &mut seen_summary_links, &page.title);
+            }
+            if let Some(page) = updated_page {
+                let page_id = page.id;
+                eng.write_page(page, "batch-ingest");
+                stats.written_page_ids.push(page_id);
+                match resolved_kind {
+                    EntryType::Concept => stats.concepts_updated += 1,
+                    EntryType::Entity => stats.entities_updated += 1,
+                    _ => {}
+                }
+            }
+            continue;
+        }
+
+        let title = resolved.canonical_title;
+        let page = build_concept_page(concept, &title, &source_ref, scope, schema);
+        let page_id = page.id;
+        push_unique_link(&mut summary_links, &mut seen_summary_links, &page.title);
+        eng.write_page(page, "batch-ingest");
+        stats.written_page_ids.push(page_id);
+        stats.concepts_created += 1;
+    }
+
+    for ed in &plan.entities {
+        let Some(kind) = compiler_page_kind(ed) else {
+            stats
+                .warnings
+                .push(format!("skip generic entity/concept: {}", ed.label));
+            continue;
+        };
+        let label = ed.canonical_or_label();
+        let (resolved, resolved_kind) =
+            resolve_compiler_page_with_fallback(&eng.store.pages, &kind, label, scope);
+        if let Some(pid) = resolved.page_id {
+            let mut updated_page = None;
+            if let Some(page) = eng.store.pages.get_mut(&pid) {
+                if append_source_reference(page, &source_ref) {
+                    updated_page = Some(page.clone());
+                }
+                push_unique_link(&mut summary_links, &mut seen_summary_links, &page.title);
+            }
+            if let Some(page) = updated_page {
+                let page_id = page.id;
+                eng.write_page(page, "batch-ingest");
+                stats.written_page_ids.push(page_id);
+                match resolved_kind {
+                    EntryType::Concept => stats.concepts_updated += 1,
+                    EntryType::Entity => stats.entities_updated += 1,
+                    _ => {}
+                }
+            }
+            continue;
+        }
+
+        let title = resolved.canonical_title;
+        let page = build_concept_entity_page(ed, &title, kind.clone(), &source_ref, scope, schema);
+        let page_id = page.id;
+        push_unique_link(&mut summary_links, &mut seen_summary_links, &page.title);
+        eng.write_page(page, "batch-ingest");
+        stats.written_page_ids.push(page_id);
+        match kind {
+            EntryType::Concept => stats.concepts_created += 1,
+            EntryType::Entity => stats.entities_created += 1,
+            _ => {}
+        }
+    }
+
+    if plan.should_materialize_summary_page() {
+        let md = render_summary_markdown(plan, &source_ref.source_url, &summary_links);
         let status = initial_status_for(Some(&EntryType::Summary), schema);
         let mut page = WikiPage::new(summary_title.clone(), md, scope.clone())
             .with_entry_type(EntryType::Summary)
@@ -479,86 +582,21 @@ fn materialize_compiler_pages(
         page.source_tags = batch.source_tags.clone();
         page.compiled_by = Some("batch-ingest".to_string());
         page.last_compiled_at = Some(time::OffsetDateTime::now_utc());
+        let page_id = page.id;
         eng.write_page(page, "batch-ingest");
+        stats.written_page_ids.push(page_id);
         stats.summary_created = true;
-    }
-
-    for concept in &plan.concepts {
-        let name = concept.canonical_name.trim();
-        if name.is_empty() || is_generic_concept(name) {
-            stats
-                .warnings
-                .push(format!("skip generic entity/concept: {name}"));
-            continue;
-        }
-        let normalized = normalize_title_for_dedup(name);
-        if let Some(pid) =
-            find_page_by_normalized_title(&eng.store.pages, &EntryType::Concept, &normalized, scope)
-        {
-            let mut updated_page = None;
-            if let Some(page) = eng.store.pages.get_mut(&pid) {
-                if append_source_reference(page, &source_ref) {
-                    updated_page = Some(page.clone());
-                }
-            }
-            if let Some(page) = updated_page {
-                eng.write_page(page, "batch-ingest");
-                stats.concepts_updated += 1;
-            }
-            continue;
-        }
-
-        let page = build_concept_page(concept, &source_ref, scope, schema);
-        eng.write_page(page, "batch-ingest");
-        stats.concepts_created += 1;
-    }
-
-    for ed in &plan.entities {
-        let Some(kind) = compiler_page_kind(ed) else {
-            stats
-                .warnings
-                .push(format!("skip generic entity/concept: {}", ed.label));
-            continue;
-        };
-        let normalized = normalize_title_for_dedup(ed.canonical_or_label());
-        if let Some(pid) =
-            find_page_by_normalized_title(&eng.store.pages, &kind, &normalized, scope)
-        {
-            let mut updated_page = None;
-            if let Some(page) = eng.store.pages.get_mut(&pid) {
-                if append_source_reference(page, &source_ref) {
-                    updated_page = Some(page.clone());
-                }
-            }
-            if let Some(page) = updated_page {
-                eng.write_page(page, "batch-ingest");
-                match kind {
-                    EntryType::Concept => stats.concepts_updated += 1,
-                    EntryType::Entity => stats.entities_updated += 1,
-                    _ => {}
-                }
-            }
-            continue;
-        }
-
-        let page = build_concept_entity_page(ed, kind.clone(), &source_ref, scope, schema);
-        eng.write_page(page, "batch-ingest");
-        match kind {
-            EntryType::Concept => stats.concepts_created += 1,
-            EntryType::Entity => stats.entities_created += 1,
-            _ => {}
-        }
     }
     stats
 }
 
 fn build_concept_page(
     concept: &LlmConceptDraft,
+    title: &str,
     source_ref: &SourceReference,
     scope: &Scope,
     schema: &DomainSchema,
 ) -> WikiPage {
-    let title = concept.canonical_name.trim();
     let definition = if concept.definition.trim().is_empty() {
         "（待后续 compiler plan 字段补全）".to_string()
     } else {
@@ -577,12 +615,12 @@ fn build_concept_page(
 
 fn build_concept_entity_page(
     ed: &LlmEntityDraft,
+    title: &str,
     kind: EntryType,
     source_ref: &SourceReference,
     scope: &Scope,
     schema: &DomainSchema,
 ) -> WikiPage {
-    let title = ed.canonical_or_label().trim();
     let definition = if !ed.profile_or_definition().trim().is_empty() {
         ed.profile_or_definition().trim().to_string()
     } else if kind == EntryType::Concept {
@@ -632,13 +670,13 @@ fn render_wikilinks(names: &[String]) -> String {
 fn render_summary_markdown(
     plan: &LlmIngestPlanV1,
     foot_url: &str,
-    entity_links: &[String],
+    resolved_links: &[String],
 ) -> String {
     let mut md = plan.to_five_section_summary_body(Some(foot_url));
-    let links = if entity_links.is_empty() {
+    let links = if resolved_links.is_empty() {
         "（暂无）".to_string()
     } else {
-        entity_links
+        resolved_links
             .iter()
             .map(|name| format!("- [[{name}]]"))
             .collect::<Vec<_>>()
@@ -646,28 +684,6 @@ fn render_summary_markdown(
     };
     md = replace_section_body(&md, "提取的概念", &links).unwrap_or(md);
     md
-}
-
-fn extracted_entity_links(plan: &LlmIngestPlanV1) -> Vec<String> {
-    let mut seen = HashSet::new();
-    let mut out = Vec::new();
-    for concept in &plan.concepts {
-        if !concept.canonical_name.trim().is_empty()
-            && !is_generic_concept(&concept.canonical_name)
-            && seen.insert(normalize_title_for_dedup(&concept.canonical_name))
-        {
-            out.push(concept.canonical_name.trim().to_string());
-        }
-    }
-    for ed in &plan.entities {
-        if compiler_page_kind(ed).is_some() {
-            let key = normalize_title_for_dedup(ed.canonical_or_label());
-            if seen.insert(key) {
-                out.push(ed.canonical_or_label().trim().to_string());
-            }
-        }
-    }
-    out
 }
 
 fn compiler_page_kind(ed: &LlmEntityDraft) -> Option<EntryType> {
@@ -689,6 +705,182 @@ fn is_generic_concept(label: &str) -> bool {
     )
 }
 
+#[derive(Debug, Clone)]
+struct ResolvedCompilerPage {
+    page_id: Option<PageId>,
+    canonical_title: String,
+}
+
+fn resolve_compiler_page(
+    pages: &HashMap<PageId, WikiPage>,
+    kind: &EntryType,
+    requested_title: &str,
+    scope: &Scope,
+) -> ResolvedCompilerPage {
+    let canonical_title = canonical_output_title(kind, requested_title);
+    let requested_keys = dedup_keys_for_title(requested_title);
+    let canonical_keys = dedup_keys_for_title(&canonical_title);
+    let alias_keys = alias_keys_for_title(requested_title);
+    let all_keys: HashSet<String> = requested_keys
+        .iter()
+        .chain(canonical_keys.iter())
+        .chain(alias_keys.iter())
+        .cloned()
+        .collect();
+
+    let candidates: Vec<_> = pages
+        .iter()
+        .filter(|(_, p)| p.entry_type.as_ref() == Some(kind) && p.scope == *scope)
+        .map(|(pid, p)| (*pid, p))
+        .collect();
+
+    if let Some((pid, page)) = candidates.iter().find(|(_, p)| {
+        let page_keys = dedup_keys_for_title(&p.title);
+        page_keys.iter().any(|key| all_keys.contains(key))
+    }) {
+        return ResolvedCompilerPage {
+            page_id: Some(*pid),
+            canonical_title: page.title.clone(),
+        };
+    }
+
+    let fuzzy: Vec<_> = candidates
+        .iter()
+        .filter(|(_, p)| page_matches_alias_text(p, &all_keys))
+        .collect();
+    if fuzzy.len() == 1 {
+        let (pid, page) = fuzzy[0];
+        return ResolvedCompilerPage {
+            page_id: Some(*pid),
+            canonical_title: page.title.clone(),
+        };
+    }
+
+    ResolvedCompilerPage {
+        page_id: None,
+        canonical_title,
+    }
+}
+
+fn resolve_compiler_page_with_fallback(
+    pages: &HashMap<PageId, WikiPage>,
+    preferred_kind: &EntryType,
+    requested_title: &str,
+    scope: &Scope,
+) -> (ResolvedCompilerPage, EntryType) {
+    let primary = resolve_compiler_page(pages, preferred_kind, requested_title, scope);
+    if primary.page_id.is_some() {
+        return (primary, preferred_kind.clone());
+    }
+
+    let fallback_kind = match preferred_kind {
+        EntryType::Concept => EntryType::Entity,
+        EntryType::Entity => EntryType::Concept,
+        other => other.clone(),
+    };
+    if fallback_kind == *preferred_kind {
+        return (primary, preferred_kind.clone());
+    }
+
+    let fallback = resolve_compiler_page(pages, &fallback_kind, requested_title, scope);
+    if fallback.page_id.is_some() {
+        return (fallback, fallback_kind);
+    }
+
+    (primary, preferred_kind.clone())
+}
+
+fn push_unique_link(out: &mut Vec<String>, seen: &mut HashSet<String>, title: &str) {
+    let key = compact_title_key(title);
+    if !key.is_empty() && seen.insert(key) {
+        out.push(title.to_string());
+    }
+}
+
+fn canonical_output_title(kind: &EntryType, requested_title: &str) -> String {
+    let title = requested_title.trim();
+    if *kind == EntryType::Entity {
+        if let Some(repo) = github_repo_name(title) {
+            return canonical_repo_title(repo);
+        }
+    }
+    title.to_string()
+}
+
+fn github_repo_name(title: &str) -> Option<&str> {
+    let trimmed = title.trim();
+    let (owner, repo) = trimmed.split_once('/')?;
+    if owner.trim().is_empty() || repo.trim().is_empty() || repo.contains('/') {
+        return None;
+    }
+    Some(repo.trim())
+}
+
+fn canonical_repo_title(repo: &str) -> String {
+    match compact_title_key(repo).as_str() {
+        "openwebui" => "Open WebUI".to_string(),
+        "anythingllm" => "AnythingLLM".to_string(),
+        "crewai" => "CrewAI".to_string(),
+        "n8n" => "n8n".to_string(),
+        _ => repo.trim().to_string(),
+    }
+}
+
+fn dedup_keys_for_title(title: &str) -> HashSet<String> {
+    let mut keys = HashSet::new();
+    let normalized = normalize_title_for_dedup(title);
+    if !normalized.is_empty() {
+        keys.insert(normalized);
+    }
+    let compact = compact_title_key(title);
+    if !compact.is_empty() {
+        keys.insert(compact);
+    }
+    if let Some(repo) = github_repo_name(title) {
+        keys.extend(dedup_keys_for_title(repo));
+    }
+    keys
+}
+
+fn alias_keys_for_title(title: &str) -> HashSet<String> {
+    let compact = compact_title_key(title);
+    let mut keys = HashSet::new();
+    let aliases: &[&str] = match compact.as_str() {
+        "rag" | "检索增强生成" | "rag检索增强生成" | "检索增强生成rag" => {
+            &["RAG", "检索增强生成", "RAG/检索"]
+        }
+        "mcp"
+        | "mcp协议"
+        | "mcp模型上下文协议"
+        | "mcpmodelcontextprotocol"
+        | "mcp连接器"
+        | "mcpconnectors"
+        | "modelcontextprotocol" => &["MCP", "MCP 协议", "MCP协议", "Model Context Protocol"],
+        "skills" | "skills机制" | "skills技能文件" => {
+            &["Agent Skills", "Skills", "Skills（技能文件）"]
+        }
+        "本地优先策略" => &["本地优先", "local first"],
+        "产品品味" | "ai产品品味" => &["品味", "taste"],
+        "ollama" => &["Ollama", "ollama/ollama"],
+        "n8n" => &["n8n", "n8n-io/n8n"],
+        "comfyui" => &["ComfyUI", "comfyanonymous/ComfyUI"],
+        "crewai" => &["CrewAI", "crewAIInc/crewAI"],
+        "dify" => &["Dify", "langgenius/dify"],
+        "perplexica" | "itzcrazyknsperplexica" => &["Perplexica", "Vane"],
+        _ => &[],
+    };
+    for alias in aliases {
+        keys.extend(dedup_keys_for_title(alias));
+    }
+    keys
+}
+
+fn page_matches_alias_text(page: &WikiPage, keys: &HashSet<String>) -> bool {
+    let text_key = compact_title_key(&format!("{} {}", page.title, page.markdown));
+    keys.iter()
+        .any(|key| key.len() >= 5 && text_key.contains(key))
+}
+
 fn find_summary_page(
     pages: &HashMap<PageId, WikiPage>,
     summary_title: &str,
@@ -706,22 +898,6 @@ fn find_summary_page(
                 } else {
                     p.source_url.as_deref() == Some(source_url) || p.markdown.contains(source_url)
                 }
-        })
-        .map(|(pid, _)| *pid)
-}
-
-fn find_page_by_normalized_title(
-    pages: &HashMap<PageId, WikiPage>,
-    kind: &EntryType,
-    normalized: &str,
-    scope: &Scope,
-) -> Option<PageId> {
-    pages
-        .iter()
-        .find(|(_, p)| {
-            p.entry_type.as_ref() == Some(kind)
-                && p.scope == *scope
-                && normalize_title_for_dedup(&p.title) == normalized
         })
         .map(|(pid, _)| *pid)
 }
@@ -779,6 +955,51 @@ pub(crate) fn normalize_title_for_dedup(title: &str) -> String {
         }
     }
     out.trim().to_string()
+}
+
+fn compact_title_key(title: &str) -> String {
+    title
+        .chars()
+        .filter_map(|ch| {
+            if ch.is_ascii_alphanumeric() {
+                Some(ch.to_ascii_lowercase())
+            } else if ch.is_alphanumeric() {
+                Some(ch)
+            } else if ch.is_whitespace() || ch.is_ascii_punctuation() || is_cjk_punctuation(ch) {
+                None
+            } else {
+                Some(ch)
+            }
+        })
+        .collect()
+}
+
+fn is_cjk_punctuation(ch: char) -> bool {
+    matches!(
+        ch,
+        '，' | '。'
+            | '、'
+            | '：'
+            | '；'
+            | '？'
+            | '！'
+            | '（'
+            | '）'
+            | '【'
+            | '】'
+            | '《'
+            | '》'
+            | '“'
+            | '”'
+            | '‘'
+            | '’'
+            | '「'
+            | '」'
+            | '『'
+            | '』'
+            | '·'
+            | '—'
+    )
 }
 
 fn replace_section_body(md: &str, section: &str, body: &str) -> Option<String> {
@@ -1035,6 +1256,32 @@ mod tests {
         }
     }
 
+    fn concept(name: &str) -> LlmConceptDraft {
+        LlmConceptDraft {
+            canonical_name: name.into(),
+            kind: "concept".into(),
+            definition: format!("{name} definition"),
+            key_points: vec![format!("{name} point")],
+            tags: Vec::new(),
+            related_names: Vec::new(),
+            category: None,
+        }
+    }
+
+    fn entity(name: &str) -> LlmEntityDraft {
+        LlmEntityDraft {
+            label: name.into(),
+            kind: "project".into(),
+            canonical_name: name.into(),
+            category: None,
+            definition: format!("{name} definition"),
+            profile: String::new(),
+            key_points: vec![format!("{name} point")],
+            tags: Vec::new(),
+            related_names: Vec::new(),
+        }
+    }
+
     #[test]
     fn title_normalization_folds_ascii_case_punctuation_and_space() {
         assert_eq!(
@@ -1205,6 +1452,236 @@ mod tests {
     }
 
     #[test]
+    fn compiler_dedup_resolves_notion_style_aliases_before_creating_pages() {
+        let mut eng = LlmWikiEngine::new(DomainSchema::permissive_default());
+        let existing_pages = [
+            WikiPage::new("MCP-协议", "# MCP-协议\n", test_scope())
+                .with_entry_type(EntryType::Concept)
+                .with_status(EntryStatus::Draft),
+            WikiPage::new("RAG", "# RAG\n", test_scope())
+                .with_entry_type(EntryType::Concept)
+                .with_status(EntryStatus::Draft),
+            WikiPage::new("Ollama", "# Ollama\n", test_scope())
+                .with_entry_type(EntryType::Entity)
+                .with_status(EntryStatus::Draft),
+            WikiPage::new("Dify", "# Dify\n", test_scope())
+                .with_entry_type(EntryType::Entity)
+                .with_status(EntryStatus::Draft),
+            WikiPage::new("Vane", "# Vane\n\nVane 前身为 Perplexica。\n", test_scope())
+                .with_entry_type(EntryType::Entity)
+                .with_status(EntryStatus::Draft),
+        ];
+        for page in existing_pages {
+            eng.store.pages.insert(page.id, page);
+        }
+        let mut plan = plan_with_entities(vec![
+            entity("ollama/ollama"),
+            entity("langgenius/dify"),
+            entity("ItzCrazyKns/Perplexica"),
+        ]);
+        plan.concepts = vec![
+            concept("MCP协议"),
+            concept("MCP（Model Context Protocol）"),
+            concept("检索增强生成"),
+        ];
+        let batch = BatchIngestContext {
+            source_title: "Source Alias".into(),
+            source_url: "https://example.test/alias".into(),
+            source_tags: vec![],
+        };
+
+        let stats = materialize_compiler_pages(
+            &mut eng,
+            &plan,
+            &batch,
+            "https://example.test/alias",
+            &test_scope(),
+            &DomainSchema::permissive_default(),
+        );
+
+        assert!(stats.summary_created);
+        assert_eq!(stats.concepts_created, 0);
+        assert_eq!(stats.entities_created, 0);
+        assert_eq!(stats.concepts_updated, 2);
+        assert_eq!(stats.entities_updated, 3);
+        let summary = eng
+            .store
+            .pages
+            .values()
+            .find(|p| p.title == "摘要：Source Alias")
+            .unwrap();
+        assert!(summary.markdown.contains("[[MCP-协议]]"));
+        assert_eq!(summary.markdown.matches("[[MCP-协议]]").count(), 1);
+        assert!(summary.markdown.contains("[[RAG]]"));
+        assert!(summary.markdown.contains("[[Ollama]]"));
+        assert!(summary.markdown.contains("[[Dify]]"));
+        assert!(summary.markdown.contains("[[Vane]]"));
+        assert!(!summary.markdown.contains("[[MCP协议]]"));
+        assert!(!summary
+            .markdown
+            .contains("[[MCP（Model Context Protocol）]]"));
+        assert!(!summary.markdown.contains("[[ollama/ollama]]"));
+        assert!(!eng.store.pages.values().any(|p| p.title == "MCP协议"));
+        assert!(!eng
+            .store
+            .pages
+            .values()
+            .any(|p| p.title == "MCP（Model Context Protocol）"));
+        assert!(!eng.store.pages.values().any(|p| p.title == "ollama/ollama"));
+    }
+
+    #[test]
+    fn new_github_repo_entity_uses_repo_name_as_page_title() {
+        let mut eng = LlmWikiEngine::new(DomainSchema::permissive_default());
+        let plan = plan_with_entities(vec![entity("danny-avila/LibreChat")]);
+        let batch = BatchIngestContext {
+            source_title: "Source Repo".into(),
+            source_url: "https://example.test/repo".into(),
+            source_tags: vec![],
+        };
+
+        let stats = materialize_compiler_pages(
+            &mut eng,
+            &plan,
+            &batch,
+            "https://example.test/repo",
+            &test_scope(),
+            &DomainSchema::permissive_default(),
+        );
+
+        assert_eq!(stats.entities_created, 1);
+        assert!(eng.store.pages.values().any(|p| p.title == "LibreChat"));
+        assert!(!eng
+            .store
+            .pages
+            .values()
+            .any(|p| p.title == "danny-avila/LibreChat"));
+        let summary = eng
+            .store
+            .pages
+            .values()
+            .find(|p| p.title == "摘要：Source Repo")
+            .unwrap();
+        assert!(summary.markdown.contains("[[LibreChat]]"));
+    }
+
+    #[test]
+    fn concept_draft_updates_existing_entity_instead_of_creating_cross_type_duplicate() {
+        let mut eng = LlmWikiEngine::new(DomainSchema::permissive_default());
+        let existing = WikiPage::new("Claude Cowork", "# Claude Cowork\n", test_scope())
+            .with_entry_type(EntryType::Entity)
+            .with_status(EntryStatus::Draft);
+        eng.store.pages.insert(existing.id, existing);
+        let mut plan = plan_with_entities(Vec::new());
+        plan.concepts = vec![concept("Claude Cowork")];
+        let batch = BatchIngestContext {
+            source_title: "Source Cowork".into(),
+            source_url: "https://example.test/cowork".into(),
+            source_tags: vec![],
+        };
+
+        let stats = materialize_compiler_pages(
+            &mut eng,
+            &plan,
+            &batch,
+            "https://example.test/cowork",
+            &test_scope(),
+            &DomainSchema::permissive_default(),
+        );
+
+        assert_eq!(stats.concepts_created, 0);
+        assert_eq!(stats.entities_updated, 1);
+        assert_eq!(
+            eng.store
+                .pages
+                .values()
+                .filter(|p| p.title == "Claude Cowork")
+                .count(),
+            1
+        );
+        assert!(!eng
+            .store
+            .pages
+            .values()
+            .any(|p| p.title == "Claude Cowork" && p.entry_type == Some(EntryType::Concept)));
+        let summary = eng
+            .store
+            .pages
+            .values()
+            .find(|p| p.title == "摘要：Source Cowork")
+            .unwrap();
+        assert!(summary.markdown.contains("[[Claude Cowork]]"));
+    }
+
+    #[test]
+    fn compiler_dedup_resolves_wechat_concept_aliases() {
+        let mut eng = LlmWikiEngine::new(DomainSchema::permissive_default());
+        let existing_pages = [
+            WikiPage::new("MCP 协议", "# MCP 协议\n", test_scope())
+                .with_entry_type(EntryType::Concept)
+                .with_status(EntryStatus::Draft),
+            WikiPage::new("Agent Skills", "# Agent Skills\n", test_scope())
+                .with_entry_type(EntryType::Concept)
+                .with_status(EntryStatus::Draft),
+            WikiPage::new("本地优先", "# 本地优先\n", test_scope())
+                .with_entry_type(EntryType::Concept)
+                .with_status(EntryStatus::Draft),
+            WikiPage::new("品味", "# 品味\n", test_scope())
+                .with_entry_type(EntryType::Concept)
+                .with_status(EntryStatus::Draft),
+        ];
+        for page in existing_pages {
+            eng.store.pages.insert(page.id, page);
+        }
+        let mut plan = plan_with_entities(Vec::new());
+        plan.concepts = vec![
+            concept("MCP connectors"),
+            concept("MCP连接器"),
+            concept("Skills机制"),
+            concept("本地优先策略"),
+            concept("产品品味"),
+            concept("AI产品品味"),
+        ];
+        let batch = BatchIngestContext {
+            source_title: "Source WeChat".into(),
+            source_url: "https://example.test/wechat".into(),
+            source_tags: vec![],
+        };
+
+        let stats = materialize_compiler_pages(
+            &mut eng,
+            &plan,
+            &batch,
+            "https://example.test/wechat",
+            &test_scope(),
+            &DomainSchema::permissive_default(),
+        );
+
+        assert_eq!(stats.concepts_created, 0);
+        assert_eq!(stats.concepts_updated, 4);
+        for duplicate in [
+            "MCP connectors",
+            "MCP连接器",
+            "Skills机制",
+            "本地优先策略",
+            "产品品味",
+            "AI产品品味",
+        ] {
+            assert!(!eng.store.pages.values().any(|p| p.title == duplicate));
+        }
+        let summary = eng
+            .store
+            .pages
+            .values()
+            .find(|p| p.title == "摘要：Source WeChat")
+            .unwrap();
+        assert!(summary.markdown.contains("[[MCP 协议]]"));
+        assert!(summary.markdown.contains("[[Agent Skills]]"));
+        assert!(summary.markdown.contains("[[本地优先]]"));
+        assert!(summary.markdown.contains("[[品味]]"));
+    }
+
+    #[test]
     fn page_dedup_is_scoped() {
         let mut eng = LlmWikiEngine::new(DomainSchema::permissive_default());
         let existing = WikiPage::new("Agent Memory", "# Agent Memory\n", private_scope())
@@ -1300,6 +1777,38 @@ mod tests {
             vec!["Agent", "长期记忆"]
         );
         assert!(parse_frontmatter_tags("tags: []\n", "tags").is_empty());
+    }
+
+    #[test]
+    fn trusted_compiler_schema_allows_auto_fill_tags() {
+        let mut schema = DomainSchema::permissive_default();
+        schema.tag_config.max_new_tags_per_ingest = 1;
+        schema.tag_config.deprecated_tags = vec!["MCP".into()];
+        let trusted = trusted_compiler_schema(&schema);
+
+        let source_tags = vec!["MCP".to_string(), "new-source".to_string()];
+        let plan = LlmIngestPlanV1 {
+            version: 1,
+            summary: wiki_core::llm_ingest_plan::LlmSummaryDraft {
+                tags: vec!["new-summary".into()],
+                ..Default::default()
+            },
+            summary_title: "source".into(),
+            summary_markdown: String::new(),
+            one_sentence_summary: "one sentence".into(),
+            key_insights: vec!["insight".into()],
+            confidence: "medium".into(),
+            tags: vec!["new-plan".into()],
+            source_author: None,
+            source_publisher: None,
+            source_published_at: None,
+            claims: Vec::new(),
+            concepts: Vec::new(),
+            entities: Vec::new(),
+            relationships: Vec::new(),
+        };
+
+        preflight_llm_plan_tags(&plan, &source_tags, &trusted).unwrap();
     }
 
     #[test]

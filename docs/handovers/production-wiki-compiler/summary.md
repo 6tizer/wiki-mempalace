@@ -2,7 +2,9 @@
 
 ## Status
 
-Implementation merged in PR #44. Production tiny sample is still pending.
+Implementation merged in PR #44. PR #46 ran the first backed-up production tiny
+sample and added safety fixes. Broad scale-up is blocked on compiler
+canonicalization v2.
 
 ## Scope
 
@@ -35,6 +37,8 @@ local Wiki Compiler aligned with the user's Notion Wiki Compiler Instructions:
     compiled only after page projection/report succeeds.
   - Reuses an existing DB source by URI + scope if frontmatter `source_id` is
     missing after an interrupted run.
+  - PR #46 adds pre-write safety gates and sample-driven dedup improvements, but
+    the long-term fix is a resolver layer rather than more hardcoded aliases.
 - `crates/wiki-kernel/src/engine.rs`
   - Adds `write_page`, which inserts/replaces a page and emits `PageWritten`.
 - `crates/wiki-kernel/src/wiki_writer.rs`
@@ -62,14 +66,18 @@ local Wiki Compiler aligned with the user's Notion Wiki Compiler Instructions:
 
 ## Production Apply Boundary
 
-No production write was run in PR #44. Only read-only dry-runs were run against
-`/Users/mac-mini/Documents/wiki`.
+No production write was run in PR #44. PR #46 did run a backed-up tiny sample
+against `/Users/mac-mini/Documents/wiki` and then verified the same X/WeChat
+samples on restored temporary vault copies.
 
-Before tiny sample apply:
+Before broad scale-up:
 
-1. Back up `/Users/mac-mini/Documents/wiki`.
-2. Confirm selected source paths.
-3. Run one X source and one WeChat source with `--scope shared:wiki`.
-4. Consume outbox to `/Users/mac-mini/Documents/wiki/.wiki/palace.db`.
-5. Run `query` and `query/explain --palace-db`.
-6. User checks Obsidian output before scaling.
+1. Implement compiler canonicalization v2.
+2. Keep the resolver between compiler draft parsing and DB writes.
+3. Retrieve bounded existing page candidates from `wiki.db`; do not load the
+   whole wiki into the prompt.
+4. Use a small LLM only for ambiguous candidate pairs.
+5. Persist accepted alias/canonical decisions as data.
+6. Keep Lint/Fixer as post-write governance: apply to DB, project Vault, sync
+   Mempalace, then audit again.
+7. Re-run X/WeChat regression samples before compiling more sources.

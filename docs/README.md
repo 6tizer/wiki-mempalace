@@ -9,6 +9,7 @@
 - [outbox-and-consumers.md](outbox-and-consumers.md) — outbox 表、per-consumer progress、ack 语义。
 - [outbox-event-matrix.md](outbox-event-matrix.md) — `WikiEvent` 生产者、消费者和测试覆盖。
 - [vault-standards.md](vault-standards.md) — vault 目录、命名、frontmatter、正文骨架唯一标准。
+- [references/notion-wiki-agent-contract.md](references/notion-wiki-agent-contract.md) — Notion Compiler/Lint/Fixer/引用升级员的行为合同和本地映射。
 
 ## 运行与恢复
 

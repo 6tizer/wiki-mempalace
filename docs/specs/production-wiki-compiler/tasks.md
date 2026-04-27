@@ -34,6 +34,22 @@
 | T6 Production tiny sample runbook | Skill | main agent | `docs/handovers/production-wiki-compiler/summary.md`, run report | T1-T5 | Done |
 | T7 Review and verification | Skill | review subagent/main agent | tests, clippy, production dry-run evidence | T1-T6 | Done |
 
+## Follow-Up: Compiler Canonicalization v2
+
+This is the next compiler work before broad production scale-up. The tiny sample
+showed that prompt-only naming is not enough; the same page can come back as
+`MCP connectors`, `MCP连接器`, or `MCP 协议`. The fix should be a resolver layer,
+not a growing alias list in code or prompt.
+
+| Task | Grade | Owner | Files | Depends on | Status |
+| --- | --- | --- | --- | --- | --- |
+| T8 Resolver PRD/spec refresh | Script | main agent | `docs/prd/production-wiki-compiler.md`, `docs/specs/production-wiki-compiler/*`, `docs/references/notion-wiki-agent-contract.md` | T7 | Done |
+| T9 Candidate retrieval design | Agent | worker | `crates/wiki-cli/src/wiki_compiler.rs`, storage/search helpers, tests | T8 | Planned |
+| T10 Alias/canonical mapping storage | Agent | worker | `crates/wiki-storage/src/lib.rs`, migration/tests, compiler integration | T8/T9 | Planned |
+| T11 Small LLM fallback | Agent | worker | `crates/wiki-cli/src/wiki_compiler.rs`, LLM prompt/tests | T9/T10 | Planned |
+| T12 Lint/Fixer propagation contract | Agent | worker | `crates/wiki-cli/src/main.rs`, fixer/consistency docs/tests | T8 | Planned |
+| T13 Production regression sample set | Skill | main agent | X/WeChat sample commands, run report, handoff | T9-T12 | Planned |
+
 ## Implementation Notes
 
 - Prefer extracting `WikiCompilerRunner` into a new `wiki_compiler.rs` module
@@ -42,6 +58,8 @@
 - Do not run production apply until implementation tests pass and the user
   approves the tiny sample.
 - Do not mark Notion `已编译到Wiki` during the first sample.
+- Do not scale beyond tiny samples until canonicalization v2 exists.
+- Do not solve dedup by adding every observed alias to the compiler prompt.
 
 ## Review Notes
 
@@ -60,8 +78,8 @@
   - rich `summary.confidence` is preserved in page metadata.
 - PR #44 merged on 2026-04-27. Production apply was intentionally not run in
   the implementation PR.
-- Remaining gate is operational, not implementation: run a backed-up tiny
-  production sample before any scale-up.
+- PR #46 production safety follow-up found and fixed immediate sample issues,
+  but it also confirmed the need for canonicalization v2 before broad scale-up.
 
 ## Stop Conditions
 
@@ -71,6 +89,9 @@
   evidence.
 - Stop before production apply if backup path is not verified.
 - Stop before scale-up if Obsidian human check fails.
+- Stop if the resolver needs whole-wiki prompt context to decide one page.
+- Stop if the proposed fix grows a manual alias list instead of adding
+  candidate retrieval or persisted canonical mapping.
 
 ## Verification
 
