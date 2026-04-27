@@ -29,6 +29,7 @@ use wiki_storage::{
 };
 
 mod banner;
+mod compiler_deferred;
 mod consistency;
 mod dashboard;
 mod llm;
@@ -394,6 +395,24 @@ enum Cmd {
         /// 每条之间休眠秒数（避免 LLM 限流）
         #[arg(long, default_value_t = 1)]
         delay_secs: u64,
+    },
+    /// Resolve production compiler deferred_resolutions with machine-only decisions.
+    CompilerResolveDeferred {
+        /// production-wiki-compiler JSON report path.
+        #[arg(long)]
+        report: PathBuf,
+        /// Apply safe DB changes. Without this flag the command is dry-run.
+        #[arg(long, default_value_t = false)]
+        apply: bool,
+        /// Allow creating new canonical pages when the deferred item has no candidates.
+        #[arg(long, default_value_t = false)]
+        allow_create: bool,
+        /// Report directory. Defaults to <wiki-dir>/reports when --wiki-dir is set.
+        #[arg(long)]
+        report_dir: Option<PathBuf>,
+        /// Outbox consumer tag used when syncing Mempalace after apply.
+        #[arg(long, default_value = DEFAULT_MEMPALACE_CONSUMER_TAG)]
+        consumer_tag: String,
     },
     /// Run, inspect, and monitor scheduled automation jobs.
     Automation {
@@ -2751,6 +2770,77 @@ fn run_with_engine(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                     source_path: source_path.as_deref(),
                 },
             )?;
+        }
+        Cmd::CompilerResolveDeferred {
+            ref report,
+            apply,
+            allow_create,
+            ref report_dir,
+            ref consumer_tag,
+        } => {
+            let resolved_report_dir = report_dir
+                .as_ref()
+                .map(|path| resolve_wiki_relative_path(wiki_root.as_deref(), path.clone()))
+                .unwrap_or_else(|| {
+                    wiki_root
+                        .as_deref()
+                        .map(|root| root.join("reports"))
+                        .unwrap_or_else(|| PathBuf::from("reports"))
+                });
+            if apply && wiki_root.is_none() {
+                return Err("--wiki-dir is required with compiler-resolve-deferred --apply".into());
+            }
+            if apply && cli.palace.is_none() {
+                return Err("--palace is required with compiler-resolve-deferred --apply".into());
+            }
+            let run = compiler_deferred::run_compiler_deferred_resolution(
+                &mut eng,
+                &repo,
+                compiler_deferred::CompilerDeferredResolutionOptions {
+                    report_path: report,
+                    report_dir: &resolved_report_dir,
+                    apply,
+                    allow_create,
+                    scope: &viewer,
+                    schema: &schema,
+                },
+            )?;
+            if apply && run.db_changed {
+                let root = wiki_root
+                    .as_deref()
+                    .ok_or("--wiki-dir is required with compiler-resolve-deferred --apply")?;
+                let projection = write_projection(root, &eng.store, &eng.audits)?;
+                println!(
+                    "projection pages={} claims={} sources={}",
+                    projection.pages_written, projection.claims_written, projection.sources_written
+                );
+                let (dispatch, start_id, acked) = run_consume_to_mempalace_job(
+                    &eng,
+                    &repo,
+                    consumer_tag,
+                    0,
+                    cli.palace.as_deref(),
+                    &cli.viewer_scope,
+                )?;
+                println!(
+                    "mempalace seen={} dispatched={} ignored={} filtered={} unresolved={} start_id={start_id} acked={acked} consumer_tag={consumer_tag}",
+                    dispatch.lines_seen,
+                    dispatch.dispatched,
+                    dispatch.ignored,
+                    dispatch.filtered,
+                    dispatch.unresolved,
+                );
+                run_lint_job(&mut eng, &repo, &viewer, true, wiki_root.as_deref())?;
+            }
+            println!(
+                "compiler_deferred_resolution mode={} aliases_applied={} pages_created={} changed_pages={} json_report={} markdown_report={}",
+                if apply { "apply" } else { "dry-run" },
+                run.aliases_applied,
+                run.pages_created,
+                run.changed_page_ids.len(),
+                run.json_report_path.display(),
+                run.markdown_report_path.display()
+            );
         }
         Cmd::Automation {
             cmd: AutomationCmd::RunDaily { dry_run: false },

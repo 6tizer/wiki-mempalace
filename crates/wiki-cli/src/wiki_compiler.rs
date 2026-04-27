@@ -83,6 +83,7 @@ struct DeferredResolutionItem {
 
 #[derive(Debug, Clone, Serialize)]
 struct DeferredResolutionCandidate {
+    page_id: PageId,
     title: String,
     entry_type: String,
     score: i32,
@@ -106,6 +107,7 @@ impl DeferredResolutionItem {
             candidates: candidates
                 .iter()
                 .map(|candidate| DeferredResolutionCandidate {
+                    page_id: candidate.page_id,
                     title: candidate.title.clone(),
                     entry_type: entry_type_label(&candidate.entry_type).to_string(),
                     score: candidate.score,
@@ -2072,6 +2074,9 @@ mod tests {
             reason: "ambiguous candidates".to_string(),
             candidate_count: 1,
             candidates: vec![DeferredResolutionCandidate {
+                page_id: PageId(
+                    uuid::Uuid::parse_str("11111111-1111-5111-8111-111111111111").unwrap(),
+                ),
                 title: "MCP 协议".to_string(),
                 entry_type: "concept".to_string(),
                 score: 100,
