@@ -364,9 +364,7 @@ impl WikiCompilerRunner<'_> {
 
         let user = format!("Source URI:\n{uri}\n\nBody:\n{}", src.body);
         let reply = llm::complete_chat(self.cfg, llm::ingest_llm_system_prompt(), &user, 8192)?;
-        let slice = llm::parse_json_object_slice(&reply);
-        let plan: LlmIngestPlanV1 = serde_json::from_str(slice)
-            .map_err(|e| format!("JSON parse error: {e}; raw={reply}"))?;
+        let plan = parse_compiler_plan_json(&reply)?;
         preflight_llm_plan_tags(&plan, batch_source_tags_for_ingest(&batch), self.schema)?;
 
         let sid = match self.existing_source_id(src.source_id, &uri) {
@@ -918,7 +916,7 @@ fn render_bullets(items: &[String]) -> String {
 fn render_related_names(names: &[String]) -> String {
     let lines: Vec<_> = names
         .iter()
-        .map(|s| s.trim())
+        .map(|s| sanitize_related_name(s))
         .filter(|s| !s.is_empty())
         .map(|s| format!("- {s}"))
         .collect();
@@ -927,6 +925,21 @@ fn render_related_names(names: &[String]) -> String {
     } else {
         lines.join("\n")
     }
+}
+
+fn sanitize_related_name(raw: &str) -> String {
+    let mut value = raw.trim();
+    if let Some(inner) = value.strip_prefix("[[").and_then(|s| s.strip_suffix("]]")) {
+        value = inner.trim();
+    }
+    if let Some(inner) = value.strip_prefix('[') {
+        if let Some((text, rest)) = inner.split_once("](") {
+            if rest.ends_with(')') {
+                value = text.trim();
+            }
+        }
+    }
+    value.to_string()
 }
 
 fn render_summary_markdown(
@@ -946,6 +959,15 @@ fn render_summary_markdown(
     };
     md = replace_section_body(&md, "提取的概念", &links).unwrap_or(md);
     md
+}
+
+fn parse_compiler_plan_json(reply: &str) -> Result<LlmIngestPlanV1, Box<dyn std::error::Error>> {
+    let slice = llm::parse_json_object_slice(reply);
+    let value: serde_json::Value =
+        serde_json::from_str(slice).map_err(|e| format!("JSON parse error: {e}; raw={reply}"))?;
+    let plan: LlmIngestPlanV1 =
+        serde_json::from_value(value).map_err(|e| format!("JSON parse error: {e}; raw={reply}"))?;
+    Ok(plan)
 }
 
 fn compiler_page_kind(ed: &LlmEntityDraft) -> Option<EntryType> {
@@ -2660,7 +2682,12 @@ mod tests {
             definition: "按 token 数量计费的方式".into(),
             key_points: vec!["缓存命中可降低成本".into()],
             tags: Vec::new(),
-            related_names: vec!["输入token".into(), "缓存命中".into()],
+            related_names: vec![
+                "输入token".into(),
+                "缓存命中".into(),
+                "[[wikilinks]]".into(),
+                "[AutoCLI.ai](http://AutoCLI.ai)".into(),
+            ],
             category: None,
         }];
         let batch = BatchIngestContext {
@@ -2687,8 +2714,12 @@ mod tests {
             .unwrap();
         assert!(page.markdown.contains("- 输入token"));
         assert!(page.markdown.contains("- 缓存命中"));
+        assert!(page.markdown.contains("- wikilinks"));
+        assert!(page.markdown.contains("- AutoCLI.ai"));
         assert!(!page.markdown.contains("[[输入token]]"));
         assert!(!page.markdown.contains("[[缓存命中]]"));
+        assert!(!page.markdown.contains("[[wikilinks]]"));
+        assert!(!page.markdown.contains("[AutoCLI.ai](http://AutoCLI.ai)"));
     }
 
     #[test]
@@ -3099,6 +3130,47 @@ mod tests {
         assert_eq!(parsed.canonical_title, "MCP 协议");
         assert_eq!(parsed.confidence, ResolutionConfidence::Medium);
         assert_eq!(parsed.reason, "same protocol");
+    }
+
+    #[test]
+    fn compiler_plan_parser_accepts_duplicate_json_keys_via_value() {
+        let plan = parse_compiler_plan_json(
+            r#"{
+  "version": 1,
+  "summary": {},
+  "summary_title": "Source",
+  "summary_markdown": "",
+  "one_sentence_summary": "one sentence",
+  "key_insights": [],
+  "confidence": "medium",
+  "tags": [],
+  "source_author": null,
+  "source_publisher": null,
+  "source_published_at": null,
+  "claims": [],
+  "concepts": [],
+  "entities": [
+    {
+      "label": "HTTPS_PROXY",
+      "kind": "concept",
+      "canonical_name": "HTTPS_PROXY 环境变量",
+      "category": null,
+      "definition": "代理环境变量",
+      "profile": "",
+      "key_points": [],
+      "tags": [],
+      "related_names": [],
+      "category": "method"
+    }
+  ],
+  "relationships": []
+}"#,
+        )
+        .unwrap();
+
+        assert_eq!(plan.entities.len(), 1);
+        assert_eq!(plan.entities[0].canonical_name, "HTTPS_PROXY 环境变量");
+        assert_eq!(plan.entities[0].category.as_deref(), Some("method"));
     }
 
     #[test]
