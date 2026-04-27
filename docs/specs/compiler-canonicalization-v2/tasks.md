@@ -18,6 +18,8 @@
 - [x] Docs updated
 - [x] PR opened
 - [x] CI green
+- [x] PR merged
+- [x] Post-merge docs backfilled
 
 ## Plan Mode Grading
 
@@ -30,6 +32,7 @@
 | T4 Regression temp-vault smoke | Agent | main agent | `crates/wiki-cli/src/wiki_compiler.rs`, CLI/integration tests, handoff evidence | T2/T3 | Done |
 | T5 Focused review | Skill | review subagent/main agent | changed files | T1-T4 | Done |
 | T6 Integration gate | Skill | main agent | workspace | T5 | Done |
+| T7 Post-merge status backfill | Script | main agent | `docs/roadmap.md`, `docs/LESSONS.md`, PRD/tasks/handoff status | PR merge | Done |
 
 ## Owner Boundaries
 

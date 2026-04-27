@@ -32,15 +32,16 @@
 | Notion Incremental Sync | ✅ 已合入 | PR #36 / PR #38 / PR #42；`wiki-cli notion-sync`、automation `notion-sync` daily job 已实现；增量游标 `notion_sync_cursors`/`notion_page_index`；速率限制 350ms + 429 重试；`--refresh-existing` 刷新已有 source body/tags；`--writeback-notion` 接口完整默认关闭；PRD: `docs/prd/notion-incremental-sync.md` |
 | Notion Source Vault Projection | ✅ 已合入并已跑生产 apply | PR #42 已 merge；`notion-sync` 已支持 Notion block 正文抓取、`--refresh-existing`、Obsidian-safe tag projection 和 automation 默认刷新；生产 refresh 覆盖 X 782 / WeChat 485 个窗口内页面，刷新 161 个已有 source，最终 `notion-source-vault-sync --dry-run --refresh-existing --repair-tags` 为 planned=0 / tags_rewritten=0；176 个 DB-backed Notion source 已投影到 `sources/x` / `sources/wechat` |
 | Production Wiki Compiler | ✅ 已合入，tiny sample 已跑 | PR #44 已 merge；本地 compiler contract 已实现：raw source -> summary + concept/entity pages -> Vault projection -> outbox；PR #46 安全修复验证了 X + WeChat tiny sample，也暴露出 broad scale 前必须补 canonical resolver |
-| Compiler Canonicalization v2 | 🚧 开发中 | PRD/spec 已拆到 `docs/prd/compiler-canonicalization-v2.md` 和 `docs/specs/compiler-canonicalization-v2/`；在 compiler draft 和 DB 写入之间插入 pre-write resolver；用 bounded candidate retrieval、persisted alias/canonical mapping、small LLM fallback 处理模糊查重；Lint/Fixer 保留为 post-write 治理，并按 DB -> Vault -> Mempalace -> audit 顺序修复 |
+| Compiler Canonicalization v2 | ✅ 已合入 | PR #47 已 merge；在 compiler draft 和 DB 写入之间插入 pre-write resolver；新增 bounded candidate retrieval、`wiki_canonical_alias` persisted alias/canonical mapping、small LLM fallback、machine-owned `deferred_resolutions` JSON；低置信度/模糊项不污染 active graph，交给后续 resolver/lint/fixer agent lane |
+| Compiler Deferred Resolution Agent | 💤 未开始 | 待 PRD/spec；消费 compiler run JSON 的 `deferred_resolutions`，用 resolver/lint/fixer 机器链路判断 alias / new canonical / ignore；apply 顺序必须仍是 DB -> Vault -> Mempalace -> audit |
 | Scheduled Vault Reports | 💤 未开始 | 待 PRD；把 `vault-audit`、`metrics`、`dashboard`、`automation health`、`suggest` 等报告接入定时生成和保留策略 |
 | C16A Atomic snapshot + outbox | ✅ 已合入 | PR #25 已 merge；新增 `save_snapshot_and_append_outbox` 单事务持久化路径；CLI/MCP/backfill 写路径已切到原子提交 |
 | C16B Embedding ANN index | 💤 未开始 | 仍保留在 [embedding-ann-index](specs/embedding-ann-index/)；可单独规划，不和存储一致性混在一个 PR |
 
 ## 当前下一阶段
 
-1. Compiler Canonicalization v2：当前分支 `codex/compiler-canonicalization-v2`；先补 pre-write resolver，再扩大 production compiler 批量；不能靠继续堆 prompt/代码 alias。
-2. Production Wiki Compiler scale-up：canonical resolver 通过 X/WeChat regression sample 后，再决定 5 篇、单 origin lane，或定时小批量。
+1. Compiler Deferred Resolution Agent：新增 PRD/spec；消费 `deferred_resolutions` JSON，不把模糊概念交给人工，也不直接写 active graph；机器判定 alias / new canonical / ignore 后按 DB -> Vault -> Mempalace -> audit 应用。
+2. Production Wiki Compiler scale-up：deferred resolver/fixer agent 通过 X/WeChat regression sample 后，再决定 5 篇、单 origin lane，或定时小批量。
 3. Notion Archived Source Retirement：新增 Notion archived 状态同步治理，识别已归档 source，生成退役 plan，并通过 DB 原点更新 + Vault 投影清理处理，不手工删除单个 Markdown。
 4. Scheduled Vault Reports：新增定时报告流水线 PRD，明确哪些报告由 cron/automation 生成、生成频率、输出目录、latest 指针和历史保留/清理策略。
 5. CR-01 延后项（按优先级）：

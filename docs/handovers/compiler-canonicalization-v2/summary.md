@@ -79,10 +79,10 @@
 
 - Requirements: implemented.
 - Design: implemented.
-- Tasks / checklist: ready for focused/integration review.
+- Tasks / checklist: implemented, reviewed, CI green, merged in PR #47.
 
 ## Next Notes
 
-- After merge, do not run broad production compile immediately. First run a
-  user-approved tiny production regression or a temp-vault smoke using the X and
-  WeChat sample shapes.
+- Do not run broad production compile immediately. Next module should consume
+  `deferred_resolutions` through resolver/lint/fixer agents, then use
+  user-approved tiny production regression before scale-up.
