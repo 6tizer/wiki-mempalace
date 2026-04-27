@@ -60,7 +60,8 @@ concept/entity against bounded existing DB candidates before any page write.
 - Match exact title/canonical/alias keys first.
 - Allow concept/entity cross-type fallback only when one canonical existing page
   is clear.
-- Stop or record review-required findings for unresolved low-confidence cases.
+- Defer unresolved low-confidence cases into a machine-readable resolver queue;
+  do not write them into active graph pages.
 - Return canonical page IDs/titles before summary/concept/entity pages are
   materialized.
 

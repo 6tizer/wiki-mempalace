@@ -1,6 +1,6 @@
 use crate::llm;
 use crate::{parse_scope, timestamp_slug};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use time::{format_description::well_known::Rfc3339, OffsetDateTime};
@@ -55,6 +55,7 @@ struct PageMaterializationStats {
     written_page_ids: Vec<PageId>,
     alias_mappings: Vec<CanonicalAliasMapping>,
     warnings: Vec<String>,
+    deferred_resolutions: Vec<DeferredResolutionItem>,
 }
 
 /// 单条 source 编译结果。
@@ -65,6 +66,67 @@ struct IngestOneStats {
     source_id: SourceId,
     written_page_ids: Vec<PageId>,
     page_stats: PageMaterializationStats,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct DeferredResolutionItem {
+    source_title: Option<String>,
+    source_url: Option<String>,
+    draft_title: String,
+    draft_entry_type: String,
+    reason: String,
+    candidate_count: usize,
+    candidates: Vec<DeferredResolutionCandidate>,
+    owner: &'static str,
+    next_step: &'static str,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct DeferredResolutionCandidate {
+    title: String,
+    entry_type: String,
+    score: i32,
+    match_reasons: Vec<String>,
+}
+
+impl DeferredResolutionItem {
+    fn from_candidates(
+        title: &str,
+        entry_type: &EntryType,
+        reason: &str,
+        candidates: &[CompilerCandidate],
+    ) -> Self {
+        Self {
+            source_title: None,
+            source_url: None,
+            draft_title: title.to_string(),
+            draft_entry_type: entry_type_label(entry_type).to_string(),
+            reason: reason.to_string(),
+            candidate_count: candidates.len(),
+            candidates: candidates
+                .iter()
+                .map(|candidate| DeferredResolutionCandidate {
+                    title: candidate.title.clone(),
+                    entry_type: entry_type_label(&candidate.entry_type).to_string(),
+                    score: candidate.score,
+                    match_reasons: candidate.match_reasons.clone(),
+                })
+                .collect(),
+            owner: "resolver-lint-fixer",
+            next_step: "machine_resolution",
+        }
+    }
+
+    fn with_source(&self, source: &SourceEntry) -> Self {
+        let mut item = self.clone();
+        item.source_title = Some(source.title.clone());
+        item.source_url = if source.url.trim().is_empty() {
+            None
+        } else {
+            Some(source.url.clone())
+        };
+        item
+    }
 }
 
 pub(crate) fn default_vault_path() -> PathBuf {
@@ -151,6 +213,7 @@ pub(crate) fn batch_ingest_cmd(
     let mut compiled_paths: Vec<(PathBuf, SourceId)> = Vec::new();
     let mut written_page_ids: HashSet<PageId> = HashSet::new();
     let mut report_warnings = Vec::new();
+    let mut report_deferred_resolutions = Vec::new();
     let mut ok_count = 0usize;
     let mut err_count = 0usize;
 
@@ -175,6 +238,16 @@ pub(crate) fn batch_ingest_cmd(
                 for warning in &stats.page_stats.warnings {
                     eprintln!("  ! {warning}");
                     report_warnings.push(format!("{}: {warning}", src.title));
+                }
+                for deferred in &stats.page_stats.deferred_resolutions {
+                    eprintln!(
+                        "  ? defer resolver item: {} {} ({}; candidates={})",
+                        deferred.draft_entry_type,
+                        deferred.draft_title,
+                        deferred.reason,
+                        deferred.candidate_count
+                    );
+                    report_deferred_resolutions.push(deferred.with_source(src));
                 }
                 compiled_paths.push((src.path.clone(), stats.source_id));
                 written_page_ids.extend(stats.written_page_ids);
@@ -206,6 +279,7 @@ pub(crate) fn batch_ingest_cmd(
             ok_count,
             err_count,
             &report_warnings,
+            &report_deferred_resolutions,
         )?;
         for (path, source_id) in compiled_paths {
             mark_source_compiled(&path, source_id)?;
@@ -562,17 +636,20 @@ fn materialize_compiler_pages_with_resolver(
                 }
                 continue;
             }
-            ResolverDecision::NeedsReview {
+            ResolverDecision::DeferredResolution {
                 title,
                 entry_type,
                 candidates,
                 reason,
             } => {
-                stats.warnings.push(format!(
-                    "skip unresolved {}: {title} ({reason}; candidates={})",
-                    entry_type_label(&entry_type),
-                    candidates.len()
-                ));
+                stats
+                    .deferred_resolutions
+                    .push(DeferredResolutionItem::from_candidates(
+                        &title,
+                        &entry_type,
+                        &reason,
+                        &candidates,
+                    ));
                 continue;
             }
             ResolverDecision::CreateNew {
@@ -641,17 +718,20 @@ fn materialize_compiler_pages_with_resolver(
                 }
                 continue;
             }
-            ResolverDecision::NeedsReview {
+            ResolverDecision::DeferredResolution {
                 title,
                 entry_type,
                 candidates,
                 reason,
             } => {
-                stats.warnings.push(format!(
-                    "skip unresolved {}: {title} ({reason}; candidates={})",
-                    entry_type_label(&entry_type),
-                    candidates.len()
-                ));
+                stats
+                    .deferred_resolutions
+                    .push(DeferredResolutionItem::from_candidates(
+                        &title,
+                        &entry_type,
+                        &reason,
+                        &candidates,
+                    ));
                 continue;
             }
             ResolverDecision::CreateNew {
@@ -856,7 +936,7 @@ enum ResolverDecision {
         confidence: ResolutionConfidence,
         reason: String,
     },
-    NeedsReview {
+    DeferredResolution {
         title: String,
         entry_type: EntryType,
         candidates: Vec<CompilerCandidate>,
@@ -1017,7 +1097,7 @@ impl<'a> CompilerResolver<'a> {
         if let Some(resolved) = self.resolve_with_llm(item, &candidates) {
             return ResolverDecision::ResolvedExisting(resolved);
         }
-        ResolverDecision::NeedsReview {
+        ResolverDecision::DeferredResolution {
             title: canonical_title,
             entry_type: item.entry_type.clone(),
             candidates,
@@ -1672,6 +1752,7 @@ fn write_run_report(
     ok_count: usize,
     err_count: usize,
     warnings: &[String],
+    deferred_resolutions: &[DeferredResolutionItem],
 ) -> Result<(), Box<dyn std::error::Error>> {
     let Some(root) = wiki_root else {
         return Ok(());
@@ -1680,7 +1761,9 @@ fn write_run_report(
     std::fs::create_dir_all(&report_dir)?;
     let now = time::OffsetDateTime::now_utc();
     let now_str = now.format(&Rfc3339)?;
-    let path = report_dir.join(format!("production-wiki-compiler-{}.md", timestamp_slug()));
+    let slug = timestamp_slug();
+    let path = report_dir.join(format!("production-wiki-compiler-{slug}.md"));
+    let json_path = report_dir.join(format!("production-wiki-compiler-{slug}.json"));
     let warning_block = if warnings.is_empty() {
         "- warnings: `0`\n".to_string()
     } else {
@@ -1691,12 +1774,51 @@ fn write_run_report(
             .join("\n");
         format!("- warnings: `{}`\n{lines}\n", warnings.len())
     };
+    let deferred_block = if deferred_resolutions.is_empty() {
+        "- deferred_resolutions: `0`\n".to_string()
+    } else {
+        let lines = deferred_resolutions
+            .iter()
+            .map(|item| {
+                format!(
+                    "  - {} {} -> {} ({})",
+                    item.draft_entry_type, item.draft_title, item.next_step, item.reason
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        format!(
+            "- deferred_resolutions: `{}`\n{lines}\n",
+            deferred_resolutions.len()
+        )
+    };
     let body = format!(
         "# Production Wiki Compiler Run\n\n- at: `{now_str}`\n- successful_sources: `{ok_count}`\n- failed_sources: `{err_count}`\n- note: current implementation uses existing `LlmIngestPlanV1`; concept/entity definition, key_points, related names, and typed compiler tags are expected future fields and are represented conservatively in page bodies.\n"
     );
-    let body = format!("{body}{warning_block}");
+    let body = format!("{body}{warning_block}{deferred_block}");
     std::fs::write(path, body)?;
+    let json = CompilerRunReportJson {
+        version: 1,
+        kind: "production_wiki_compiler_run",
+        at: now_str,
+        successful_sources: ok_count,
+        failed_sources: err_count,
+        warnings,
+        deferred_resolutions,
+    };
+    std::fs::write(json_path, serde_json::to_string_pretty(&json)?)?;
     Ok(())
+}
+
+#[derive(Serialize)]
+struct CompilerRunReportJson<'a> {
+    version: u32,
+    kind: &'static str,
+    at: String,
+    successful_sources: usize,
+    failed_sources: usize,
+    warnings: &'a [String],
+    deferred_resolutions: &'a [DeferredResolutionItem],
 }
 
 fn parse_frontmatter_tags(frontmatter: &str, key: &str) -> Vec<String> {
@@ -1940,28 +2062,55 @@ mod tests {
     }
 
     #[test]
-    fn run_report_persists_resolver_warnings() {
+    fn run_report_persists_machine_deferred_resolutions() {
         let dir = tempfile::tempdir().unwrap();
+        let deferred = DeferredResolutionItem {
+            source_title: Some("Source A".to_string()),
+            source_url: Some("https://example.test/a".to_string()),
+            draft_title: "MCP connectors".to_string(),
+            draft_entry_type: "concept".to_string(),
+            reason: "ambiguous candidates".to_string(),
+            candidate_count: 1,
+            candidates: vec![DeferredResolutionCandidate {
+                title: "MCP 协议".to_string(),
+                entry_type: "concept".to_string(),
+                score: 100,
+                match_reasons: vec!["exact key".to_string()],
+            }],
+            owner: "resolver-lint-fixer",
+            next_step: "machine_resolution",
+        };
 
-        write_run_report(
-            Some(dir.path()),
-            1,
-            0,
-            &["Source A: skip unresolved concept: MCP connectors".to_string()],
-        )
-        .unwrap();
+        write_run_report(Some(dir.path()), 1, 0, &[], &[deferred]).unwrap();
 
-        let report = std::fs::read_to_string(
-            std::fs::read_dir(dir.path().join("reports"))
-                .unwrap()
-                .next()
-                .unwrap()
-                .unwrap()
-                .path(),
-        )
-        .unwrap();
-        assert!(report.contains("- warnings: `1`"));
-        assert!(report.contains("skip unresolved concept: MCP connectors"));
+        let report_dir = dir.path().join("reports");
+        let md_path = std::fs::read_dir(&report_dir)
+            .unwrap()
+            .filter_map(Result::ok)
+            .map(|entry| entry.path())
+            .find(|path| path.extension().and_then(|s| s.to_str()) == Some("md"))
+            .unwrap();
+        let report = std::fs::read_to_string(md_path).unwrap();
+        assert!(report.contains("- warnings: `0`"));
+        assert!(report.contains("- deferred_resolutions: `1`"));
+        assert!(report.contains("concept MCP connectors -> machine_resolution"));
+
+        let json_path = std::fs::read_dir(&report_dir)
+            .unwrap()
+            .filter_map(Result::ok)
+            .map(|entry| entry.path())
+            .find(|path| path.extension().and_then(|s| s.to_str()) == Some("json"))
+            .unwrap();
+        let json: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(json_path).unwrap()).unwrap();
+        assert_eq!(
+            json["deferred_resolutions"][0]["owner"],
+            "resolver-lint-fixer"
+        );
+        assert_eq!(
+            json["deferred_resolutions"][0]["next_step"],
+            "machine_resolution"
+        );
     }
 
     #[test]
@@ -2411,10 +2560,13 @@ mod tests {
 
         assert_eq!(stats.concepts_created, 0);
         assert_eq!(stats.concepts_updated, 0);
-        assert!(stats
-            .warnings
-            .iter()
-            .any(|warning| warning.contains("skip unresolved concept: MCP connectors")));
+        assert!(stats.warnings.is_empty());
+        assert_eq!(stats.deferred_resolutions.len(), 1);
+        assert_eq!(stats.deferred_resolutions[0].draft_title, "MCP connectors");
+        assert_eq!(
+            stats.deferred_resolutions[0].next_step,
+            "machine_resolution"
+        );
         assert!(!eng
             .store
             .pages

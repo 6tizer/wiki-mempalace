@@ -82,13 +82,13 @@ projection.
   - existing `wiki.db` pages,
   - alias/canonical mapping data,
   - optional LLM config for ambiguous fallback,
-  - source metadata for report warnings.
+  - source metadata for report warnings/deferred items.
 - Output:
   - resolved page ID/title/type per draft item,
   - new-page decision for clear misses,
-  - review-required warning for ambiguous unsafe cases,
+  - machine-owned deferred resolution item for ambiguous unsafe cases,
   - persisted alias/canonical mapping for confirmed safe aliases,
-  - updated compiler run report warnings.
+  - updated compiler run report and JSON artifact for lint/fixer consumption.
 
 ## Acceptance Criteria
 
@@ -97,6 +97,8 @@ projection.
 - A draft concept can resolve to an existing entity when that entity is the clear
   canonical page.
 - Multiple fuzzy candidates do not create a new duplicate page.
+- Multiple fuzzy candidates produce `deferred_resolutions` machine data instead
+  of prose-only review text.
 - The small LLM fallback is invoked only for bounded ambiguous candidates.
 - Summary `## 提取的概念` contains canonical wiki links after resolver.
 - Unit tests cover normalizer, mapping lookup, candidate top-K, cross-type

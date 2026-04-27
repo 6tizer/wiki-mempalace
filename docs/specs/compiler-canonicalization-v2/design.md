@@ -59,10 +59,12 @@ LLM fallback prompts.
 ```text
 ResolvedExisting { page_id, title, entry_type, confidence, reason }
 CreateNew { title, entry_type, confidence, reason }
-NeedsReview { title, entry_type, candidates, reason }
+DeferredResolution { title, entry_type, candidates, reason }
 ```
 
 Only `ResolvedExisting` and safe `CreateNew` may reach the page writer.
+`DeferredResolution` is machine-owned: it does not create/update active graph
+pages, and it is emitted as structured run data for later lint/fixer passes.
 
 ## Interfaces
 
@@ -120,7 +122,7 @@ Output:
 ```
 
 Only `same_page=true` with high/medium confidence and a candidate title may
-resolve to existing page. Low confidence becomes `NeedsReview`.
+resolve to existing page. Low confidence becomes `DeferredResolution`.
 
 ## Flow
 
@@ -139,10 +141,10 @@ flowchart TD
     I -- "small bounded set" --> K["Small LLM fallback"]
     K --> L{"High/medium same_page?"}
     L -- "yes" --> F
-    L -- "no" --> M["NeedsReview"]
+    L -- "no" --> M["DeferredResolution"]
     F --> N["Update existing page + source ref"]
     J --> O["Create new page"]
-    M --> P["Warn/skip unsafe item"]
+    M --> P["Machine-owned deferred JSON/report"]
 ```
 
 ## Candidate Retrieval

@@ -8,7 +8,9 @@
   string/list fields covered by the compiler contract.
 - Replaced compiler hardcoded alias fallback with pre-write resolver:
   normalized keys -> persisted aliases -> bounded top-K candidates -> cross-type
-  exact fallback -> small LLM fallback -> review skip.
+  exact fallback -> small LLM fallback -> machine deferred resolution.
+- Added machine-readable compiler run JSON with `deferred_resolutions` so
+  lint/fixer agents can consume ambiguous items in the next machine pass.
 - Rendered unresolved `related_names` as plain text so compiler output does not
   create broken wikilinks before resolver confirmation.
 - Focused review fixes:
@@ -28,7 +30,7 @@
 | `docs/specs/README.md` | Added spec index entry | Discoverability |
 | `docs/roadmap.md` | Marked module in progress | Current roadmap state |
 | `crates/wiki-storage/src/lib.rs` | Added `wiki_canonical_alias` table and helpers | Persist alias/canonical decisions as data |
-| `crates/wiki-cli/src/wiki_compiler.rs` | Added resolver, candidate ranking, LLM fallback parser, mapping load/persist | Block duplicate concept/entity pages before DB writes |
+| `crates/wiki-cli/src/wiki_compiler.rs` | Added resolver, candidate ranking, LLM fallback parser, mapping load/persist, deferred JSON reports | Block duplicate concept/entity pages before DB writes |
 | `crates/wiki-core/src/llm_ingest_plan.rs` | Accept `null` for compiler string/list fields | Match prompt contract and live model output |
 
 ## Public Interfaces
@@ -44,7 +46,8 @@
 - LLM fallback is available in the compiler path; tests cover parser/prompt
   behavior and temp-vault live compiler smoke covers one source compile.
 - Full duplicate-merge fixer is not implemented in this PR; fixer apply order is
-  documented as DB -> Vault -> Mempalace -> audit.
+  documented as DB -> Vault -> Mempalace -> audit. Ambiguous compiler items now
+  land in machine-readable `deferred_resolutions` for that later agent lane.
 - Real `/Users/mac-mini/Documents/wiki` production apply was not run.
 
 ## Dependencies
