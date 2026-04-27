@@ -116,6 +116,7 @@ pub(crate) fn run_compiler_deferred_resolution(
     for item in &input.deferred_resolutions {
         decisions.push(classify_deferred_item(item, &page_index, opts.allow_create));
     }
+    dedupe_create_decisions(&mut decisions);
 
     let mut aliases = Vec::new();
     let mut created_pages = Vec::new();
@@ -143,8 +144,12 @@ pub(crate) fn run_compiler_deferred_resolution(
                 }
                 DeferredDecisionKind::CreateCanonical => {
                     let entry_type = parse_entry_type(&decision.draft_entry_type);
+                    let title = decision
+                        .canonical_title
+                        .as_deref()
+                        .unwrap_or(decision.draft_title.as_str());
                     let page = build_deferred_page(
-                        &decision.draft_title,
+                        title,
                         entry_type,
                         opts.scope,
                         opts.schema,
@@ -153,6 +158,14 @@ pub(crate) fn run_compiler_deferred_resolution(
                     );
                     decision.canonical_page_id = Some(page.id);
                     decision.canonical_title = Some(page.title.clone());
+                    if let Some(mapping) = alias_mapping_for_decision(
+                        &decision.draft_title,
+                        &page,
+                        opts.scope,
+                        "compiler-deferred-resolution",
+                    ) {
+                        aliases.push(mapping);
+                    }
                     decision.applied = true;
                     created_pages.push(page);
                 }
@@ -223,13 +236,28 @@ fn classify_deferred_item(
         );
     }
 
+    if let Some(page) =
+        page_index.unique_by_title_and_type(&item.draft_title, &item.draft_entry_type)
+    {
+        let mut decision = base(
+            DeferredDecisionKind::AliasExisting,
+            "draft title already has canonical page".to_string(),
+            "high",
+        );
+        decision.canonical_page_id = Some(page.id);
+        decision.canonical_title = Some(page.title.clone());
+        return decision;
+    }
+
     if candidates.is_empty() {
         if allow_create {
-            return base(
+            let mut decision = base(
                 DeferredDecisionKind::CreateCanonical,
                 "no candidates and allow_create is enabled".to_string(),
                 "medium",
             );
+            decision.canonical_title = Some(clean_deferred_title(&item.draft_title));
+            return decision;
         }
         return base(
             DeferredDecisionKind::KeepDeferred,
@@ -250,11 +278,70 @@ fn classify_deferred_item(
         return decision;
     }
 
+    if candidates.len() == 1 && titles_are_related(&item.draft_title, &candidates[0].title) {
+        let candidate = &candidates[0];
+        let mut decision = base(
+            DeferredDecisionKind::AliasExisting,
+            format!(
+                "single title-related candidate after deferred: {}",
+                item.reason
+            ),
+            "high",
+        );
+        decision.canonical_page_id = Some(candidate.page_id);
+        decision.canonical_title = Some(candidate.title.clone());
+        return decision;
+    }
+
+    if allow_create
+        && candidates
+            .iter()
+            .all(|candidate| is_weak_context_candidate(item, candidate))
+    {
+        let mut decision = base(
+            DeferredDecisionKind::CreateCanonical,
+            "only weak context candidates; allow_create is enabled".to_string(),
+            "medium",
+        );
+        decision.canonical_title = Some(clean_deferred_title(&item.draft_title));
+        return decision;
+    }
+
     base(
         DeferredDecisionKind::KeepDeferred,
         "ambiguous or low-confidence candidates remain machine-deferred".to_string(),
         "low",
     )
+}
+
+fn dedupe_create_decisions(decisions: &mut [DeferredDecisionReport]) {
+    let mut planned: HashMap<(String, String), usize> = HashMap::new();
+    for idx in 0..decisions.len() {
+        if decisions[idx].decision != DeferredDecisionKind::CreateCanonical {
+            continue;
+        }
+        let key = (
+            decisions[idx].draft_entry_type.clone(),
+            compact_key(
+                decisions[idx]
+                    .canonical_title
+                    .as_deref()
+                    .unwrap_or(decisions[idx].draft_title.as_str()),
+            ),
+        );
+        if let Some(first_idx) = planned.get(&key) {
+            let first_title = decisions[*first_idx]
+                .canonical_title
+                .clone()
+                .unwrap_or_else(|| decisions[*first_idx].draft_title.clone());
+            decisions[idx].decision = DeferredDecisionKind::KeepDeferred;
+            decisions[idx].reason =
+                format!("duplicate create already planned for canonical title: {first_title}");
+            decisions[idx].canonical_title = Some(first_title);
+        } else {
+            planned.insert(key, idx);
+        }
+    }
 }
 
 fn resolve_candidates(
@@ -309,6 +396,29 @@ fn safe_alias_reason(candidate: &ResolvedDeferredCandidate, original_reason: &st
         reason.push_str(&candidate.match_reasons.join(", "));
     }
     reason
+}
+
+fn titles_are_related(left: &str, right: &str) -> bool {
+    let left = compact_key(left);
+    let right = compact_key(right);
+    !left.is_empty()
+        && !right.is_empty()
+        && (left == right || left.contains(&right) || right.contains(&left))
+}
+
+fn is_weak_context_candidate(
+    item: &DeferredResolutionInput,
+    candidate: &ResolvedDeferredCandidate,
+) -> bool {
+    if is_safe_alias_candidate(candidate) || titles_are_related(&item.draft_title, &candidate.title)
+    {
+        return false;
+    }
+    candidate
+        .match_reasons
+        .iter()
+        .any(|reason| reason == "page text hint" || reason == "cross type")
+        || candidate.score <= 60
 }
 
 struct PageLookup<'a> {
@@ -559,6 +669,31 @@ fn compact_key(title: &str) -> String {
         .collect()
 }
 
+fn clean_deferred_title(title: &str) -> String {
+    let chars: Vec<char> = title.trim().chars().collect();
+    let mut out = String::new();
+    for (idx, ch) in chars.iter().enumerate() {
+        if ch.is_whitespace() {
+            let prev = idx.checked_sub(1).and_then(|i| chars.get(i)).copied();
+            let next = chars.get(idx + 1).copied();
+            if matches!((prev, next), (Some(a), Some(b)) if is_latinish_letter(a) && is_latinish_letter(b) && (!a.is_ascii() || !b.is_ascii()))
+            {
+                continue;
+            }
+        }
+        out.push(*ch);
+    }
+    out
+}
+
+fn is_latinish_letter(ch: char) -> bool {
+    ch.is_alphabetic() && !is_cjk_letter(ch)
+}
+
+fn is_cjk_letter(ch: char) -> bool {
+    ('\u{3400}'..='\u{9fff}').contains(&ch) || ('\u{f900}'..='\u{faff}').contains(&ch)
+}
+
 fn is_cjk_punctuation(ch: char) -> bool {
     matches!(
         ch,
@@ -642,6 +777,23 @@ mod tests {
         WikiPage::new(title, format!("# {title}\n"), test_scope())
             .with_entry_type(EntryType::Concept)
             .with_status(EntryStatus::Draft)
+    }
+
+    fn existing_entity(title: &str) -> WikiPage {
+        WikiPage::new(title, format!("# {title}\n"), test_scope())
+            .with_entry_type(EntryType::Entity)
+            .with_status(EntryStatus::Draft)
+    }
+
+    fn write_custom_report(dir: &Path, item: serde_json::Value) -> PathBuf {
+        let path = dir.join("compiler-run-custom.json");
+        let json = serde_json::json!({
+            "version": 1,
+            "kind": "production_wiki_compiler_run",
+            "deferred_resolutions": [item]
+        });
+        std::fs::write(&path, serde_json::to_string_pretty(&json).unwrap()).unwrap();
+        path
     }
 
     #[test]
@@ -777,5 +929,108 @@ mod tests {
             .find(|page| page.title == "Agent Memory Boundary")
             .unwrap();
         assert!(!created.markdown.contains("[[摘要：Source X]]"));
+    }
+
+    #[test]
+    fn compiler_resolve_deferred_aliases_single_title_related_candidate() {
+        let dir = tempdir().unwrap();
+        let repo = SqliteRepository::open(dir.path().join("wiki.db")).unwrap();
+        let mut eng = LlmWikiEngine::new(DomainSchema::permissive_default());
+        let page = existing_entity("Chrome DevTools Protocol (CDP)");
+        eng.store.pages.insert(page.id, page.clone());
+        repo.save_snapshot(&eng.store.to_snapshot(&eng.audits))
+            .unwrap();
+        let report_path = write_custom_report(
+            dir.path(),
+            serde_json::json!({
+                "source_title": "Browser Harness",
+                "draft_title": "Chrome DevTools Protocol",
+                "draft_entry_type": "concept",
+                "reason": "ambiguous candidates",
+                "candidates": [{
+                    "page_id": page.id,
+                    "title": page.title,
+                    "entry_type": "entity",
+                    "score": 30,
+                    "match_reasons": ["cross type", "page text hint"]
+                }]
+            }),
+        );
+
+        let run = run_compiler_deferred_resolution(
+            &mut eng,
+            &repo,
+            CompilerDeferredResolutionOptions {
+                report_path: &report_path,
+                report_dir: dir.path(),
+                apply: true,
+                allow_create: false,
+                scope: &test_scope(),
+                schema: &DomainSchema::permissive_default(),
+            },
+        )
+        .unwrap();
+
+        assert_eq!(run.aliases_applied, 1);
+        let alias = repo
+            .find_canonical_alias(&test_scope(), &compact_key("Chrome DevTools Protocol"))
+            .unwrap()
+            .unwrap();
+        assert_eq!(alias.canonical_page_id, page.id);
+    }
+
+    #[test]
+    fn compiler_resolve_deferred_creates_when_only_weak_context_candidates() {
+        let dir = tempdir().unwrap();
+        let repo = SqliteRepository::open(dir.path().join("wiki.db")).unwrap();
+        let mut eng = LlmWikiEngine::new(DomainSchema::permissive_default());
+        let page = existing_page("稀疏参考注意力");
+        eng.store.pages.insert(page.id, page.clone());
+        repo.save_snapshot(&eng.store.to_snapshot(&eng.audits))
+            .unwrap();
+        let report_path = write_custom_report(
+            dir.path(),
+            serde_json::json!({
+                "source_title": "Avatar V",
+                "draft_title": "Avatar V",
+                "draft_entry_type": "entity",
+                "reason": "ambiguous candidates",
+                "candidates": [{
+                    "page_id": page.id,
+                    "title": page.title,
+                    "entry_type": "concept",
+                    "score": 30,
+                    "match_reasons": ["cross type", "page text hint"]
+                }]
+            }),
+        );
+
+        let run = run_compiler_deferred_resolution(
+            &mut eng,
+            &repo,
+            CompilerDeferredResolutionOptions {
+                report_path: &report_path,
+                report_dir: dir.path(),
+                apply: true,
+                allow_create: true,
+                scope: &test_scope(),
+                schema: &DomainSchema::permissive_default(),
+            },
+        )
+        .unwrap();
+
+        assert_eq!(run.pages_created, 1);
+        assert!(eng
+            .store
+            .pages
+            .values()
+            .any(|page| page.title == "Avatar V" && page.entry_type == Some(EntryType::Entity)));
+    }
+
+    #[test]
+    fn compiler_resolve_deferred_cleans_spaced_unicode_latin_title() {
+        assert_eq!(clean_deferred_title("Magnus M ü ller"), "Magnus Müller");
+        assert_eq!(clean_deferred_title("AI 信息差 Agent"), "AI 信息差 Agent");
+        assert_eq!(clean_deferred_title("Harness 层"), "Harness 层");
     }
 }
