@@ -15,6 +15,8 @@ use wiki_kernel::{
 };
 use wiki_storage::{CanonicalAliasMapping, SqliteRepository};
 
+const MIN_COMPILER_SOURCE_BODY_CHARS: usize = 300;
+
 pub(crate) struct BatchIngestOptions<'a> {
     pub(crate) vault: &'a Path,
     pub(crate) limit: Option<usize>,
@@ -43,6 +45,25 @@ struct SourceEntry {
     url: String,
     body: String,
     source_tags: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct CompilerSourceFailure {
+    source_title: String,
+    source_url: Option<String>,
+    source_path: String,
+    error: String,
+}
+
+impl CompilerSourceFailure {
+    fn new(src: &SourceEntry, error: String) -> Self {
+        Self {
+            source_title: src.title.clone(),
+            source_url: (!src.url.is_empty()).then(|| src.url.clone()),
+            source_path: src.path.display().to_string(),
+            error,
+        }
+    }
 }
 
 #[derive(Debug, Default)]
@@ -187,7 +208,7 @@ pub(crate) fn batch_ingest_cmd(
                 sources.len(),
                 s.title,
                 s.origin.as_deref().unwrap_or("unknown"),
-                s.body.len()
+                s.body.chars().count()
             );
         }
         return Ok(());
@@ -216,17 +237,19 @@ pub(crate) fn batch_ingest_cmd(
     let mut written_page_ids: HashSet<PageId> = HashSet::new();
     let mut report_warnings = Vec::new();
     let mut report_deferred_resolutions = Vec::new();
+    let mut report_failures = Vec::new();
     let mut ok_count = 0usize;
     let mut err_count = 0usize;
 
     for (i, src) in sources.iter().enumerate() {
         heartbeat.tick();
         eprintln!("[{}/{}] {}...", i + 1, sources.len(), src.title);
+        let started = std::time::Instant::now();
 
         match runner.compile_source(src) {
             Ok(stats) => {
                 eprintln!(
-                    "  ✓ claims={} entities={} rels={} source={} summary={} concepts={}/{} entities={}/{}",
+                    "  ✓ claims={} entities={} rels={} source={} summary={} concepts={}/{} entities={}/{} elapsed={:.1}s",
                     stats.claims,
                     stats.entities,
                     stats.relationships,
@@ -236,6 +259,7 @@ pub(crate) fn batch_ingest_cmd(
                     stats.page_stats.concepts_updated,
                     stats.page_stats.entities_created,
                     stats.page_stats.entities_updated,
+                    started.elapsed().as_secs_f32(),
                 );
                 for warning in &stats.page_stats.warnings {
                     eprintln!("  ! {warning}");
@@ -256,7 +280,12 @@ pub(crate) fn batch_ingest_cmd(
                 ok_count += 1;
             }
             Err(e) => {
-                eprintln!("  ✗ 失败：{e}");
+                let message = e.to_string();
+                eprintln!(
+                    "  ✗ 失败 elapsed={:.1}s：{message}",
+                    started.elapsed().as_secs_f32()
+                );
+                report_failures.push(CompilerSourceFailure::new(src, message));
                 err_count += 1;
             }
         }
@@ -275,19 +304,28 @@ pub(crate) fn batch_ingest_cmd(
             );
         }
     }
-    if ok_count > 0 {
+    if ok_count > 0 || err_count > 0 {
         write_run_report(
             opts.wiki_root.or(Some(opts.vault)),
             ok_count,
             err_count,
             &report_warnings,
             &report_deferred_resolutions,
+            &report_failures,
         )?;
+    }
+    if ok_count > 0 {
         for (path, source_id) in compiled_paths {
             mark_source_compiled(&path, source_id)?;
         }
     }
     eprintln!("\n完成：成功={ok_count} 失败={err_count}");
+    if err_count > 0 {
+        return Err(format!(
+            "batch-ingest failed for {err_count} source(s); successful_sources={ok_count}"
+        )
+        .into());
+    }
     Ok(())
 }
 
@@ -528,8 +566,12 @@ fn scan_uncompiled_sources(
             content.trim().to_string()
         };
 
-        if body.len() < 50 {
-            eprintln!("  跳过（正文过短）：{}", title);
+        let body_chars = body.chars().count();
+        if body_chars < MIN_COMPILER_SOURCE_BODY_CHARS {
+            eprintln!(
+                "  跳过（正文过短 < {MIN_COMPILER_SOURCE_BODY_CHARS} 字符）：{}",
+                title
+            );
             continue;
         }
 
@@ -1901,6 +1943,7 @@ fn write_run_report(
     err_count: usize,
     warnings: &[String],
     deferred_resolutions: &[DeferredResolutionItem],
+    failures: &[CompilerSourceFailure],
 ) -> Result<(), Box<dyn std::error::Error>> {
     let Some(root) = wiki_root else {
         return Ok(());
@@ -1940,10 +1983,27 @@ fn write_run_report(
             deferred_resolutions.len()
         )
     };
+    let failures_block = if failures.is_empty() {
+        "- source_failures: `0`\n".to_string()
+    } else {
+        let lines = failures
+            .iter()
+            .map(|failure| {
+                format!(
+                    "  - {} ({}) - {}",
+                    failure.source_title,
+                    failure.source_path,
+                    truncate_chars(&failure.error, 240)
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        format!("- source_failures: `{}`\n{lines}\n", failures.len())
+    };
     let body = format!(
         "# Production Wiki Compiler Run\n\n- at: `{now_str}`\n- successful_sources: `{ok_count}`\n- failed_sources: `{err_count}`\n- note: current implementation uses existing `LlmIngestPlanV1`; concept/entity definition, key_points, related names, and typed compiler tags are expected future fields and are represented conservatively in page bodies.\n"
     );
-    let body = format!("{body}{warning_block}{deferred_block}");
+    let body = format!("{body}{warning_block}{deferred_block}{failures_block}");
     std::fs::write(path, body)?;
     let json = CompilerRunReportJson {
         version: 1,
@@ -1953,6 +2013,7 @@ fn write_run_report(
         failed_sources: err_count,
         warnings,
         deferred_resolutions,
+        source_failures: failures,
     };
     std::fs::write(json_path, serde_json::to_string_pretty(&json)?)?;
     Ok(())
@@ -1967,6 +2028,7 @@ struct CompilerRunReportJson<'a> {
     failed_sources: usize,
     warnings: &'a [String],
     deferred_resolutions: &'a [DeferredResolutionItem],
+    source_failures: &'a [CompilerSourceFailure],
 }
 
 fn parse_frontmatter_tags(frontmatter: &str, key: &str) -> Vec<String> {
@@ -2131,6 +2193,13 @@ mod tests {
         }
     }
 
+    fn long_source_body(topic: &str) -> String {
+        format!(
+            "{topic} explains compiler canonicalization, resolver candidate bounds, alias mapping, lint fixer order, and DB-first projection behavior. "
+        )
+        .repeat(5)
+    }
+
     #[test]
     fn compiler_alias_mappings_load_from_sqlite_for_scope_pages() {
         let dir = tempfile::tempdir().unwrap();
@@ -2189,12 +2258,18 @@ mod tests {
         std::fs::create_dir_all(&wechat_dir).unwrap();
         std::fs::write(
             x_dir.join("x-sample.md"),
-            "---\ntitle: \"X MCP sample\"\nurl: https://x.com/example/status/1\ncompiled_to_wiki: false\ntags: [x, MCP]\n---\n\nThis X sample discusses MCP connectors and canonical resolver behavior with enough body text for scanning.\n",
+            format!(
+                "---\ntitle: \"X MCP sample\"\nurl: https://x.com/example/status/1\ncompiled_to_wiki: false\ntags: [x, MCP]\n---\n\n{}\n",
+                long_source_body("This X sample")
+            ),
         )
         .unwrap();
         std::fs::write(
             wechat_dir.join("wechat-sample.md"),
-            "---\ntitle: \"WeChat MCP sample\"\nurl: https://mp.weixin.qq.com/s/example\ncompiled_to_wiki: false\ntags:\n  - wechat\n  - MCP\n---\n\nThis WeChat sample discusses MCP连接器 and Agent Skills canonicalization with enough body text for scanning.\n",
+            format!(
+                "---\ntitle: \"WeChat MCP sample\"\nurl: https://mp.weixin.qq.com/s/example\ncompiled_to_wiki: false\ntags:\n  - wechat\n  - MCP\n---\n\n{}\n",
+                long_source_body("This WeChat sample")
+            ),
         )
         .unwrap();
 
@@ -2207,6 +2282,32 @@ mod tests {
         assert_eq!(wechat.len(), 1);
         assert_eq!(x[0].origin.as_deref(), Some("x"));
         assert_eq!(wechat[0].origin.as_deref(), Some("wechat"));
+    }
+
+    #[test]
+    fn temp_vault_smoke_skips_short_sources_before_llm() {
+        let dir = tempfile::tempdir().unwrap();
+        let x_dir = dir.path().join("sources/x");
+        std::fs::create_dir_all(&x_dir).unwrap();
+        std::fs::write(
+            x_dir.join("short.md"),
+            "---\ntitle: \"Short source\"\ncompiled_to_wiki: false\n---\n\nToo short.\n",
+        )
+        .unwrap();
+        std::fs::write(
+            x_dir.join("long.md"),
+            format!(
+                "---\ntitle: \"Long source\"\ncompiled_to_wiki: false\n---\n\n{}\n",
+                long_source_body("Long source")
+            ),
+        )
+        .unwrap();
+
+        let entries = scan_uncompiled_sources(dir.path(), Some("all"), None).unwrap();
+
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].title, "Long source");
+        assert!(entries[0].body.chars().count() >= MIN_COMPILER_SOURCE_BODY_CHARS);
     }
 
     #[test]
@@ -2232,7 +2333,7 @@ mod tests {
             next_step: "machine_resolution",
         };
 
-        write_run_report(Some(dir.path()), 1, 0, &[], &[deferred]).unwrap();
+        write_run_report(Some(dir.path()), 1, 0, &[], &[deferred], &[]).unwrap();
 
         let report_dir = dir.path().join("reports");
         let md_path = std::fs::read_dir(&report_dir)
@@ -2262,6 +2363,109 @@ mod tests {
             json["deferred_resolutions"][0]["next_step"],
             "machine_resolution"
         );
+    }
+
+    #[test]
+    fn run_report_persists_machine_source_failures() {
+        let dir = tempfile::tempdir().unwrap();
+        let failure = CompilerSourceFailure {
+            source_title: "Source Failure".to_string(),
+            source_url: Some("https://example.test/fail".to_string()),
+            source_path: "/tmp/source-failure.md".to_string(),
+            error: "JSON parse error: expected value".to_string(),
+        };
+
+        write_run_report(Some(dir.path()), 0, 1, &[], &[], &[failure]).unwrap();
+
+        let report_dir = dir.path().join("reports");
+        let md_path = std::fs::read_dir(&report_dir)
+            .unwrap()
+            .filter_map(Result::ok)
+            .map(|entry| entry.path())
+            .find(|path| path.extension().and_then(|s| s.to_str()) == Some("md"))
+            .unwrap();
+        let report = std::fs::read_to_string(md_path).unwrap();
+        assert!(report.contains("- failed_sources: `1`"));
+        assert!(report.contains("- source_failures: `1`"));
+        assert!(report.contains("Source Failure"));
+
+        let json_path = std::fs::read_dir(&report_dir)
+            .unwrap()
+            .filter_map(Result::ok)
+            .map(|entry| entry.path())
+            .find(|path| path.extension().and_then(|s| s.to_str()) == Some("json"))
+            .unwrap();
+        let json: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(json_path).unwrap()).unwrap();
+        assert_eq!(json["source_failures"][0]["source_title"], "Source Failure");
+        assert_eq!(
+            json["source_failures"][0]["source_url"],
+            "https://example.test/fail"
+        );
+    }
+
+    #[test]
+    fn batch_ingest_returns_error_when_any_source_fails() {
+        let dir = tempfile::tempdir().unwrap();
+        let source_dir = dir.path().join("sources/x");
+        std::fs::create_dir_all(&source_dir).unwrap();
+        let source_path = source_dir.join("failing.md");
+        std::fs::write(
+            &source_path,
+            format!(
+                "---\ntitle: \"Failing source\"\nurl: https://example.test/failing\ncompiled_to_wiki: false\n---\n\n{}\n",
+                long_source_body("Failing source")
+            ),
+        )
+        .unwrap();
+        let llm_config_path = dir.path().join("llm-config.toml");
+        std::fs::write(
+            &llm_config_path,
+            "[llm]\nbase_url = \"http://127.0.0.1:9\"\napi_key = \"test\"\nmodel = \"test\"\ntimeout_seconds = 1\nmax_retries = 0\n",
+        )
+        .unwrap();
+        let repo = SqliteRepository::open(dir.path().join("wiki.db")).unwrap();
+        let heartbeat = crate::AutomationHeartbeat {
+            repo: &repo,
+            run_id: None,
+        };
+        let mut eng = LlmWikiEngine::new(DomainSchema::permissive_default());
+
+        let err = batch_ingest_cmd(
+            &mut eng,
+            &repo,
+            &llm_config_path,
+            false,
+            &DomainSchema::permissive_default(),
+            &heartbeat,
+            BatchIngestOptions {
+                vault: dir.path(),
+                limit: None,
+                dry_run: false,
+                delay_secs: 0,
+                sync_wiki: false,
+                wiki_root: Some(dir.path()),
+                scope: Some("shared:wiki"),
+                origin: Some("all"),
+                source_path: None,
+            },
+        )
+        .unwrap_err();
+
+        assert!(err.to_string().contains("batch-ingest failed for 1 source"));
+        let source = std::fs::read_to_string(&source_path).unwrap();
+        assert!(source.contains("compiled_to_wiki: false"));
+        let json_path = std::fs::read_dir(dir.path().join("reports"))
+            .unwrap()
+            .filter_map(Result::ok)
+            .map(|entry| entry.path())
+            .find(|path| path.extension().and_then(|s| s.to_str()) == Some("json"))
+            .unwrap();
+        let json: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(json_path).unwrap()).unwrap();
+        assert_eq!(json["successful_sources"], 0);
+        assert_eq!(json["failed_sources"], 1);
+        assert_eq!(json["source_failures"][0]["source_title"], "Failing source");
     }
 
     #[test]
