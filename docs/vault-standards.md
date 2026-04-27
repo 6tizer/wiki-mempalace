@@ -69,6 +69,38 @@
 
 正文最外层可有 `# 摘要：{原标题}` 与 frontmatter 的 `title` 对齐。
 
+## Concept / Entity 页面契约
+
+Wiki Compiler 产出的重要概念和实体必须成为可见页面，而不是只停留在
+`wiki.db` 的内部结构里。
+
+`pages/concept/*.md`：
+
+- `entry_type: concept`
+- `status: draft`
+- 用于技术概念、方法论、架构模式、协议、非显然思想。
+- 正文至少包含：
+  - `## 定义`
+  - `## 关键要点`
+  - `## 本文语境`
+  - `## 来源引用`
+
+`pages/entity/*.md`：
+
+- `entry_type: entity`
+- `status: draft`
+- 用于具体产品、公司、人物、项目、库、模型、工具。
+- 正文至少包含：
+  - `## 定义`
+  - `## 关键要点`
+  - `## 来源引用`
+
+引用约束：
+
+- summary 的 `## 提取的概念` 段应使用 `[[页面标题]]` 链接 concept/entity。
+- concept/entity 的 `## 来源引用` 段应反链对应 summary。
+- 新增引用前必须按 summary 标题 / page id / source url 去重，不重复追加同一来源。
+
 ---
 
 ## 未来新增 source 的流程
@@ -77,7 +109,7 @@
 
 1. 放入 `sources/wechat/`。
 2. 使用标准 source frontmatter（见上文），`compiled_to_wiki: false`。
-3. 运行 `wiki-cli batch-ingest`（配置好 `--wiki-dir` 与 `--db`）：管线会调用 LLM、更新引擎、写 `pages/summary/`，并把对应 source 标记为 `compiled_to_wiki: true`。
+3. 运行 `wiki-cli batch-ingest`（配置好 `--wiki-dir` 与 `--db`）：管线会调用 Wiki Compiler，更新引擎，写 `pages/summary/` 与必要的 `pages/concept/` / `pages/entity/`，并把对应 source 标记为 `compiled_to_wiki: true`。
 
 ### X（Twitter）等
 

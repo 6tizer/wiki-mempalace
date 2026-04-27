@@ -2,7 +2,8 @@ use crate::InMemoryStore;
 use std::collections::{BTreeMap, HashSet};
 use std::fs;
 use std::io;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use time::format_description::well_known::Rfc3339;
 use uuid::Uuid;
 use wiki_core::{AuditRecord, Claim, LintFinding, LintSeverity, RawArtifact, Scope, WikiPage};
 
@@ -30,16 +31,20 @@ pub fn write_projection(
 
     let mut pages: Vec<_> = store.pages.values().collect();
     pages.sort_by(|a, b| a.title.cmp(&b.title).then_with(|| a.id.0.cmp(&b.id.0)));
+    let filename_counts = page_filename_counts(&pages);
+    let mut written_page_paths = HashSet::new();
     for page in pages {
         let subdir = page_subdir_for_entry_type(page.entry_type.as_ref());
         let dir = pages_dir.join(subdir);
         fs::create_dir_all(&dir)?;
-        let fname = vault_page_filename(&page.title);
+        let fname = projection_page_filename(page, subdir, &filename_counts);
         let path = dir.join(format!("{fname}.md"));
         fs::write(&path, render_page_with_frontmatter(page))?;
+        written_page_paths.insert(path);
         stats.pages_written += 1;
         *page_counts.entry(subdir).or_default() += 1;
     }
+    cleanup_obsolete_managed_paths(&pages_dir, &written_page_paths)?;
 
     // Claim 不再作为独立 markdown 文件落盘；其语义由 page（`pages/concept/` 等）承载。
     // `render_claim_with_frontmatter` 仍保留供测试 / 未来导出使用。
@@ -68,6 +73,23 @@ fn cleanup_stale_managed_pages(pages_dir: &Path, store: &InMemoryStore) -> io::R
             continue;
         };
         if !current_page_ids.contains(&id) {
+            fs::remove_file(path)?;
+        }
+    }
+    Ok(())
+}
+
+fn cleanup_obsolete_managed_paths(
+    pages_dir: &Path,
+    written_page_paths: &HashSet<PathBuf>,
+) -> io::Result<()> {
+    for path in markdown_files_under(pages_dir)? {
+        let content = match fs::read_to_string(&path) {
+            Ok(content) => content,
+            Err(err) if err.kind() == io::ErrorKind::InvalidData => continue,
+            Err(err) => return Err(err),
+        };
+        if managed_frontmatter_page_id(&content).is_some() && !written_page_paths.contains(&path) {
             fs::remove_file(path)?;
         }
     }
@@ -178,6 +200,14 @@ fn entry_type_str(t: &wiki_core::EntryType) -> &'static str {
     }
 }
 
+fn confidence_str(c: &wiki_core::Confidence) -> &'static str {
+    match c {
+        wiki_core::Confidence::High => "high",
+        wiki_core::Confidence::Medium => "medium",
+        wiki_core::Confidence::Low => "low",
+    }
+}
+
 /// 按 `entry_type` 映射到 `pages/` 下子目录（与 docs/vault-standards.md 一致）。
 fn page_subdir_for_entry_type(et: Option<&wiki_core::EntryType>) -> &'static str {
     match et {
@@ -208,6 +238,35 @@ fn vault_page_filename(title: &str) -> String {
     }
     let trimmed = out.trim_matches('-');
     trimmed.chars().take(80).collect()
+}
+
+fn page_filename_counts(pages: &[&WikiPage]) -> BTreeMap<(&'static str, String), usize> {
+    let mut counts = BTreeMap::new();
+    for page in pages {
+        let subdir = page_subdir_for_entry_type(page.entry_type.as_ref());
+        let base = vault_page_filename(&page.title);
+        *counts.entry((subdir, base)).or_default() += 1;
+    }
+    counts
+}
+
+fn projection_page_filename(
+    page: &WikiPage,
+    subdir: &'static str,
+    filename_counts: &BTreeMap<(&'static str, String), usize>,
+) -> String {
+    let base = vault_page_filename(&page.title);
+    if filename_counts
+        .get(&(subdir, base.clone()))
+        .copied()
+        .unwrap_or_default()
+        > 1
+    {
+        let id = page.id.0.to_string();
+        format!("{base}-{}", &id[..8])
+    } else {
+        base
+    }
 }
 
 /// YAML 双引号内转义：只处理双引号和反斜杠。
@@ -250,7 +309,40 @@ fn render_page_with_frontmatter(page: &WikiPage) -> String {
         "scope: \"{}\"\n",
         yaml_escape(&scope_label(&page.scope))
     ));
-    fm.push_str(&format!("updated_at: {}\n", page.updated_at.date()));
+    if let Some(created_at) = page.created_at {
+        fm.push_str(&format!(
+            "created_at: {}\n",
+            created_at
+                .format(&Rfc3339)
+                .unwrap_or_else(|_| created_at.date().to_string())
+        ));
+    }
+    fm.push_str(&format!(
+        "updated_at: {}\n",
+        page.updated_at
+            .format(&Rfc3339)
+            .unwrap_or_else(|_| page.updated_at.date().to_string())
+    ));
+    fm.push_str(&format!(
+        "confidence: {}\n",
+        confidence_str(&page.confidence)
+    ));
+    fm.push_str(&render_yaml_string_list("tags", &page.tags));
+    if let Some(source_url) = page.source_url.as_ref().filter(|s| !s.trim().is_empty()) {
+        fm.push_str(&format!("source_url: \"{}\"\n", yaml_escape(source_url)));
+    }
+    fm.push_str(&render_yaml_string_list("source_tags", &page.source_tags));
+    if let Some(compiled_by) = page.compiled_by.as_ref().filter(|s| !s.trim().is_empty()) {
+        fm.push_str(&format!("compiled_by: \"{}\"\n", yaml_escape(compiled_by)));
+    }
+    if let Some(last_compiled_at) = page.last_compiled_at {
+        fm.push_str(&format!(
+            "last_compiled_at: {}\n",
+            last_compiled_at
+                .format(&Rfc3339)
+                .unwrap_or_else(|_| last_compiled_at.date().to_string())
+        ));
+    }
     fm.push_str("---\n\n");
     fm.push_str(&page.markdown);
     fm
@@ -506,6 +598,42 @@ mod tests {
     }
 
     #[test]
+    fn projection_disambiguates_duplicate_titles_and_removes_obsolete_path() {
+        let dir = tempdir().unwrap();
+        let wiki_root = dir.path();
+        let pages_dir = wiki_root.join("pages").join("summary");
+        std::fs::create_dir_all(&pages_dir).unwrap();
+
+        let mut store = InMemoryStore::default();
+        let mut first = WikiPage::new("摘要：Same", "body a", private_scope())
+            .with_entry_type(EntryType::Summary);
+        first.source_url = Some("https://example.test/a".into());
+        let mut second = WikiPage::new("摘要：Same", "body b", private_scope())
+            .with_entry_type(EntryType::Summary);
+        second.source_url = Some("https://example.test/b".into());
+
+        std::fs::write(
+            pages_dir.join("摘要：Same.md"),
+            format!("---\nid: \"{}\"\n---\n\nold duplicate path", first.id.0),
+        )
+        .unwrap();
+
+        store.pages.insert(first.id, first);
+        store.pages.insert(second.id, second);
+
+        write_projection(wiki_root, &store, &[]).unwrap();
+
+        let files: Vec<_> = std::fs::read_dir(&pages_dir)
+            .unwrap()
+            .flatten()
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(files.len(), 2);
+        assert!(files.iter().all(|name| name.starts_with("摘要：Same-")));
+        assert!(!pages_dir.join("摘要：Same.md").exists());
+    }
+
+    #[test]
     fn projection_removes_stale_managed_page_and_preserves_unmanaged() {
         let dir = tempdir().unwrap();
         let wiki_root = dir.path();
@@ -620,5 +748,27 @@ mod tests {
         let page = WikiPage::new("He said \"hello\" then left", "body", private_scope());
         let rendered = render_page_with_frontmatter(&page);
         assert!(rendered.contains(r#"title: "He said \"hello\" then left""#));
+    }
+
+    #[test]
+    fn frontmatter_page_includes_compiler_metadata() {
+        let mut page = WikiPage::new("Summary", "body", private_scope())
+            .with_entry_type(EntryType::Summary)
+            .with_status(EntryStatus::Approved);
+        page.confidence = wiki_core::Confidence::High;
+        page.tags = vec!["AI".into(), "长期记忆".into()];
+        page.source_url = Some("https://example.test/a".into());
+        page.source_tags = vec!["Notion".into()];
+        page.compiled_by = Some("batch-ingest".into());
+        page.last_compiled_at = Some(time::OffsetDateTime::now_utc());
+
+        let rendered = render_page_with_frontmatter(&page);
+
+        assert!(rendered.contains("confidence: high\n"));
+        assert!(rendered.contains("tags:\n  - \"AI\"\n  - \"长期记忆\"\n"));
+        assert!(rendered.contains("source_url: \"https://example.test/a\"\n"));
+        assert!(rendered.contains("source_tags:\n  - \"Notion\"\n"));
+        assert!(rendered.contains("compiled_by: \"batch-ingest\"\n"));
+        assert!(rendered.contains("last_compiled_at:"));
     }
 }

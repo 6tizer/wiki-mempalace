@@ -17,3 +17,4 @@
 ## Current Handovers
 
 - [notion-source-vault-projection/summary.md](notion-source-vault-projection/summary.md) — PR #42 merge and production apply closeout; next workflow is Notion source compilation.
+- [production-wiki-compiler/summary.md](production-wiki-compiler/summary.md) — Notion-equivalent local Wiki Compiler implementation and production tiny-sample handoff.

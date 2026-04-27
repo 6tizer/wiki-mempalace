@@ -138,9 +138,18 @@ impl PageContract {
     /// 生成标准 WikiPage。status 由调用方传入（因为 initial_status_for 在 wiki-kernel）。
     pub fn into_page(self, scope: Scope, status: EntryStatus) -> WikiPage {
         let md = self.render_markdown();
-        WikiPage::new(self.title, md, scope)
+        let mut page = WikiPage::new(self.title, md, scope)
             .with_entry_type(self.entry_type)
-            .with_status(status)
+            .with_status(status);
+        page.confidence = self.confidence;
+        page.tags = self.tags;
+        page.source_url = self.source_url;
+        page.source_tags = self.source_tags;
+        if !self.source.trim().is_empty() {
+            page.compiled_by = Some(self.source);
+            page.last_compiled_at = Some(time::OffsetDateTime::now_utc());
+        }
+        page
     }
 }
 

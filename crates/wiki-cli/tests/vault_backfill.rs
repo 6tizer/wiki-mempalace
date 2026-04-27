@@ -141,6 +141,12 @@ fn rerun_repairs_missing_page_written_after_interrupted_apply() {
             status: wiki_core::EntryStatus::Approved,
             created_at: Some(time::OffsetDateTime::now_utc()),
             status_entered_at: Some(time::OffsetDateTime::now_utc()),
+            confidence: wiki_core::Confidence::default(),
+            tags: Vec::new(),
+            source_url: None,
+            source_tags: Vec::new(),
+            compiled_by: None,
+            last_compiled_at: None,
         }],
         ..StorageSnapshot::default()
     })
@@ -239,6 +245,12 @@ fn rerun_repairs_existing_records_with_same_id() {
             status: wiki_core::EntryStatus::Draft,
             created_at: Some(time::OffsetDateTime::now_utc()),
             status_entered_at: Some(time::OffsetDateTime::now_utc()),
+            confidence: wiki_core::Confidence::default(),
+            tags: Vec::new(),
+            source_url: None,
+            source_tags: Vec::new(),
+            compiled_by: None,
+            last_compiled_at: None,
         }],
         ..StorageSnapshot::default()
     })

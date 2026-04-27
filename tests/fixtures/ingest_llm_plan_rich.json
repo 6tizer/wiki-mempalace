@@ -1,0 +1,58 @@
+{
+  "version": 1,
+  "summary": {
+    "title": "Production Wiki Compiler",
+    "one_sentence_summary": "Production Wiki Compiler turns source articles into visible wiki pages.",
+    "key_insights": [
+      "The local contract must preserve summary, concept, and entity outputs.",
+      "Concept and entity drafts need stable canonical names for deduplication."
+    ],
+    "confidence": "high",
+    "tags": ["wiki-compiler", "production-ingest"],
+    "personal_note": "Ready for tiny production sample.",
+    "source_author": "Codex",
+    "source_publisher": "local",
+    "source_published_at": "2026-04-27",
+    "external_url": "https://example.test/wiki-compiler"
+  },
+  "claims": [
+    {
+      "text": "Production Wiki Compiler keeps summary pages separate from concept and entity pages.",
+      "tier": "semantic",
+      "tags": ["wiki-compiler"]
+    }
+  ],
+  "concepts": [
+    {
+      "canonical_name": "Production Wiki Compiler",
+      "kind": "concept",
+      "definition": "把原始 source 编译成 summary、concept、entity 页的本地流程。",
+      "key_points": [
+        "生成人类可见的概念页",
+        "保留 source 到 summary 的引用关系"
+      ],
+      "tags": ["wiki-compiler", "projection"],
+      "related_names": ["LlmIngestPlanV1"],
+      "category": "workflow"
+    }
+  ],
+  "entities": [
+    {
+      "canonical_name": "Obsidian",
+      "kind": "library",
+      "category": "tool",
+      "definition": "Markdown knowledge base application.",
+      "profile": "用于浏览生成后 wiki graph 的本地知识库界面。",
+      "key_points": ["可见 summary 和 concept/entity 链接"],
+      "tags": ["obsidian", "wiki-ui"],
+      "related_names": ["Production Wiki Compiler"]
+    }
+  ],
+  "relationships": [
+    {
+      "from_label": "Production Wiki Compiler",
+      "relation": "uses",
+      "to_label": "Obsidian"
+    }
+  ]
+}

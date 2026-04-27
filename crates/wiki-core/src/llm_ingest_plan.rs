@@ -32,6 +32,10 @@ where
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LlmIngestPlanV1 {
     pub version: u32,
+    /// Production compiler richer summary contract. Legacy top-level summary
+    /// fields below stay valid for existing callers.
+    #[serde(default)]
+    pub summary: LlmSummaryDraft,
     #[serde(default)]
     pub summary_title: String,
     #[serde(default)]
@@ -60,6 +64,8 @@ pub struct LlmIngestPlanV1 {
     #[serde(default, deserialize_with = "deserialize_claims_flexible")]
     pub claims: Vec<LlmClaimDraft>,
     #[serde(default)]
+    pub concepts: Vec<LlmConceptDraft>,
+    #[serde(default)]
     pub entities: Vec<LlmEntityDraft>,
     #[serde(default)]
     pub relationships: Vec<LlmRelationDraft>,
@@ -68,7 +74,12 @@ pub struct LlmIngestPlanV1 {
 impl LlmIngestPlanV1 {
     /// 将 LLM 填写的 `confidence` 规范为 `high` | `medium` | `low`。
     pub fn normalized_summary_confidence(&self) -> &'static str {
-        match self.confidence.trim().to_ascii_lowercase().as_str() {
+        let confidence = if self.confidence.trim().is_empty() {
+            self.summary.confidence.trim()
+        } else {
+            self.confidence.trim()
+        };
+        match confidence.to_ascii_lowercase().as_str() {
             "high" => "high",
             "low" => "low",
             "medium" | "med" | "" => "medium",
@@ -80,9 +91,12 @@ impl LlmIngestPlanV1 {
     /// 是否需要在引擎中物化 summary 页（含 vault 五段正文）。
     pub fn should_materialize_summary_page(&self) -> bool {
         !self.one_sentence_summary.trim().is_empty()
+            || self.summary.has_content()
             || !self.key_insights.is_empty()
             || !self.summary_markdown.trim().is_empty()
             || !self.claims.is_empty()
+            || !self.concepts.is_empty()
+            || !self.entities.is_empty()
     }
 
     /// 生成 vault 约定的 summary **正文**（5 个 `##` 段落，不含一级标题）。
@@ -94,6 +108,8 @@ impl LlmIngestPlanV1 {
 
         let one_sentence = if !self.one_sentence_summary.trim().is_empty() {
             self.one_sentence_summary.trim().to_string()
+        } else if !self.summary.one_sentence_summary.trim().is_empty() {
+            self.summary.one_sentence_summary.trim().to_string()
         } else if !self.summary_markdown.trim().is_empty() {
             self.summary_markdown.trim().to_string()
         } else {
@@ -106,6 +122,13 @@ impl LlmIngestPlanV1 {
                 .map(|s| format!("- {}", s.trim()))
                 .collect::<Vec<_>>()
                 .join("\n")
+        } else if !self.summary.key_insights.is_empty() {
+            self.summary
+                .key_insights
+                .iter()
+                .map(|s| format!("- {}", s.trim()))
+                .collect::<Vec<_>>()
+                .join("\n")
         } else if !self.summary_markdown.trim().is_empty() && !legacy_only {
             // 新 schema：一句话已单独字段时，legacy 正文放到「关键洞察」
             self.summary_markdown.trim().to_string()
@@ -113,14 +136,32 @@ impl LlmIngestPlanV1 {
             "（暂无）".to_string()
         };
 
-        let concepts_block = if !self.claims.is_empty() {
-            self.claims
-                .iter()
-                .map(|c| format!("- {}", c.text.trim()))
-                .collect::<Vec<_>>()
-                .join("\n")
-        } else {
-            "（暂无）".to_string()
+        let concepts_block = {
+            let mut lines = Vec::new();
+            lines.extend(self.concepts.iter().map(|c| {
+                let name = c.canonical_name.trim();
+                let definition = c.definition.trim();
+                if definition.is_empty() {
+                    format!("- [[{name}]]")
+                } else {
+                    format!("- [[{name}]]：{definition}")
+                }
+            }));
+            lines.extend(self.entities.iter().map(|e| {
+                let name = e.canonical_or_label().trim().to_string();
+                let profile = e.profile_or_definition().trim().to_string();
+                if profile.is_empty() {
+                    format!("- [[{name}]]")
+                } else {
+                    format!("- [[{name}]]：{profile}")
+                }
+            }));
+            lines.extend(self.claims.iter().map(|c| format!("- {}", c.text.trim())));
+            if lines.is_empty() {
+                "（暂无）".to_string()
+            } else {
+                lines.join("\n")
+            }
         };
 
         let mut article_lines: Vec<String> = Vec::new();
@@ -130,19 +171,34 @@ impl LlmIngestPlanV1 {
                 article_lines.push(format!("- 链接：`{u}`"));
             }
         }
-        if let Some(ref a) = self.source_author {
+        let source_author = self
+            .source_author
+            .as_deref()
+            .filter(|s| !s.trim().is_empty())
+            .or(self.summary.source_author.as_deref());
+        let source_publisher = self
+            .source_publisher
+            .as_deref()
+            .filter(|s| !s.trim().is_empty())
+            .or(self.summary.source_publisher.as_deref());
+        let source_published_at = self
+            .source_published_at
+            .as_deref()
+            .filter(|s| !s.trim().is_empty())
+            .or(self.summary.source_published_at.as_deref());
+        if let Some(a) = source_author {
             let a = a.trim();
             if !a.is_empty() {
                 article_lines.push(format!("- 作者：{a}"));
             }
         }
-        if let Some(ref p) = self.source_publisher {
+        if let Some(p) = source_publisher {
             let p = p.trim();
             if !p.is_empty() {
                 article_lines.push(format!("- 平台：{p}"));
             }
         }
-        if let Some(ref t) = self.source_published_at {
+        if let Some(t) = source_published_at {
             let t = t.trim();
             if !t.is_empty() {
                 article_lines.push(format!("- 发布时间：{t}"));
@@ -169,6 +225,40 @@ impl LlmIngestPlanV1 {
     }
 }
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct LlmSummaryDraft {
+    #[serde(default)]
+    pub title: String,
+    #[serde(default)]
+    pub one_sentence_summary: String,
+    #[serde(default)]
+    pub key_insights: Vec<String>,
+    #[serde(default)]
+    pub confidence: String,
+    #[serde(default)]
+    pub tags: Vec<String>,
+    #[serde(default)]
+    pub personal_note: String,
+    #[serde(default)]
+    pub source_author: Option<String>,
+    #[serde(default)]
+    pub source_publisher: Option<String>,
+    #[serde(default)]
+    pub source_published_at: Option<String>,
+    #[serde(default)]
+    pub external_url: Option<String>,
+}
+
+impl LlmSummaryDraft {
+    pub fn has_content(&self) -> bool {
+        !self.title.trim().is_empty()
+            || !self.one_sentence_summary.trim().is_empty()
+            || !self.key_insights.is_empty()
+            || !self.personal_note.trim().is_empty()
+            || !self.tags.is_empty()
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LlmClaimDraft {
     pub text: String,
@@ -178,11 +268,115 @@ pub struct LlmClaimDraft {
     pub tags: Vec<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct LlmConceptDraft {
+    #[serde(default, alias = "name", alias = "title")]
+    pub canonical_name: String,
+    /// Always `concept` for the production compiler contract.
+    #[serde(default)]
+    pub kind: String,
+    #[serde(default)]
+    pub definition: String,
+    #[serde(default)]
+    pub key_points: Vec<String>,
+    #[serde(default)]
+    pub tags: Vec<String>,
+    #[serde(default)]
+    pub related_names: Vec<String>,
+    #[serde(default)]
+    pub category: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct LlmEntityDraft {
+    /// Legacy field consumed by current CLI runner.
     pub label: String,
     /// `person` | `project` | `library` | `concept` | `file_path` | `decision` | `other`
     pub kind: String,
+    /// Production compiler canonical page title.
+    pub canonical_name: String,
+    pub category: Option<String>,
+    pub definition: String,
+    pub profile: String,
+    pub key_points: Vec<String>,
+    pub tags: Vec<String>,
+    pub related_names: Vec<String>,
+}
+
+impl<'de> Deserialize<'de> for LlmEntityDraft {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Default, Deserialize)]
+        struct Raw {
+            #[serde(default)]
+            label: String,
+            #[serde(default)]
+            kind: String,
+            #[serde(default)]
+            canonical_name: String,
+            #[serde(default)]
+            category: Option<String>,
+            #[serde(default)]
+            definition: String,
+            #[serde(default)]
+            profile: String,
+            #[serde(default)]
+            key_points: Vec<String>,
+            #[serde(default)]
+            tags: Vec<String>,
+            #[serde(default)]
+            related_names: Vec<String>,
+        }
+
+        let raw = Raw::deserialize(deserializer)?;
+        let canonical_name = if raw.canonical_name.trim().is_empty() {
+            raw.label.clone()
+        } else {
+            raw.canonical_name
+        };
+        let label = if raw.label.trim().is_empty() {
+            canonical_name.clone()
+        } else {
+            raw.label
+        };
+        let kind = if raw.kind.trim().is_empty() {
+            "other".to_string()
+        } else {
+            raw.kind
+        };
+
+        Ok(Self {
+            label,
+            kind,
+            canonical_name,
+            category: raw.category,
+            definition: raw.definition,
+            profile: raw.profile,
+            key_points: raw.key_points,
+            tags: raw.tags,
+            related_names: raw.related_names,
+        })
+    }
+}
+
+impl LlmEntityDraft {
+    pub fn canonical_or_label(&self) -> &str {
+        if self.canonical_name.trim().is_empty() {
+            &self.label
+        } else {
+            &self.canonical_name
+        }
+    }
+
+    pub fn profile_or_definition(&self) -> &str {
+        if self.profile.trim().is_empty() {
+            &self.definition
+        } else {
+            &self.profile
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -228,6 +422,41 @@ mod tests {
         assert_eq!(p.version, 1);
         assert!(!p.summary_markdown.is_empty());
         assert!(!p.claims.is_empty());
+    }
+
+    #[test]
+    fn parses_rich_production_compiler_fixture() {
+        let j = include_str!("../../../tests/fixtures/ingest_llm_plan_rich.json");
+        let p: LlmIngestPlanV1 = serde_json::from_str(j.trim()).unwrap();
+        assert_eq!(p.version, 1);
+        assert_eq!(p.summary.title, "Production Wiki Compiler");
+        assert_eq!(p.normalized_summary_confidence(), "high");
+        assert_eq!(p.concepts.len(), 1);
+        assert_eq!(p.concepts[0].canonical_name, "Production Wiki Compiler");
+        assert_eq!(
+            p.concepts[0].definition,
+            "把原始 source 编译成 summary、concept、entity 页的本地流程。"
+        );
+        assert_eq!(p.concepts[0].key_points.len(), 2);
+        assert_eq!(p.concepts[0].tags, vec!["wiki-compiler", "projection"]);
+        assert_eq!(p.concepts[0].related_names, vec!["LlmIngestPlanV1"]);
+        assert_eq!(p.entities.len(), 1);
+        assert_eq!(p.entities[0].label, "Obsidian");
+        assert_eq!(p.entities[0].canonical_name, "Obsidian");
+        assert_eq!(p.entities[0].category.as_deref(), Some("tool"));
+        assert_eq!(
+            p.entities[0].profile,
+            "用于浏览生成后 wiki graph 的本地知识库界面。"
+        );
+        assert_eq!(
+            p.entities[0].key_points,
+            vec!["可见 summary 和 concept/entity 链接"]
+        );
+        assert_eq!(p.entities[0].tags, vec!["obsidian", "wiki-ui"]);
+        assert_eq!(
+            p.entities[0].related_names,
+            vec!["Production Wiki Compiler"]
+        );
     }
 
     #[test]
@@ -287,6 +516,7 @@ mod tests {
     fn five_section_body_includes_all_headings() {
         let p = LlmIngestPlanV1 {
             version: 1,
+            summary: LlmSummaryDraft::default(),
             summary_title: "t".into(),
             summary_markdown: String::new(),
             one_sentence_summary: "一句".into(),
@@ -301,6 +531,7 @@ mod tests {
                 tier: "semantic".into(),
                 tags: vec![],
             }],
+            concepts: vec![],
             entities: vec![],
             relationships: vec![],
         };
@@ -312,5 +543,38 @@ mod tests {
         assert!(body.contains("## 个人评注"));
         assert!(body.contains("https://ex.test"));
         assert!(body.contains("概念一"));
+    }
+
+    #[test]
+    fn rich_summary_body_lists_concepts_and_entities() {
+        let p: LlmIngestPlanV1 = serde_json::from_str(
+            r###"{
+                "version": 1,
+                "summary": {
+                    "one_sentence_summary": "本地编译器生成可见 wiki 页面。",
+                    "key_insights": ["summary 与 concept/entity 分离"],
+                    "source_author": "tester"
+                },
+                "concepts": [{
+                    "canonical_name": "Wiki Compiler",
+                    "definition": "source 到 wiki 页面集合的编译 contract"
+                }],
+                "entities": [{
+                    "canonical_name": "Obsidian",
+                    "category": "tool",
+                    "profile": "本地 graph 浏览工具"
+                }]
+            }"###,
+        )
+        .unwrap();
+        assert!(p.should_materialize_summary_page());
+        assert_eq!(p.entities[0].label, "Obsidian");
+        assert_eq!(p.entities[0].kind, "other");
+        let body = p.to_five_section_summary_body(None);
+        assert!(body.contains("本地编译器生成可见 wiki 页面。"));
+        assert!(body.contains("- summary 与 concept/entity 分离"));
+        assert!(body.contains("- [[Wiki Compiler]]：source 到 wiki 页面集合的编译 contract"));
+        assert!(body.contains("- [[Obsidian]]：本地 graph 浏览工具"));
+        assert!(body.contains("- 作者：tester"));
     }
 }

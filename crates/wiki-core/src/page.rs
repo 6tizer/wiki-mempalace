@@ -45,6 +45,24 @@ pub struct WikiPage {
     /// `None`，引擎会回落到 `updated_at`。
     #[serde(default)]
     pub status_entered_at: Option<OffsetDateTime>,
+    /// 可选的页面置信度，用于 compiler / 投影 frontmatter。
+    #[serde(default)]
+    pub confidence: Confidence,
+    /// 可选的结构化标签，用于 compiler / 投影 frontmatter。
+    #[serde(default)]
+    pub tags: Vec<String>,
+    /// Summary 页对应的原文 URL 或 file URI。
+    #[serde(default)]
+    pub source_url: Option<String>,
+    /// Summary 页继承自 source frontmatter 的原始标签。
+    #[serde(default)]
+    pub source_tags: Vec<String>,
+    /// 生成该页的流水线入口，如 `batch-ingest`。
+    #[serde(default)]
+    pub compiled_by: Option<String>,
+    /// 最近一次 compiler 成功更新该页的时间。
+    #[serde(default)]
+    pub last_compiled_at: Option<OffsetDateTime>,
 }
 
 impl WikiPage {
@@ -61,6 +79,12 @@ impl WikiPage {
             status: EntryStatus::Draft,
             created_at: Some(now),
             status_entered_at: Some(now),
+            confidence: Confidence::default(),
+            tags: Vec::new(),
+            source_url: None,
+            source_tags: Vec::new(),
+            compiled_by: None,
+            last_compiled_at: None,
         }
     }
 
