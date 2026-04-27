@@ -17,7 +17,7 @@
 - [x] Tests added/updated
 - [x] Docs updated
 - [x] PR opened
-- [ ] CI green
+- [x] CI green
 
 ## Plan Mode Grading
 
