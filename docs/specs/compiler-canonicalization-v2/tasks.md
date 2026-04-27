@@ -16,7 +16,7 @@
 - [x] Integration review complete
 - [x] Tests added/updated
 - [x] Docs updated
-- [ ] PR opened
+- [x] PR opened
 - [ ] CI green
 
 ## Plan Mode Grading
