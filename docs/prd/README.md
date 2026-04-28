@@ -16,6 +16,7 @@
 
 ## Completed PRDs Still Useful As Reference
 
+- [benchmark-reproducibility.md](benchmark-reproducibility.md) — PR #70：deterministic random benchmark seed for `rust-mempalace bench`.
 - [notion-archived-source-retirement.md](notion-archived-source-retirement.md) — PR #68/#69：DB-first Notion archived source retirement audit/plan plus guarded apply.
 - [scheduled-vault-reports.md](scheduled-vault-reports.md) — PR #67：Automation `vault-reports` job for timestamped Vault report bundles, latest pointers, and retention.
 - [dependency-audit-automation.md](dependency-audit-automation.md) — PR #66：Scheduled/manual `cargo audit` lane with artifact upload, kept out of quick PR checks.

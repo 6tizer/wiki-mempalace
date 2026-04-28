@@ -26,6 +26,15 @@
 - Agent-facing CLI 默认值不要依赖 cwd；只要语义属于 vault 输出，相对路径应在
   `--wiki-dir` 存在时解析为 vault-relative，并用测试固定。
 
+## 2026-04-28 / PR #70 Benchmark Reproducibility
+
+- Scope: 给 `rust-mempalace bench --mode random` 增加 `--seed`，并把 seed 写入 `benchmark_runs`、CLI 输出和 benchmark report。
+- What worked: 把随机选样逻辑拆成小 helper 后，确定性可以用纯单元测试锁住，不依赖检索命中偶然性。
+- What caused rework: `BenchMode` 原本不需要比较，新增 fixed+seed fail-fast 后必须补 `PartialEq`。
+- Spec changes needed: J14 仍独立；本 PR 只保证现有 random benchmark 可复现，不引入 semantic fusion。
+- Tests or reviews that caught issues: focused compile/test 抓到 `BenchMode` derive 缺失；e2e 覆盖 seed 输出、DB 存储和 fixed+seed 拒绝。
+- Next plan note: 下一项进入 `Embedding Tx Atomicity`，把 embedding 写入纳入 snapshot/outbox 事务边界。
+
 ## 2026-04-28 / PR #68 Notion Archived Source Retirement Audit Plan
 
 - Scope: 新增 `notion-archived-retirement plan`，从 `notion_page_index` 拉取 Notion archived/in_trash 状态，生成 DB-first dry-run JSON/Markdown retirement plan。

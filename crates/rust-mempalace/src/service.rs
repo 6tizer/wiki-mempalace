@@ -1,8 +1,10 @@
 use crate::classifier::{classify, default_rules, load_rules, KNOWN_HALLS};
 use crate::db;
-use anyhow::Result;
+use anyhow::{Context, Result};
 use chrono::Utc;
+use rand::rngs::StdRng;
 use rand::seq::SliceRandom;
+use rand::SeedableRng;
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -491,9 +493,14 @@ pub fn principles_report(conn: &Connection) -> Result<String> {
         s.drawers, s.wings, s.tunnels, s.kg_facts
     ));
     if let Some(b) = last_bench {
+        let seed = b
+            .seed
+            .map(|seed| format!(", seed={seed}"))
+            .unwrap_or_default();
         out.push_str(&format!(
-            "\nLast benchmark: mode={}, recall@{}={:.2}%, latency_ms={}, throughput={:.2}/s",
+            "\nLast benchmark: mode={}{}, recall@{}={:.2}%, latency_ms={}, throughput={:.2}/s",
             b.mode,
+            seed,
             b.k,
             b.recall * 100.0,
             b.latency_ms,
@@ -824,6 +831,7 @@ pub fn benchmark_run(
     samples: usize,
     k: usize,
     mode: &str,
+    seed: Option<u64>,
 ) -> Result<BenchmarkResult> {
     let mut stmt = conn.prepare("SELECT id, content FROM drawers ORDER BY id DESC LIMIT 10000")?;
     let mut rows = stmt.query([])?;
@@ -838,15 +846,12 @@ pub fn benchmark_run(
             recall: 0.0,
             k,
             mode: mode.to_string(),
+            seed: if mode == "random" { seed } else { None },
             latency_ms: 0,
             throughput_per_sec: 0.0,
         });
     }
-    if mode == "random" {
-        let mut rng = rand::rng();
-        corpus.shuffle(&mut rng);
-    }
-    let chosen: Vec<(i64, String)> = corpus.into_iter().take(samples).collect();
+    let chosen = choose_benchmark_corpus(corpus, samples, mode, seed);
     let start = Instant::now();
     let mut total = 0usize;
     let mut hits = 0usize;
@@ -883,12 +888,18 @@ pub fn benchmark_run(
         recall,
         k,
         mode: mode.to_string(),
+        seed: if mode == "random" { seed } else { None },
         latency_ms,
         throughput_per_sec,
     };
+    let seed_db = out
+        .seed
+        .map(i64::try_from)
+        .transpose()
+        .context("benchmark seed exceeds SQLite INTEGER range")?;
     conn.execute(
-        "INSERT INTO benchmark_runs(mode, samples, top_k, recall, latency_ms, throughput_per_sec, hits, created_at)
-         VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+        "INSERT INTO benchmark_runs(mode, samples, top_k, recall, latency_ms, throughput_per_sec, hits, seed, created_at)
+         VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
         params![
             out.mode,
             out.total as i64,
@@ -897,10 +908,29 @@ pub fn benchmark_run(
             out.latency_ms as i64,
             out.throughput_per_sec,
             out.hits as i64,
+            seed_db,
             Utc::now().to_rfc3339()
         ],
     )?;
     Ok(out)
+}
+
+fn choose_benchmark_corpus(
+    mut corpus: Vec<(i64, String)>,
+    samples: usize,
+    mode: &str,
+    seed: Option<u64>,
+) -> Vec<(i64, String)> {
+    if mode == "random" {
+        if let Some(seed) = seed {
+            let mut rng = StdRng::seed_from_u64(seed);
+            corpus.shuffle(&mut rng);
+        } else {
+            let mut rng = rand::rng();
+            corpus.shuffle(&mut rng);
+        }
+    }
+    corpus.into_iter().take(samples).collect()
 }
 
 pub struct BenchmarkResult {
@@ -909,6 +939,7 @@ pub struct BenchmarkResult {
     pub recall: f64,
     pub k: usize,
     pub mode: String,
+    pub seed: Option<u64>,
     pub latency_ms: u64,
     pub throughput_per_sec: f64,
 }
@@ -916,9 +947,12 @@ pub struct BenchmarkResult {
 pub fn latest_benchmark(conn: &Connection) -> Result<Option<BenchmarkResult>> {
     let row = conn
         .query_row(
-            "SELECT mode, samples, top_k, recall, latency_ms, throughput_per_sec, hits FROM benchmark_runs ORDER BY id DESC LIMIT 1",
+            "SELECT mode, samples, top_k, recall, latency_ms, throughput_per_sec, hits, seed FROM benchmark_runs ORDER BY id DESC LIMIT 1",
             [],
             |r| {
+                let seed = r
+                    .get::<_, Option<i64>>(7)?
+                    .and_then(|value| u64::try_from(value).ok());
                 Ok(BenchmarkResult {
                     mode: r.get(0)?,
                     total: r.get::<_, i64>(1)? as usize,
@@ -927,6 +961,7 @@ pub fn latest_benchmark(conn: &Connection) -> Result<Option<BenchmarkResult>> {
                     latency_ms: r.get::<_, i64>(4)? as u64,
                     throughput_per_sec: r.get(5)?,
                     hits: r.get::<_, i64>(6)? as usize,
+                    seed,
                 })
             },
         )
@@ -945,6 +980,7 @@ pub fn save_benchmark_report(result: &BenchmarkResult, report_path: &Path) -> Re
     {
         let payload = BenchmarkReportJson {
             mode: result.mode.clone(),
+            seed: result.seed,
             total: result.total,
             hits: result.hits,
             recall: result.recall,
@@ -956,9 +992,13 @@ pub fn save_benchmark_report(result: &BenchmarkResult, report_path: &Path) -> Re
         fs::write(report_path, serde_json::to_string_pretty(&payload)?)?;
     } else {
         let body = format!(
-            "# Benchmark Report\n\n- generated_at: {}\n- mode: {}\n- samples: {}\n- hits: {}\n- recall@{}: {:.2}%\n- latency_ms: {}\n- throughput_per_sec: {:.2}\n",
+            "# Benchmark Report\n\n- generated_at: {}\n- mode: {}\n- seed: {}\n- samples: {}\n- hits: {}\n- recall@{}: {:.2}%\n- latency_ms: {}\n- throughput_per_sec: {:.2}\n",
             Utc::now().to_rfc3339(),
             result.mode,
+            result
+                .seed
+                .map(|seed| seed.to_string())
+                .unwrap_or_else(|| "none".to_string()),
             result.total,
             result.hits,
             result.k,
@@ -1196,6 +1236,7 @@ fn trigrams(s: &str) -> std::collections::HashSet<String> {
 #[derive(Serialize)]
 struct BenchmarkReportJson {
     mode: String,
+    seed: Option<u64>,
     total: usize,
     hits: usize,
     recall: f64,
@@ -1299,5 +1340,22 @@ mod tests {
             "\"hello\" \"or\" \"world\""
         );
         assert_eq!(build_fts_query("!!!"), "\"memory\"");
+    }
+
+    #[test]
+    fn seeded_random_benchmark_selection_is_repeatable() {
+        let corpus = (1..=10)
+            .map(|id| (id, format!("drawer {id}")))
+            .collect::<Vec<_>>();
+
+        let first = choose_benchmark_corpus(corpus.clone(), 5, "random", Some(42));
+        let second = choose_benchmark_corpus(corpus.clone(), 5, "random", Some(42));
+        let fixed = choose_benchmark_corpus(corpus.clone(), 5, "fixed", Some(42));
+
+        assert_eq!(first, second);
+        assert_eq!(
+            fixed.iter().map(|(id, _)| *id).collect::<Vec<_>>(),
+            vec![1, 2, 3, 4, 5]
+        );
     }
 }

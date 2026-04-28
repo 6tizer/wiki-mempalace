@@ -357,6 +357,57 @@ fn e2e_bench_fixed_vs_random() {
     let random = json_stdout(&out_random);
     assert_eq!(random.get("mode").and_then(|v| v.as_str()), Some("random"));
     assert!(random.get("throughput_per_sec").is_some());
+
+    let out_seeded = run(
+        &[
+            "--quiet",
+            "--output",
+            "json",
+            "bench",
+            "--samples",
+            "4",
+            "--top-k",
+            "2",
+            "--mode",
+            "random",
+            "--seed",
+            "12345",
+        ],
+        &palace,
+    );
+    assert_ok(&out_seeded, "bench random seeded");
+    let seeded = json_stdout(&out_seeded);
+    assert_eq!(seeded.get("seed").and_then(|v| v.as_u64()), Some(12345));
+
+    let conn = rusqlite::Connection::open(palace.join("palace.db")).expect("open palace db");
+    let stored_seed: Option<i64> = conn
+        .query_row(
+            "SELECT seed FROM benchmark_runs ORDER BY id DESC LIMIT 1",
+            [],
+            |row| row.get(0),
+        )
+        .expect("latest benchmark seed");
+    assert_eq!(stored_seed, Some(12345));
+
+    let out_bad_seed = run(
+        &[
+            "--quiet",
+            "--output",
+            "json",
+            "bench",
+            "--samples",
+            "1",
+            "--mode",
+            "fixed",
+            "--seed",
+            "1",
+        ],
+        &palace,
+    );
+    assert!(
+        !out_bad_seed.status.success(),
+        "fixed benchmark with seed should fail"
+    );
 }
 
 #[test]

@@ -57,6 +57,7 @@ pub fn init_schema(conn: &Connection) -> Result<()> {
         CREATE TABLE IF NOT EXISTS benchmark_runs (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             mode TEXT NOT NULL,
+            seed INTEGER,
             samples INTEGER NOT NULL,
             top_k INTEGER NOT NULL,
             recall REAL NOT NULL,
@@ -123,6 +124,21 @@ pub fn migrate_schema(conn: &Connection) -> Result<()> {
             "ALTER TABLE benchmark_runs ADD COLUMN hits INTEGER NOT NULL DEFAULT 0",
             [],
         )?;
+    }
+
+    // Optional deterministic random seed for benchmark reproducibility.
+    let mut bstmt = conn.prepare("PRAGMA table_info(benchmark_runs)")?;
+    let mut has_seed = false;
+    let mut brows = bstmt.query([])?;
+    while let Some(r) = brows.next()? {
+        let name: String = r.get(1)?;
+        if name == "seed" {
+            has_seed = true;
+            break;
+        }
+    }
+    if !has_seed {
+        conn.execute("ALTER TABLE benchmark_runs ADD COLUMN seed INTEGER", [])?;
     }
 
     Ok(())
