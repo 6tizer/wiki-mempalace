@@ -16,7 +16,7 @@
 
 ## Completed PRDs Still Useful As Reference
 
-- [mcp-vault-sync.md](mcp-vault-sync.md) — PR #TBD：MCP write tools trigger Vault projection when `--sync-wiki` is enabled.
+- [mcp-vault-sync.md](mcp-vault-sync.md) — PR #61：MCP write tools trigger Vault projection when `--sync-wiki` is enabled.
 - [mcp-typed-errors.md](mcp-typed-errors.md) — PR #60：MCP JSON-RPC typed error mapping for stable client-side diagnostics.
 - [batch-3.md](batch-3.md) — P2 maturity：metrics、dashboard、strategy、tag governance、LongMemEval automation。
 - [compiler-canonicalization-v2.md](compiler-canonicalization-v2.md) — PR #47：pre-write compiler resolver, bounded candidate retrieval, persisted alias/canonical mapping, and small LLM fallback.

@@ -4,6 +4,10 @@
 
 `codex/mcp-vault-sync`
 
+## Merge
+
+PR #61 merged on 2026-04-28.
+
 ## Completed
 
 - MCP runtime now receives `wiki_dir` only when `--sync-wiki` is enabled.
