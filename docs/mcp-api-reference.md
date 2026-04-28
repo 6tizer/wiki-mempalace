@@ -56,8 +56,18 @@ cargo run -p wiki-cli -- \
 Errors use JSON-RPC error responses:
 
 ```json
-{"jsonrpc":"2.0","id":1,"error":{"code":-32000,"message":"missing query"}}
+{"jsonrpc":"2.0","id":1,"error":{"code":-32602,"message":"missing query","data":{"kind":"invalid_params"}}}
 ```
 
-Typed MCP errors are a planned follow-up. Current messages are stable enough for humans, not a versioned API contract.
+Current typed error kinds:
 
+| Kind | Code | Meaning |
+| --- | --- | --- |
+| `parse_error` | `-32700` | Request line is not valid JSON. |
+| `method_not_found` | `-32601` | JSON-RPC method is unknown. |
+| `invalid_params` | `-32602` | Required tool argument is missing or invalid. |
+| `tool_not_found` | `-32602` | `tools/call.name` does not match a known tool. |
+| `engine_error` | `-32000` | Wiki engine operation failed. |
+| `storage_error` | `-32000` | Repository persistence failed. |
+| `llm_error` | `-32000` | LLM config, completion, JSON, validation, or embedding path failed. |
+| `mempalace_error` | `-32000` | Mempalace bridge/tool operation failed. |

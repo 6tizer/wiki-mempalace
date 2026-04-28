@@ -16,6 +16,7 @@
 
 ## Completed PRDs Still Useful As Reference
 
+- [mcp-typed-errors.md](mcp-typed-errors.md) — PR #60：MCP JSON-RPC typed error mapping for stable client-side diagnostics.
 - [batch-3.md](batch-3.md) — P2 maturity：metrics、dashboard、strategy、tag governance、LongMemEval automation。
 - [compiler-canonicalization-v2.md](compiler-canonicalization-v2.md) — PR #47：pre-write compiler resolver, bounded candidate retrieval, persisted alias/canonical mapping, and small LLM fallback.
 - [compiler-deferred-resolution-agent.md](compiler-deferred-resolution-agent.md) — PR #54：machine-only resolver/fixer for compiler `deferred_resolutions`, DB-first apply order, production apply smoke completed.
