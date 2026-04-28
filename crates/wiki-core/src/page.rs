@@ -129,18 +129,26 @@ pub fn extract_wikilinks(markdown: &str) -> Vec<String> {
         if bytes[i] == b'[' && bytes[i + 1] == b'[' {
             let start = i + 2;
             let mut j = start;
+            let mut closed = false;
             while j + 1 < bytes.len() {
+                if bytes[j] == b'\n' || bytes[j] == b'\r' {
+                    break;
+                }
                 if bytes[j] == b']' && bytes[j + 1] == b']' {
                     let t = markdown[start..j].trim();
                     if !t.is_empty() && !out.iter().any(|x| x == t) {
                         out.push(t.to_string());
                     }
                     i = j + 2;
+                    closed = true;
                     break;
                 }
                 j += 1;
             }
-            if j + 1 >= bytes.len() {
+            if !closed {
+                i = start;
+            }
+            if j + 1 >= bytes.len() && !closed {
                 break;
             }
             continue;
@@ -184,6 +192,13 @@ mod tests {
         let md = "A [[One]] B [[Two]] [[One]]";
         let got = extract_wikilinks(md);
         assert_eq!(got, vec!["One".to_string(), "Two".to_string()]);
+    }
+
+    #[test]
+    fn wikilink_extraction_stops_at_line_boundary() {
+        let md = "- [[TyClaw.rs](http://TyClaw.rs)](../entity/TyClaw-rs.md)\n- [[Good]]";
+        let got = extract_wikilinks(md);
+        assert_eq!(got, vec!["Good".to_string()]);
     }
 
     #[test]

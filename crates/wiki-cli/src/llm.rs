@@ -141,12 +141,31 @@ pub fn complete_chat(
     user: &str,
     max_tokens: u32,
 ) -> Result<String, Box<dyn std::error::Error>> {
+    complete_chat_inner(cfg, system, user, max_tokens, false)
+}
+
+pub fn complete_chat_json_object(
+    cfg: &LlmConfig,
+    system: &str,
+    user: &str,
+    max_tokens: u32,
+) -> Result<String, Box<dyn std::error::Error>> {
+    complete_chat_inner(cfg, system, user, max_tokens, true)
+}
+
+fn complete_chat_inner(
+    cfg: &LlmConfig,
+    system: &str,
+    user: &str,
+    max_tokens: u32,
+    json_object: bool,
+) -> Result<String, Box<dyn std::error::Error>> {
     let url = chat_completions_url(&cfg.base_url);
     let client = reqwest::blocking::Client::builder()
         .timeout(Duration::from_secs(cfg.timeout_seconds))
         .build()?;
 
-    let body = serde_json::json!({
+    let mut body = serde_json::json!({
         "model": cfg.model,
         "messages": [
             {"role": "system", "content": system},
@@ -155,6 +174,9 @@ pub fn complete_chat(
         "max_tokens": max_tokens,
         "temperature": 0.1
     });
+    if json_object {
+        body["response_format"] = serde_json::json!({"type": "json_object"});
+    }
 
     let mut last_err: Option<Box<dyn std::error::Error>> = None;
     for _ in 0..=cfg.max_retries {
@@ -179,6 +201,10 @@ fn do_chat_json_messages(
         return Err(format!("llm http {}: {}", status.as_u16(), text).into());
     }
     let v: serde_json::Value = serde_json::from_str(&text)?;
+    let finish_reason = v["choices"][0]["finish_reason"].as_str();
+    if matches!(finish_reason, Some("length")) {
+        return Err("llm response truncated: finish_reason=length".into());
+    }
     let content = v["choices"][0]["message"]["content"]
         .as_str()
         .unwrap_or("")
@@ -313,6 +339,19 @@ mod tests {
         assert!(prompt.contains("\"tags\": [ \"short claim-specific wiki tags\" ]"));
         assert!(prompt.contains("claim tags: optional"));
         assert!(prompt.contains("top-level tags: 0"));
+    }
+
+    #[test]
+    fn json_object_request_adds_response_format() {
+        let mut body = serde_json::json!({
+            "model": "m",
+            "messages": [],
+            "max_tokens": 1,
+            "temperature": 0.1
+        });
+        body["response_format"] = serde_json::json!({"type": "json_object"});
+
+        assert_eq!(body["response_format"]["type"], "json_object");
     }
 }
 
