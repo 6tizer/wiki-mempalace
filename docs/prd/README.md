@@ -16,6 +16,7 @@
 
 ## Completed PRDs Still Useful As Reference
 
+- [reliability-test-matrix.md](reliability-test-matrix.md) — PR #65：Reliability regression coverage for DB failure injection, large smoke, MCP malformed input, and LLM bad JSON.
 - [multi-process-writer-lease.md](multi-process-writer-lease.md) — PR #64：Repository-adjacent writer lease for write CLI/MCP entrypoints.
 - [outbox-consumer-cursors.md](outbox-consumer-cursors.md) — PR #62/#63：Consumer-scoped outbox cursor export API plus CLI/consumer cutover.
 - [mcp-vault-sync.md](mcp-vault-sync.md) — PR #61：MCP write tools trigger Vault projection when `--sync-wiki` is enabled.

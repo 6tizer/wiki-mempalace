@@ -40,3 +40,4 @@
 - [mcp-vault-sync/](mcp-vault-sync/) — MCP write tools 在 `--sync-wiki` 启用时自动刷新 Vault projection。已合入 PR #61。
 - [outbox-consumer-cursors/](outbox-consumer-cursors/) — Consumer-scoped outbox cursor export API plus CLI/consumer cutover。已合入 PR #62/#63。
 - [multi-process-writer-lease/](multi-process-writer-lease/) — `wiki.db.writer.lock` writer lease for write CLI/MCP entrypoints。已合入 PR #64。
+- [reliability-test-matrix/](reliability-test-matrix/) — DB failure injection、大 snapshot smoke、MCP malformed input、LLM bad JSON 回归矩阵。已合入 PR #65。
