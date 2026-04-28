@@ -41,7 +41,7 @@
 | MCP Typed Errors | ✅ 已合入 PR #60 | 审计延后项：`wiki-cli/src/mcp.rs` 已收敛为 typed `McpToolError` / JSON-RPC error mapping，输出稳定 `error.data.kind` |
 | MCP API Reference | ✅ 已合入 PR #58 | PR #58 新增 `docs/mcp-api-reference.md`，覆盖统一 MCP Server 工具参数、scope 默认值、写入副作用、输入上限和错误形状 |
 | Multi-process Write Guardrails | ✅ 已合入 PR #64 | PR #58 已补 writer safety 警告；PR #64 已增加 `wiki.db.writer.lock` writer lease，写入型 CLI/MCP 入口拿不到 lease 时 fail fast |
-| Contradiction Scan Scaling | 💤 未开始 | 审计延后项：优化 `naive_contradiction_pairs` O(n²) 路径，加入 stale 预过滤、scope 分桶、可选 embedding 预筛或 bounded candidates |
+| Contradiction Scan Scaling | ✅ PR #74 | 已优化 `naive_contradiction_pairs`：stale 预过滤、scope 分桶、signal index、bounded candidates |
 | Reliability Test Matrix | ✅ 已合入 PR #65 | 审计延后项：已补 DB batch rollback failure injection、大 snapshot smoke、MCP malformed parse、LLM malformed JSON extraction；writer lease busy / MCP oversized 已在相邻测试覆盖 |
 | Automation Integrity Check | ✅ 已合入 PR #58 | PR #58 已把 `PRAGMA integrity_check` 纳入 `automation health` 输出；scheduled report 保留策略仍属于 `Scheduled Vault Reports` |
 | Dependency Audit Automation | ✅ 已合入 PR #66 | 审计建议：已新增 scheduled/manual `cargo audit` workflow，上传 JSON/stderr artifact；quick CI 只做 wrapper 语法检查 |
@@ -92,7 +92,7 @@ scale-up 混做。
 2. Embedding Tx Atomicity：把 embedding 写入纳入 snapshot/outbox 同一事务边界。
 3. C16B Embedding ANN spike / feature gate：PR #72 已确定 feature gate、fallback 和 CI story。
 4. C16B Embedding ANN implementation：PR #73 已实现 locality-bucket bounded search、fallback full scan、ranking 回归测试。
-5. Contradiction Scan Scaling：优化 contradiction O(n²) 路径。
+5. Contradiction Scan Scaling：PR #74 已优化 contradiction O(n²) 路径。
 6. J14 Semantic Fusion Benchmark：在 J13 基础上增加 semantic/query fusion 对照 benchmark。
 7. Row-level Wiki State Storage：分 migration/dual-write 与 cutover/cleanup 两 PR 做。
 
@@ -140,7 +140,7 @@ scale-up 混做。
 | 12 | Embedding Tx Atomicity | `Embedding Tx Atomicity` | ✅ PR #71 | embedding 写入纳入 snapshot/outbox 同事务。 |
 | 13 | C16B Embedding ANN spike / feature gate | `C16B Embedding ANN index` | ✅ PR #72 | 先确定 ANN 技术路径、fallback 和 CI story。 |
 | 14 | C16B Embedding ANN implementation | `C16B Embedding ANN index` | ✅ PR #73 | bounded vector search、fallback full scan、ranking 回归。 |
-| 15 | Contradiction Scan Scaling | `Contradiction Scan Scaling` | 💤 未开始 | 降低 `naive_contradiction_pairs` O(n²) 爆炸风险。 |
+| 15 | Contradiction Scan Scaling | `Contradiction Scan Scaling` | ✅ PR #74 | 降低 `naive_contradiction_pairs` O(n²) 爆炸风险。 |
 | 16 | J14 Semantic Fusion Benchmark | `J14 Semantic Fusion Benchmark` | 💤 未开始 | semantic/query fusion 对照评估 lane。 |
 | 17 | Row-level Wiki State Storage migration/dual-write | `Row-level Wiki State Storage` | 💤 未开始 | 加行级表与迁移路径，保留快照兼容。 |
 | 18 | Row-level Wiki State Storage cutover/cleanup | `Row-level Wiki State Storage` | 💤 未开始 | 主路径切到行级 state，保留验证和恢复说明。 |
