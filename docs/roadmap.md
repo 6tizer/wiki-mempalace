@@ -36,7 +36,7 @@
 | Compiler Canonicalization v2 | ✅ 已合入 | PR #47 已 merge；在 compiler draft 和 DB 写入之间插入 pre-write resolver；新增 bounded candidate retrieval、`wiki_canonical_alias` persisted alias/canonical mapping、small LLM fallback、machine-owned `deferred_resolutions` JSON；低置信度/模糊项不污染 active graph，交给后续 resolver/lint/fixer agent lane |
 | Compiler Deferred Resolution Agent | ✅ 已合入并已跑生产 apply | PR #54 已 merge；`compiler-resolve-deferred` 机器-only 后置治理已实现并用于真实 production reports；apply 顺序为 DB -> Vault -> Mempalace -> lint/audit；最新复查 deferred dry-run 为 aliases=0 / creates=0 / changed=0，低置信 `keep_deferred` 保留不污染 active graph |
 | Audit Report Hardening | ✅ 已合入 PR #58 | 按 Notion 全方位代码审计报告修复可落地项：MCP 10MiB 输入上限、LLM plan bounds、脱敏扩展、outbox batch transaction、FTS token quoting；剩余审计项已拆成独立 roadmap 条目 |
-| Row-level Wiki State Storage | 💤 未开始 | 审计延后项：把 `wiki_state` 单行 JSON blob 迁移到 claims/pages/sources/entities/edges/audits 行级表，保留快照兼容和迁移/回滚故事；需独立存储迁移 PRD/spec |
+| Row-level Wiki State Storage | 🔄 部分完成 PR #76 | 审计延后项：PR #76 增加 `wiki_state_row` row-level mirror、snapshot 双写与 blob 缺失 fallback；cutover/cleanup 留 PR #77 |
 | CLI Command Modularization | 💤 未开始 | 审计延后项：拆分 `wiki-cli/src/main.rs` 的子命令处理到 `commands/` 模块，降低 main.rs 规模；纯重构，需独立 PRD 和分阶段 review |
 | MCP Typed Errors | ✅ 已合入 PR #60 | 审计延后项：`wiki-cli/src/mcp.rs` 已收敛为 typed `McpToolError` / JSON-RPC error mapping，输出稳定 `error.data.kind` |
 | MCP API Reference | ✅ 已合入 PR #58 | PR #58 新增 `docs/mcp-api-reference.md`，覆盖统一 MCP Server 工具参数、scope 默认值、写入副作用、输入上限和错误形状 |
@@ -94,7 +94,7 @@ scale-up 混做。
 4. C16B Embedding ANN implementation：PR #73 已实现 locality-bucket bounded search、fallback full scan、ranking 回归测试。
 5. Contradiction Scan Scaling：PR #74 已优化 contradiction O(n²) 路径。
 6. J14 Semantic Fusion Benchmark：PR #75 已在 J13 基础上增加 semantic/query fusion 对照 benchmark。
-7. Row-level Wiki State Storage：分 migration/dual-write 与 cutover/cleanup 两 PR 做。
+7. Row-level Wiki State Storage：PR #76 已完成 migration/dual-write；后续 PR 做 cutover/cleanup。
 
 ### P6：DX / Maintainability
 
@@ -142,7 +142,7 @@ scale-up 混做。
 | 14 | C16B Embedding ANN implementation | `C16B Embedding ANN index` | ✅ PR #73 | bounded vector search、fallback full scan、ranking 回归。 |
 | 15 | Contradiction Scan Scaling | `Contradiction Scan Scaling` | ✅ PR #74 | 降低 `naive_contradiction_pairs` O(n²) 爆炸风险。 |
 | 16 | J14 Semantic Fusion Benchmark | `J14 Semantic Fusion Benchmark` | ✅ PR #75 | semantic/query fusion 对照评估 lane。 |
-| 17 | Row-level Wiki State Storage migration/dual-write | `Row-level Wiki State Storage` | 💤 未开始 | 加行级表与迁移路径，保留快照兼容。 |
+| 17 | Row-level Wiki State Storage migration/dual-write | `Row-level Wiki State Storage` | ✅ PR #76 | 加行级表与迁移路径，保留快照兼容。 |
 | 18 | Row-level Wiki State Storage cutover/cleanup | `Row-level Wiki State Storage` | 💤 未开始 | 主路径切到行级 state，保留验证和恢复说明。 |
 | 19 | CLI Command Modularization phase 1 | `CLI Command Modularization` | 💤 未开始 | 先拆低风险命令域，不改 CLI 行为。 |
 | 20 | CLI Command Modularization phase 2 | `CLI Command Modularization` | 💤 未开始 | 再拆 dispatcher/shared config，补 smoke。 |

@@ -47,4 +47,5 @@
 - [benchmark-reproducibility/](benchmark-reproducibility/) — `rust-mempalace bench --mode random --seed` deterministic sampling and `benchmark_runs.seed` persistence。已合入 PR #70。
 - [embedding-tx-atomicity/](embedding-tx-atomicity/) — vector-enabled source/claim writes commit snapshot + outbox + embedding rows in one SQLite transaction。已合入 PR #71。
 - [contradiction-scan-scaling/](contradiction-scan-scaling/) — bounded contradiction candidate scan for `naive_contradiction_pairs`。已合入 PR #74。
-- [semantic-fusion-benchmark/](semantic-fusion-benchmark/) — J14 LongMemEval query baseline vs semantic-fusion comparison lane。Active PR #75。
+- [semantic-fusion-benchmark/](semantic-fusion-benchmark/) — J14 LongMemEval query baseline vs semantic-fusion comparison lane。已合入 PR #75。
+- [row-level-wiki-state/](row-level-wiki-state/) — row-level `wiki_state` migration/dual-write while keeping blob compatibility。PR #76 quick green，merge pending。

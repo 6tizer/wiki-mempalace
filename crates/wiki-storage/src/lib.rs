@@ -1,5 +1,5 @@
 use rusqlite::{params, Connection, OptionalExtension};
-use serde::{Deserialize, Serialize};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use std::io::Write;
 use time::{
     format_description, format_description::well_known::Rfc3339, OffsetDateTime, PrimitiveDateTime,
@@ -219,6 +219,13 @@ pub struct SqliteRepository {
     conn: Connection,
 }
 
+const STATE_ROW_SOURCES: &str = "sources";
+const STATE_ROW_CLAIMS: &str = "claims";
+const STATE_ROW_PAGES: &str = "pages";
+const STATE_ROW_ENTITIES: &str = "entities";
+const STATE_ROW_EDGES: &str = "edges";
+const STATE_ROW_AUDITS: &str = "audits";
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EmbeddingSearchBackend {
     FullScan,
@@ -379,6 +386,16 @@ CREATE TABLE IF NOT EXISTS wiki_state (
   id INTEGER PRIMARY KEY CHECK (id=1),
   payload_json TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS wiki_state_row (
+  collection TEXT NOT NULL,
+  item_key TEXT NOT NULL,
+  position INTEGER NOT NULL,
+  payload_json TEXT NOT NULL,
+  updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+  PRIMARY KEY(collection, item_key)
+);
+CREATE INDEX IF NOT EXISTS wiki_state_row_collection_position_idx
+  ON wiki_state_row(collection, position, item_key);
 CREATE TABLE IF NOT EXISTS wiki_outbox (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   event_json TEXT NOT NULL,
@@ -1223,6 +1240,99 @@ CREATE INDEX IF NOT EXISTS wiki_canonical_alias_page_idx
         Ok(newly_acked as usize)
     }
 
+    fn write_snapshot_rows(&self, snapshot: &StorageSnapshot) -> Result<(), StorageError> {
+        self.conn.execute("DELETE FROM wiki_state_row", [])?;
+        self.insert_snapshot_rows(
+            STATE_ROW_SOURCES,
+            snapshot
+                .sources
+                .iter()
+                .map(|source| (source.id.0.to_string(), source)),
+        )?;
+        self.insert_snapshot_rows(
+            STATE_ROW_CLAIMS,
+            snapshot
+                .claims
+                .iter()
+                .map(|claim| (claim.id.0.to_string(), claim)),
+        )?;
+        self.insert_snapshot_rows(
+            STATE_ROW_PAGES,
+            snapshot
+                .pages
+                .iter()
+                .map(|page| (page.id.0.to_string(), page)),
+        )?;
+        self.insert_snapshot_rows(
+            STATE_ROW_ENTITIES,
+            snapshot
+                .entities
+                .iter()
+                .map(|entity| (entity.id.0.to_string(), entity)),
+        )?;
+        self.insert_snapshot_rows(
+            STATE_ROW_EDGES,
+            snapshot
+                .edges
+                .iter()
+                .enumerate()
+                .map(|(idx, edge)| (format!("{idx:020}"), edge)),
+        )?;
+        self.insert_snapshot_rows(
+            STATE_ROW_AUDITS,
+            snapshot
+                .audits
+                .iter()
+                .map(|audit| (audit.id.to_string(), audit)),
+        )?;
+        Ok(())
+    }
+
+    fn insert_snapshot_rows<'a, T, I>(&self, collection: &str, rows: I) -> Result<(), StorageError>
+    where
+        T: Serialize + 'a,
+        I: IntoIterator<Item = (String, &'a T)>,
+    {
+        for (position, (item_key, item)) in rows.into_iter().enumerate() {
+            let payload = serde_json::to_string(item)?;
+            self.conn.execute(
+                "INSERT INTO wiki_state_row(collection, item_key, position, payload_json, updated_at)
+                 VALUES(?1, ?2, ?3, ?4, datetime('now'))",
+                params![collection, item_key, position as i64, payload],
+            )?;
+        }
+        Ok(())
+    }
+
+    fn load_snapshot_from_rows(&self) -> Result<StorageSnapshot, StorageError> {
+        Ok(StorageSnapshot {
+            sources: self.load_snapshot_rows(STATE_ROW_SOURCES)?,
+            claims: self.load_snapshot_rows(STATE_ROW_CLAIMS)?,
+            pages: self.load_snapshot_rows(STATE_ROW_PAGES)?,
+            entities: self.load_snapshot_rows(STATE_ROW_ENTITIES)?,
+            edges: self.load_snapshot_rows(STATE_ROW_EDGES)?,
+            audits: self.load_snapshot_rows(STATE_ROW_AUDITS)?,
+        })
+    }
+
+    fn load_snapshot_rows<T: DeserializeOwned>(
+        &self,
+        collection: &str,
+    ) -> Result<Vec<T>, StorageError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT payload_json
+             FROM wiki_state_row
+             WHERE collection = ?1
+             ORDER BY position ASC, item_key ASC",
+        )?;
+        let rows = stmt.query_map(params![collection], |row| row.get::<_, String>(0))?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(serde_json::from_str(&row?)?);
+        }
+        Ok(out)
+    }
+
     fn save_snapshot_and_append_outbox_inner(
         &self,
         snapshot: &StorageSnapshot,
@@ -1234,6 +1344,7 @@ CREATE INDEX IF NOT EXISTS wiki_canonical_alias_page_idx
              ON CONFLICT(id) DO UPDATE SET payload_json=excluded.payload_json",
             params![payload],
         )?;
+        self.write_snapshot_rows(snapshot)?;
         for event in events {
             let payload = serde_json::to_string(event)?;
             self.conn.execute(
@@ -1511,7 +1622,7 @@ impl WikiRepository for SqliteRepository {
             });
         match row {
             Ok(payload) => Ok(serde_json::from_str(&payload)?),
-            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(StorageSnapshot::default()),
+            Err(rusqlite::Error::QueryReturnedNoRows) => self.load_snapshot_from_rows(),
             Err(e) => Err(StorageError::Db(e)),
         }
     }
@@ -2396,6 +2507,162 @@ mod tests {
         assert_eq!(inserted, 1);
         assert_eq!(repo.load_snapshot().unwrap().sources.len(), 1);
         assert_eq!(repo.export_outbox_ndjson().unwrap().lines().count(), 1);
+    }
+
+    #[test]
+    fn row_level_state_dual_writes_and_loads_when_blob_missing() {
+        let dir = tempdir().unwrap();
+        let db = dir.path().join("wiki.db");
+        let repo = SqliteRepository::open(&db).unwrap();
+        let scope = Scope::Private {
+            agent_id: "row-state".into(),
+        };
+        let source = RawArtifact::new("file:///row.md", "row body", scope.clone());
+        let source_id = source.id;
+        let mut claim = Claim::new("row claim", scope.clone(), wiki_core::MemoryTier::Semantic);
+        claim.source_ids.push(source_id);
+        let page = WikiPage::new("row-page", "row body", scope.clone());
+        let entity_a = Entity {
+            id: wiki_core::EntityId(uuid::Uuid::new_v4()),
+            kind: wiki_core::EntityKind::Concept,
+            label: "Row State A".into(),
+            scope: scope.clone(),
+        };
+        let entity_b = Entity {
+            id: wiki_core::EntityId(uuid::Uuid::new_v4()),
+            kind: wiki_core::EntityKind::Concept,
+            label: "Row State B".into(),
+            scope,
+        };
+        let edge = TypedEdge {
+            from: entity_a.id,
+            to: entity_b.id,
+            relation: wiki_core::RelationKind::Related,
+            confidence: 0.7,
+            source_ids: vec![source_id],
+        };
+        let audit = AuditRecord::new(
+            wiki_core::AuditOperation::RunLint,
+            "test",
+            "row state dual write",
+        );
+        let snapshot = StorageSnapshot {
+            sources: vec![source],
+            claims: vec![claim],
+            pages: vec![page],
+            entities: vec![entity_a, entity_b],
+            edges: vec![edge],
+            audits: vec![audit],
+        };
+
+        repo.save_snapshot(&snapshot).unwrap();
+
+        let row_count: i64 = repo
+            .conn
+            .query_row("SELECT COUNT(*) FROM wiki_state_row", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(row_count, 7);
+        repo.conn.execute("DELETE FROM wiki_state", []).unwrap();
+        let loaded = repo.load_snapshot().unwrap();
+
+        assert_eq!(loaded.sources.len(), 1);
+        assert_eq!(loaded.claims.len(), 1);
+        assert_eq!(loaded.pages.len(), 1);
+        assert_eq!(loaded.entities.len(), 2);
+        assert_eq!(loaded.edges.len(), 1);
+        assert_eq!(loaded.audits.len(), 1);
+        assert_eq!(loaded.sources[0].uri, "file:///row.md");
+        assert_eq!(loaded.claims[0].text, "row claim");
+        assert_eq!(loaded.pages[0].title, "row-page");
+    }
+
+    #[test]
+    fn row_level_state_removes_stale_rows_on_save() {
+        let dir = tempdir().unwrap();
+        let db = dir.path().join("wiki.db");
+        let repo = SqliteRepository::open(&db).unwrap();
+        let scope = Scope::Private {
+            agent_id: "row-state".into(),
+        };
+        let first = StorageSnapshot {
+            claims: vec![
+                Claim::new("keep", scope.clone(), wiki_core::MemoryTier::Semantic),
+                Claim::new("remove", scope.clone(), wiki_core::MemoryTier::Semantic),
+            ],
+            ..StorageSnapshot::default()
+        };
+        repo.save_snapshot(&first).unwrap();
+        let second = StorageSnapshot {
+            claims: vec![first.claims[0].clone()],
+            ..StorageSnapshot::default()
+        };
+
+        repo.save_snapshot(&second).unwrap();
+
+        let row_count: i64 = repo
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM wiki_state_row WHERE collection = 'claims'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(row_count, 1);
+        repo.conn.execute("DELETE FROM wiki_state", []).unwrap();
+        let loaded = repo.load_snapshot().unwrap();
+        assert_eq!(loaded.claims.len(), 1);
+        assert_eq!(loaded.claims[0].text, "keep");
+    }
+
+    #[test]
+    fn row_level_state_failure_rolls_back_snapshot_and_outbox() {
+        let dir = tempdir().unwrap();
+        let db = dir.path().join("wiki.db");
+        let repo = SqliteRepository::open(&db).unwrap();
+        let scope = Scope::Private {
+            agent_id: "row-state".into(),
+        };
+        let old_snapshot = StorageSnapshot {
+            sources: vec![RawArtifact::new("file:///old-row.md", "old", scope.clone())],
+            ..StorageSnapshot::default()
+        };
+        repo.save_snapshot(&old_snapshot).unwrap();
+        repo.conn
+            .execute_batch(
+                "CREATE TRIGGER fail_state_row_source_insert
+                 BEFORE INSERT ON wiki_state_row
+                 WHEN NEW.collection = 'sources'
+                 BEGIN
+                   SELECT RAISE(FAIL, 'forced state row failure');
+                 END;",
+            )
+            .unwrap();
+        let new_source = RawArtifact::new("file:///new-row.md", "new", scope);
+        let source_id = new_source.id;
+        let new_snapshot = StorageSnapshot {
+            sources: vec![new_source],
+            ..StorageSnapshot::default()
+        };
+        let event = WikiEvent::SourceIngested {
+            source_id,
+            redacted: false,
+            at: OffsetDateTime::now_utc(),
+        };
+
+        let err = repo
+            .save_snapshot_and_append_outbox(&new_snapshot, &[event])
+            .unwrap_err();
+
+        assert!(format!("{err}").contains("forced state row failure"));
+        let restored = repo.load_snapshot().unwrap();
+        assert_eq!(restored.sources.len(), 1);
+        assert_eq!(restored.sources[0].uri, "file:///old-row.md");
+        let row_count: i64 = repo
+            .conn
+            .query_row("SELECT COUNT(*) FROM wiki_state_row", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(row_count, 1);
+        assert_eq!(repo.export_outbox_ndjson().unwrap().lines().count(), 0);
     }
 
     #[test]
