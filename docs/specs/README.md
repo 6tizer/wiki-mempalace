@@ -49,4 +49,5 @@
 - [contradiction-scan-scaling/](contradiction-scan-scaling/) — bounded contradiction candidate scan for `naive_contradiction_pairs`。已合入 PR #74。
 - [semantic-fusion-benchmark/](semantic-fusion-benchmark/) — J14 LongMemEval query baseline vs semantic-fusion comparison lane。已合入 PR #75。
 - [row-level-wiki-state/](row-level-wiki-state/) — row-level `wiki_state` migration/dual-write while keeping blob compatibility。已合入 PR #76。
-- [row-level-wiki-state-cutover/](row-level-wiki-state-cutover/) — row-primary snapshot read path with blob fallback and verification API。PR #77 quick green，merge pending。
+- [row-level-wiki-state-cutover/](row-level-wiki-state-cutover/) — row-primary snapshot read path with blob fallback and verification API。已合入 PR #77。
+- [cli-command-modularization-phase1/](cli-command-modularization-phase1/) — low-risk `wiki-cli` command handler extraction into `commands/`。PR #78 quick green。
