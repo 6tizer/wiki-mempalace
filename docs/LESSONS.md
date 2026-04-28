@@ -141,7 +141,16 @@
 - What caused rework: 首版 safe create 的来源引用写成 `[[摘要：...]]`，临时库没有 summary 页，lint 抓到 broken wikilink；后置 resolver 创建页时不能假设 summary 已存在。真实 scale-up 后又暴露 `Cloud Run Instances` 这类 title-related single candidate 和 `Magnus M ü ller` 这类 Unicode spacing 问题，需要 PR #54 hardening。
 - Spec changes needed: deferred candidate 必须带 `page_id`；旧 report 只能在 scope + title + entry_type 唯一时 fallback。低置信项应继续 machine-deferred，不进入人工 lane，也不直接污染 active graph。
 - Tests or reviews that caught issues: 新增 `compiler_resolve_deferred` 单测覆盖 alias、ambiguous、noise、allow-create、title-related alias、weak-context create、Unicode title cleanup；temp X + WeChat smoke 确认 no `page.broken_wikilink`；真实 production apply 后复查无新增断链、无新增 duplicate concept/entity group，`wiki.db` / `palace.db` integrity 均为 `ok`。
-- Next plan note: 系统开发闭环已完成。下一步不是再补 compiler 架构，而是继续小批量跑剩余 132 条 source；每批固定执行 deferred apply、Mempalace consume、lint/audit、重复页检查和 Vault spot-check。
+- Next plan note: 系统开发闭环已完成。下一步不是再补 compiler 架构，而是进入 archived source 生命周期治理，保持 compiler scale-up 生产闭环后置机制（每批固定执行 deferred apply、Mempalace consume、lint/audit、重复页检查和 Vault spot-check）。
+
+## 2026-04-28 / PR #56 Compiler Boundary Hardening
+
+- Scope: fix production compiler boundary failures（LLM JSON 边界、标题注入、短文跳过、percent 解码）并验证全量小批量 scale-up 闭环，不新增功能。
+- What worked: 先在 `batch-ingest` 循环中修复 parse 边界（JSON 模式请求、finish_reason 截断保护、标题消毒）后再回填，未引入别的策略改动即可完成剩余编译。
+- What caused rework: 边界问题会在小批量里放大到 0.0；同一类问题若没有被单测覆盖，容易被生产内容再次触发。
+- Spec changes needed: 与 PRD 的“先完成治理闭环再大规模”一致，不新增 `compiler` prompt alias 清洗逻辑；继续把 `deferred_resolutions`、lint/audit、vault spot-check 留在生产链路。
+- Tests or reviews that caught issues: focused review + temp-vault smoke + 真生产分批核对，`wiki.db`/`palace.db integrity=ok`，重复 concept/entity 与断链无新增，`compiled_to_wiki` 运行后归零。
+- Next plan note: 进入 P1 Orphan/Archived Source Retirement；继续保持生产编译链路稳定。
 
 ## 2026-04-27 / Compiler Model Candidate Trial
 
