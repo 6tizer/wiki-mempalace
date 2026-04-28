@@ -43,7 +43,7 @@
 - [x] 创建 PR (#34)
 
 ### 延后 follow-up（独立 PRD，不在本批范围）
-- [ ] MCP Vault Sync — `wiki-cli/src/mcp.rs` 写操作后自动调用 `write_projection`（roadmap: "MCP Vault Sync"）
+- [x] MCP Vault Sync — PR #61：`wiki-cli/src/mcp.rs` 写操作后自动调用 `write_projection`（roadmap: "MCP Vault Sync"）
 - [ ] Outbox Consumer Cursors — at-exactly-once 消费语义，添加 consumer-scoped cursor 表（roadmap: "Outbox Consumer Cursors"）
 - [ ] Embedding Tx Atomicity — `upsert_embedding` 纳入 snapshot+outbox 同一事务（roadmap: "Embedding Tx Atomicity"）
 - [ ] Benchmark Reproducibility — `--seed` 参数存入 `benchmark_runs`（roadmap: "Benchmark Reproducibility"）

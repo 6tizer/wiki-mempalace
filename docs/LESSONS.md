@@ -178,3 +178,12 @@
 - Spec changes needed: `docs/mcp-api-reference.md` 要列出 error kind 表，否则客户端仍只能靠 message parse。
 - Tests or reviews that caught issues: `cargo test -p wiki-cli mcp::tests:: -- --nocapture` 覆盖 unknown method、missing arg、tag invalid item 和旧 MCP scope 行为。
 - Next plan note: 下一项优先做 `MCP Vault Sync`，直接复用本轮 typed errors 作为 projection 失败的诊断出口。
+
+## 2026-04-28 / MCP Vault Sync
+
+- Scope: MCP 写工具在 `--sync-wiki` 启用时自动刷新 Vault projection。
+- What worked: 入口只在 `sync_wiki` 为 true 时传 `wiki_dir`，写路径复用一个 `save_flush_and_project()`，避免每个工具重复逻辑。
+- What caused rework: 不能只看 `--wiki-dir`；必须同时要求 `--sync-wiki`，否则会破坏“仅配置路径不代表写 Vault”的 CLI 语义。
+- Spec changes needed: MCP API reference 要把 projection side effect 写进 Runtime Rules。
+- Tests or reviews that caught issues: focused tests 覆盖 write_page projection 和 projection 失败的 typed `storage_error`。
+- Next plan note: 后续 `Outbox Consumer Cursors` 不应把 Vault projection 和 Mempalace consumption 混在同一协议里。

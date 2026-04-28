@@ -37,3 +37,4 @@
 - [embedding-ann-index/](embedding-ann-index/) — C16b: bounded-work vector search for `wiki_embedding` (optional extension / ANN; fallback to full scan). PRD: [storage-embeddings-followup.md](../prd/storage-embeddings-followup.md)。
 - [audit-report-hardening/](audit-report-hardening/) — Notion 全方位代码审计报告的可落地安全/可靠性修复：MCP 输入上限、LLM plan 校验、脱敏扩展、outbox batch 事务、FTS token quoting。已合入 PR #58。
 - [mcp-typed-errors/](mcp-typed-errors/) — MCP JSON-RPC typed error mapping：稳定 `error.code` 与 `error.data.kind`，供后续 MCP Vault Sync / 客户端诊断复用。已合入 PR #60。
+- [mcp-vault-sync/](mcp-vault-sync/) — MCP write tools 在 `--sync-wiki` 启用时自动刷新 Vault projection。已合入 PR #61。
