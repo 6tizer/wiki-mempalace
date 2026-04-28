@@ -4,8 +4,8 @@
 
 Implementation merged in PR #44. PR #46 ran the first backed-up production tiny
 sample and added safety fixes. PR #47 added compiler canonicalization v2. PR #54
-added the deferred resolver/fixer lane. Controlled production scale-up has
-started with backed-up 10-source batches.
+added the deferred resolver/fixer lane. PR #56 fixed production boundary failures
+and completed a full small-batch scale-up loop.
 
 ## Scope
 
@@ -62,15 +62,15 @@ local Wiki Compiler aligned with the user's Notion Wiki Compiler Instructions:
   - interrupted rerun raw-source duplication risk,
   - stale `--scope` help text.
 - Production read-only dry-run:
-  - X: `batch-ingest --origin x --limit 1 --dry-run` found 122 uncompiled sources and selected one 7733-character source.
-  - WeChat: `batch-ingest --origin wechat --limit 1 --dry-run` found 66 uncompiled sources and selected one 41426-character source.
+- X: `batch-ingest --origin x --limit 1 --dry-run` found 122 uncompiled sources and selected one 7733-character source.
+- WeChat: `batch-ingest --origin wechat --limit 1 --dry-run` found 66 uncompiled sources and selected one 41426-character source.
 
 ## Production Apply Boundary
 
 No production write was run in PR #44. PR #46 did run a backed-up tiny sample
 against `/Users/mac-mini/Documents/wiki` and then verified the same X/WeChat
-samples on restored temporary vault copies. After PR #47/#54, production
-scale-up is allowed only as small backed-up batches with post-run checks.
+samples on restored temporary vault copies. PR #56 closed boundary hardening and
+completed final small-batch production loops; 后续要求继续执行“无新功能混入、每批固定核对链路”。
 
 Current operation loop:
 
@@ -85,8 +85,8 @@ Current operation loop:
 
 Latest production evidence:
 
-- two 10-source real batches completed with `success=10` and `failed=0`;
-- latest remaining uncompiled queue: 132 sources;
+- multiple 10-source real batches completed with `success=10` and `failed=0`;
+- latest remaining uncompiled queue: 0 sources;
 - latest deferred resolver apply created/aliased only through DB-first flow;
 - follow-up deferred dry-run had no additional aliases/creates/changes to
   apply;

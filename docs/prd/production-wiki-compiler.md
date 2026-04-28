@@ -1,6 +1,6 @@
 # PRD: Production Wiki Compiler
 
-**Status**: implementation merged; canonicalization v2 and deferred resolver merged; production scale-up started
+**Status**: implementation + deferred/fix hardening merged; production compiler scale-up fully closed
 **Related**: `Notion Incremental Sync`, `Notion Source Vault Projection`, `Vault Backfill + Palace Init`, `DB/Vault/Palace Consistency Governance`
 
 ## Goal
@@ -18,9 +18,9 @@ human-readable reports.
 - `/Users/mac-mini/Documents/wiki/.wiki/palace.db` is the Mempalace projection layer.
 - 176 DB-backed Notion sources exist and are visible under `sources/x` and
   `sources/wechat`.
-- Most DB-backed Notion sources are still raw sources. Production scale-up has
-  started with controlled 10-source batches; the latest dry-run found 132
-  uncompiled sources remaining.
+- Most DB-backed Notion sources are now compiled. Production scale-up ran
+  controlled 10-source batches across remaining queue, and full dry-run found
+  0 uncompiled sources remaining.
 - Mempalace has page drawers from historical backfill. PR #46 exercised the
   source compilation path on tiny samples; PR #47 added canonicalization v2 and
   PR #54 added the deferred resolver/fixer lane needed for controlled scale-up.
