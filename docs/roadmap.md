@@ -27,7 +27,7 @@
 | CR-01 Code Review Fixes | ✅ 已合入 | PR #34 已 merge；修复快照序列化确定性、SourceIngested unresolved 语义、flush_outbox drain 精度、save_snapshot 事务、notion_uuid 锚定提取、url_index 重复 URL、benchmark hits 真实存储；4 项延后 follow-up 已登记 roadmap |
 | MCP Vault Sync | ✅ 已合入 PR #61 | CR-01 延后项：MCP 写操作在 `--sync-wiki` 启用时自动触发 `write_projection`；projection 失败返回 typed `storage_error` |
 | Outbox Consumer Cursors | ✅ 已合入 PR #62/#63 | CR-01 延后项：consumer-scoped export API 已补；`export-outbox-ndjson-from` / `consume-to-mempalace` 已切到 consumer cursor 默认语义，`--last-id` 保留为 legacy/manual floor |
-| Embedding Tx Atomicity | 💤 未开始 | CR-01 延后项：`upsert_embedding` 纳入 snapshot+outbox 同一 SQLite transaction；需存储层改造 PRD |
+| Embedding Tx Atomicity | ✅ PR #71 | CR-01 延后项：`upsert_embedding` 纳入 snapshot+outbox 同一 SQLite transaction |
 | Benchmark Reproducibility | ✅ PR #70 | CR-01 延后项：`rust-mempalace bench --mode random` 添加 `--seed` 参数并存入 `benchmark_runs`，使跨次 recall 可比 |
 | Notion Archived Source Retirement | ✅ 已合入 PR #68/#69 | PR #68 完成 audit/plan；PR #69 完成 guarded apply：只处理 `apply_safe=true`，DB source + `notion_page_index` 同事务退役，再按 frontmatter 身份删除 Vault source 文件 |
 | Notion Incremental Sync | ✅ 已合入 | PR #36 / PR #38 / PR #42；`wiki-cli notion-sync`、automation `notion-sync` daily job 已实现；增量游标 `notion_sync_cursors`/`notion_page_index`；速率限制 350ms + 429 重试；`--refresh-existing` 刷新已有 source body/tags；`--writeback-notion` 接口完整默认关闭；PRD: `docs/prd/notion-incremental-sync.md` |
@@ -137,7 +137,7 @@ scale-up 混做。
 | 9 | Notion Archived Source Retirement audit/plan | `Notion Archived Source Retirement` | ✅ PR #68 | 先做 Notion archived dry-run plan，不改 DB/Vault。 |
 | 10 | Notion Archived Source Retirement apply | `Notion Archived Source Retirement` | ✅ PR #69 | DB-first apply，避免手删 Markdown。 |
 | 11 | Benchmark Reproducibility | `Benchmark Reproducibility` | ✅ PR #70 | `--mode random` 加 `--seed` 并记录到 `benchmark_runs`。 |
-| 12 | Embedding Tx Atomicity | `Embedding Tx Atomicity` | 💤 未开始 | embedding 写入纳入 snapshot/outbox 同事务。 |
+| 12 | Embedding Tx Atomicity | `Embedding Tx Atomicity` | ✅ PR #71 | embedding 写入纳入 snapshot/outbox 同事务。 |
 | 13 | C16B Embedding ANN spike / feature gate | `C16B Embedding ANN index` | 💤 未开始 | 先确定 ANN 技术路径、fallback 和 CI story。 |
 | 14 | C16B Embedding ANN implementation | `C16B Embedding ANN index` | 💤 未开始 | bounded vector search、fallback full scan、ranking 回归。 |
 | 15 | Contradiction Scan Scaling | `Contradiction Scan Scaling` | 💤 未开始 | 降低 `naive_contradiction_pairs` O(n²) 爆炸风险。 |

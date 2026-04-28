@@ -219,6 +219,21 @@ pub struct SqliteRepository {
     conn: Connection,
 }
 
+#[derive(Debug, Clone)]
+pub struct EmbeddingWrite {
+    pub doc_id: String,
+    pub vector: Vec<f32>,
+}
+
+impl EmbeddingWrite {
+    pub fn new(doc_id: impl Into<String>, vector: Vec<f32>) -> Self {
+        Self {
+            doc_id: doc_id.into(),
+            vector,
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct SqliteWriterLease {
     lock_path: std::path::PathBuf,
@@ -587,6 +602,36 @@ CREATE INDEX IF NOT EXISTS wiki_canonical_alias_page_idx
 
     /// 写入或更新一条向量（`vec` 为 little-endian `f32` 序列）。
     pub fn upsert_embedding(&self, doc_id: &str, vector: &[f32]) -> Result<(), StorageError> {
+        self.upsert_embedding_inner(doc_id, vector)
+    }
+
+    pub fn save_snapshot_and_append_outbox_with_embeddings(
+        &self,
+        snapshot: &StorageSnapshot,
+        events: &[WikiEvent],
+        embeddings: &[EmbeddingWrite],
+    ) -> Result<usize, StorageError> {
+        self.conn.execute_batch("BEGIN IMMEDIATE")?;
+        let result = (|| {
+            let n = self.save_snapshot_and_append_outbox_inner(snapshot, events)?;
+            for embedding in embeddings {
+                self.upsert_embedding_inner(&embedding.doc_id, &embedding.vector)?;
+            }
+            Ok(n)
+        })();
+        match result {
+            Ok(n) => {
+                self.conn.execute_batch("COMMIT")?;
+                Ok(n)
+            }
+            Err(error) => {
+                let _ = self.conn.execute_batch("ROLLBACK");
+                Err(error)
+            }
+        }
+    }
+
+    fn upsert_embedding_inner(&self, doc_id: &str, vector: &[f32]) -> Result<(), StorageError> {
         let dim = vector.len() as i32;
         let mut blob = Vec::with_capacity(vector.len() * 4);
         for x in vector {
@@ -1661,6 +1706,40 @@ mod tests {
     }
 
     #[test]
+    fn snapshot_outbox_and_embeddings_commit_together() {
+        let dir = tempdir().unwrap();
+        let db = dir.path().join("wiki.db");
+        let repo = SqliteRepository::open(&db).unwrap();
+        let scope = Scope::Private {
+            agent_id: "cli".into(),
+        };
+        let source = RawArtifact::new("file:///embedded.md", "alpha", scope);
+        let source_id = source.id;
+        let snapshot = StorageSnapshot {
+            sources: vec![source],
+            ..StorageSnapshot::default()
+        };
+        let event = WikiEvent::SourceIngested {
+            source_id,
+            redacted: false,
+            at: OffsetDateTime::now_utc(),
+        };
+        let embedding = EmbeddingWrite::new(format!("source:{}", source_id.0), vec![1.0, 0.0]);
+
+        let inserted = repo
+            .save_snapshot_and_append_outbox_with_embeddings(&snapshot, &[event], &[embedding])
+            .unwrap();
+
+        assert_eq!(inserted, 1);
+        assert_eq!(repo.load_snapshot().unwrap().sources.len(), 1);
+        assert_eq!(repo.export_outbox_ndjson().unwrap().lines().count(), 1);
+        assert_eq!(
+            repo.search_embeddings_cosine(&[1.0, 0.0], 10).unwrap()[0].0,
+            format!("source:{}", source_id.0)
+        );
+    }
+
+    #[test]
     fn automation_run_success_and_heartbeat_roundtrip() {
         let dir = tempdir().unwrap();
         let db = dir.path().join("wiki.db");
@@ -1976,6 +2055,57 @@ mod tests {
         assert_eq!(restored.sources.len(), 1);
         assert_eq!(restored.sources[0].uri, "file:///old.md");
         assert_eq!(repo.export_outbox_ndjson().unwrap().lines().count(), 0);
+    }
+
+    #[test]
+    fn snapshot_and_outbox_roll_back_when_embedding_insert_fails() {
+        let dir = tempdir().unwrap();
+        let db = dir.path().join("wiki.db");
+        let repo = SqliteRepository::open(&db).unwrap();
+        let scope = Scope::Private {
+            agent_id: "cli".into(),
+        };
+        let old_snapshot = StorageSnapshot {
+            sources: vec![RawArtifact::new("file:///old.md", "old", scope.clone())],
+            ..StorageSnapshot::default()
+        };
+        repo.save_snapshot(&old_snapshot).unwrap();
+        repo.conn
+            .execute_batch(
+                "CREATE TRIGGER fail_embedding_insert
+                 BEFORE INSERT ON wiki_embedding
+                 WHEN NEW.doc_id = 'doc:blocked'
+                 BEGIN
+                   SELECT RAISE(FAIL, 'forced embedding failure');
+                 END;",
+            )
+            .unwrap();
+        let new_source = RawArtifact::new("file:///new.md", "new", scope);
+        let new_source_id = new_source.id;
+        let new_snapshot = StorageSnapshot {
+            sources: vec![new_source],
+            ..StorageSnapshot::default()
+        };
+        let event = WikiEvent::SourceIngested {
+            source_id: new_source_id,
+            redacted: false,
+            at: OffsetDateTime::now_utc(),
+        };
+        let embedding = EmbeddingWrite::new("doc:blocked", vec![1.0, 0.0]);
+
+        let err = repo
+            .save_snapshot_and_append_outbox_with_embeddings(&new_snapshot, &[event], &[embedding])
+            .unwrap_err();
+
+        assert!(format!("{err}").contains("forced embedding failure"));
+        let restored = repo.load_snapshot().unwrap();
+        assert_eq!(restored.sources.len(), 1);
+        assert_eq!(restored.sources[0].uri, "file:///old.md");
+        assert_eq!(repo.export_outbox_ndjson().unwrap().lines().count(), 0);
+        assert!(repo
+            .search_embeddings_cosine(&[1.0, 0.0], 10)
+            .unwrap()
+            .is_empty());
     }
 
     #[test]

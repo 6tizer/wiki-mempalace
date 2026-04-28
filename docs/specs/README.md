@@ -45,3 +45,4 @@
 - [scheduled-vault-reports/](scheduled-vault-reports/) — Automation `vault-reports` job for timestamped Vault report bundles, latest pointers, and retention。已合入 PR #67。
 - [notion-archived-source-retirement/](notion-archived-source-retirement/) — DB-first Notion archived source retirement audit/plan plus guarded apply。已合入 PR #68/#69。
 - [benchmark-reproducibility/](benchmark-reproducibility/) — `rust-mempalace bench --mode random --seed` deterministic sampling and `benchmark_runs.seed` persistence。已合入 PR #70。
+- [embedding-tx-atomicity/](embedding-tx-atomicity/) — vector-enabled source/claim writes commit snapshot + outbox + embedding rows in one SQLite transaction。已合入 PR #71。

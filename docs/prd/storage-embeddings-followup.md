@@ -55,4 +55,7 @@
 - **C16A complete** — PR #25 merged. `persist-snapshot-outbox` uses a
   `WikiRepository` method plus SQLite `BEGIN IMMEDIATE` transaction for
   snapshot + current outbox durability.
+- **Embedding Tx Atomicity complete** — PR #71 merged. Vector-enabled
+  source/claim writes commit snapshot + outbox + `wiki_embedding` rows as one
+  SQLite transaction.
 - **C16B not started** — `embedding-ann-index` remains a separate follow-up.

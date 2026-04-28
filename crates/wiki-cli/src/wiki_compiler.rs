@@ -13,7 +13,7 @@ use wiki_core::{
 use wiki_kernel::{
     format_claim_doc_id, initial_status_for, write_projection_pages, LlmWikiEngine, NoopWikiHook,
 };
-use wiki_storage::{CanonicalAliasMapping, SqliteRepository};
+use wiki_storage::{CanonicalAliasMapping, EmbeddingWrite, SqliteRepository};
 
 const COMPILER_MAX_TOKENS: u32 = 16_384;
 
@@ -366,19 +366,20 @@ impl WikiCompilerRunner<'_> {
         let plan = complete_compiler_plan(self.cfg, &user)?;
         preflight_llm_plan_tags(&plan, batch_source_tags_for_ingest(&batch), self.schema)?;
 
-        let sid = match self.existing_source_id(src.source_id, &uri) {
-            Some(source_id) => source_id,
-            None => self.ingest_source(&uri, &src.body, &batch)?,
+        let (sid, source_created) = match self.existing_source_id(src.source_id, &uri) {
+            Some(source_id) => (source_id, false),
+            None => (self.ingest_source(&uri, &src.body, &batch)?, true),
         };
-        write_source_id(&src.path, sid)?;
 
         if self.vectors {
             let app = llm::load_app_config(self.llm_config_path)?;
             let body_short = truncate_chars(&src.body, 16000);
             let vec = llm::embed_first(&app, &body_short)?;
-            self.repo
-                .upsert_embedding(&format!("source:{}", sid.0), &vec)?;
+            self.save_with_embeddings(vec![EmbeddingWrite::new(format!("source:{}", sid.0), vec)])?;
+        } else if source_created {
+            self.save_with_embeddings(Vec::new())?;
         }
+        write_source_id(&src.path, sid)?;
 
         for c in &plan.claims {
             let tier = parse_memory_tier(&c.tier).unwrap_or(MemoryTier::Semantic);
@@ -390,13 +391,15 @@ impl WikiCompilerRunner<'_> {
                 c.tags.iter().map(String::as_str),
             )?;
             self.eng.attach_sources(cid, &[sid])?;
-            self.eng
-                .save_to_repo_and_flush_outbox_with_policy(self.repo, 128, 3)?;
             if self.vectors {
                 let app = llm::load_app_config(self.llm_config_path)?;
                 let vec = llm::embed_first(&app, &c.text)?;
-                self.repo
-                    .upsert_embedding(&format_claim_doc_id(cid), &vec)?;
+                self.save_with_embeddings(vec![EmbeddingWrite::new(
+                    format_claim_doc_id(cid),
+                    vec,
+                )])?;
+            } else {
+                self.save_with_embeddings(Vec::new())?;
             }
         }
 
@@ -473,9 +476,21 @@ impl WikiCompilerRunner<'_> {
             "batch-ingest",
             batch_source_tags_for_ingest(batch),
         )?;
-        self.eng
-            .save_to_repo_and_flush_outbox_with_policy(self.repo, 128, 3)?;
         Ok(sid)
+    }
+
+    fn save_with_embeddings(
+        &mut self,
+        embeddings: Vec<EmbeddingWrite>,
+    ) -> Result<usize, Box<dyn std::error::Error>> {
+        let snapshot = self.eng.store.to_snapshot(&self.eng.audits);
+        let inserted = self.repo.save_snapshot_and_append_outbox_with_embeddings(
+            &snapshot,
+            &self.eng.outbox,
+            &embeddings,
+        )?;
+        self.eng.outbox.clear();
+        Ok(inserted)
     }
 
     fn existing_source_id(&self, frontmatter_id: Option<SourceId>, uri: &str) -> Option<SourceId> {

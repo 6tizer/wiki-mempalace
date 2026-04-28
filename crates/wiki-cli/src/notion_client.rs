@@ -460,6 +460,21 @@ fn extract_rich_text(props: &serde_json::Value, key: &str) -> Option<String> {
 mod tests {
     use super::*;
     use mockito::{Matcher, Server};
+    use std::sync::{Mutex, MutexGuard};
+
+    static NOTION_ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    fn set_test_notion_token() -> MutexGuard<'static, ()> {
+        let guard = NOTION_ENV_LOCK.lock().expect("notion env lock");
+        unsafe { std::env::set_var("NOTION_TOKEN", "test-token") };
+        guard
+    }
+
+    fn unset_test_notion_token() -> MutexGuard<'static, ()> {
+        let guard = NOTION_ENV_LOCK.lock().expect("notion env lock");
+        unsafe { std::env::remove_var("NOTION_TOKEN") };
+        guard
+    }
 
     fn make_page_json(page_id: &str, last_edited: &str, title: &str) -> serde_json::Value {
         serde_json::json!({
@@ -535,7 +550,7 @@ mod tests {
             )
             .create();
 
-        unsafe { std::env::set_var("NOTION_TOKEN", "test-token") };
+        let _env = set_test_notion_token();
         let mut client = NotionApiClient::from_env_with_delay(0)
             .unwrap()
             .with_base_url(server.url());
@@ -585,7 +600,7 @@ mod tests {
             )
             .create();
 
-        unsafe { std::env::set_var("NOTION_TOKEN", "test-token") };
+        let _env = set_test_notion_token();
         let mut client = NotionApiClient::from_env_with_delay(0)
             .unwrap()
             .with_base_url(server.url());
@@ -611,7 +626,7 @@ mod tests {
                 .create();
         }
 
-        unsafe { std::env::set_var("NOTION_TOKEN", "test-token") };
+        let _env = set_test_notion_token();
         let mut client = NotionApiClient::from_env_with_delay(0)
             .unwrap()
             .with_base_url(server.url());
@@ -645,7 +660,7 @@ mod tests {
             )
             .create();
 
-        unsafe { std::env::set_var("NOTION_TOKEN", "test-token") };
+        let _env = set_test_notion_token();
         let mut client = NotionApiClient::from_env_with_delay(0)
             .unwrap()
             .with_base_url(server.url());
@@ -674,7 +689,7 @@ mod tests {
             )
             .create();
 
-        unsafe { std::env::set_var("NOTION_TOKEN", "test-token") };
+        let _env = set_test_notion_token();
         let mut client = NotionApiClient::from_env_with_delay(0)
             .unwrap()
             .with_base_url(server.url());
@@ -693,10 +708,8 @@ mod tests {
 
     #[test]
     fn notion_client_token_not_set_returns_error() {
-        unsafe { std::env::remove_var("NOTION_TOKEN") };
+        let _env = unset_test_notion_token();
         let result = NotionApiClient::from_env();
         assert!(matches!(result, Err(NotionClientError::TokenNotSet)));
-        // Restore for other tests
-        unsafe { std::env::set_var("NOTION_TOKEN", "test-token") };
     }
 }
