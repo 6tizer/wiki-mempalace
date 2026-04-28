@@ -219,6 +219,12 @@ pub struct SqliteRepository {
     conn: Connection,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EmbeddingSearchBackend {
+    FullScan,
+    AnnFeatureFallback,
+}
+
 #[derive(Debug, Clone)]
 pub struct EmbeddingWrite {
     pub doc_id: String,
@@ -654,8 +660,28 @@ CREATE INDEX IF NOT EXISTS wiki_canonical_alias_page_idx
         Ok(())
     }
 
+    pub fn embedding_search_backend(&self) -> EmbeddingSearchBackend {
+        if cfg!(feature = "ann-embed") {
+            EmbeddingSearchBackend::AnnFeatureFallback
+        } else {
+            EmbeddingSearchBackend::FullScan
+        }
+    }
+
     /// 与 `query` 同维度的行做 cosine 相似度，返回 `(doc_id, score)` 降序。
     pub fn search_embeddings_cosine(
+        &self,
+        query: &[f32],
+        limit: usize,
+    ) -> Result<Vec<(String, f32)>, StorageError> {
+        match self.embedding_search_backend() {
+            EmbeddingSearchBackend::FullScan | EmbeddingSearchBackend::AnnFeatureFallback => {
+                self.search_embeddings_cosine_full_scan(query, limit)
+            }
+        }
+    }
+
+    fn search_embeddings_cosine_full_scan(
         &self,
         query: &[f32],
         limit: usize,
@@ -1703,6 +1729,29 @@ mod tests {
         let hits = repo.search_embeddings_cosine(&q, 10).unwrap();
         assert_eq!(hits[0].0, "doc:a");
         assert!(hits[0].1 > hits[2].1);
+    }
+
+    #[test]
+    fn embedding_ann_feature_gate_reports_backend_and_falls_back_to_scan() {
+        let dir = tempdir().unwrap();
+        let db = dir.path().join("wiki.db");
+        let repo = SqliteRepository::open(&db).unwrap();
+        if cfg!(feature = "ann-embed") {
+            assert_eq!(
+                repo.embedding_search_backend(),
+                EmbeddingSearchBackend::AnnFeatureFallback
+            );
+        } else {
+            assert_eq!(
+                repo.embedding_search_backend(),
+                EmbeddingSearchBackend::FullScan
+            );
+        }
+
+        repo.upsert_embedding("doc:a", &[1.0_f32, 0.0]).unwrap();
+        let hits = repo.search_embeddings_cosine(&[1.0_f32, 0.0], 1).unwrap();
+
+        assert_eq!(hits[0].0, "doc:a");
     }
 
     #[test]

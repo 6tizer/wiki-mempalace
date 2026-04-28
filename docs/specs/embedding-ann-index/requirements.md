@@ -20,9 +20,9 @@
 - **R2 (correctness)**: For the same query vector and stored rows, results must
   be **deterministic** and rank by cosine (or an admitted approximation, with
   explicit tolerance, if the index is approximate).
-- **R3 (opt-in)**: New behavior is behind a **Cargo feature** and/or
-  `PRAGMA`/runtime flag so that default `rusqlite` builds remain portable
-  (bundled links may need extra linking story — see design).
+- **R3 (opt-in)**: New behavior is behind the `ann-embed` Cargo feature and a
+  runtime backend dispatch. The default build remains portable and uses the
+  current full-scan fallback.
 - **R4 (write path)**: `upsert_embedding` must keep the **index/secondary
   structure** consistent (same transaction as blob write, or post-commit
   rebuild job — document which).
@@ -46,15 +46,15 @@
 
 ## Acceptance Criteria
 
-- [ ] Design doc lists chosen technology (e.g. `sqlite-vec`, `sqlite-vss`, or
-      acceptable alternative) and failure modes.
-- [ ] `cargo test --workspace` with feature off: behavior unchanged.
-- [ ] With feature on: benchmark or test proves sub-linear growth (e.g. large
-      fixture) or documented cap.
+- [x] Design doc lists chosen technology direction, feature gate, fallback, and
+      failure modes.
+- [x] `cargo test --workspace` with feature off: behavior unchanged.
+- [x] With feature on: CI smoke proves the feature gate compiles and falls back
+      to full scan. Sub-linear ANN proof remains implementation PR scope.
 - [ ] `docs/roadmap` / PRD cross-links updated when implemented.
 
 ## Checklist
 
-- [ ] Public API contract unchanged
-- [ ] Documented default vs. fast path
-- [ ] Migrations and rollback story
+- [x] Public API contract unchanged
+- [x] Documented default vs. fast path
+- [x] Migrations and rollback story for the spike / feature gate

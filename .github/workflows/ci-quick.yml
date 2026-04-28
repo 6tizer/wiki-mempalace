@@ -28,6 +28,9 @@ jobs:
       - name: Workspace tests
         run: cargo test --workspace
 
+      - name: ANN feature gate smoke
+        run: cargo test -p wiki-storage --features ann-embed embedding_ann_feature_gate_reports_backend_and_falls_back_to_scan
+
       - name: Shell script syntax check
         run: |
           bash -n scripts/backup.sh
