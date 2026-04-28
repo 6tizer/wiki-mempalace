@@ -26,6 +26,15 @@
 - Agent-facing CLI 默认值不要依赖 cwd；只要语义属于 vault 输出，相对路径应在
   `--wiki-dir` 存在时解析为 vault-relative，并用测试固定。
 
+## 2026-04-28 / PR #77 Row-level Wiki State Storage cutover
+
+- Scope: `load_snapshot` 切为 rows-present 时 row-primary，rows 为空时 blob fallback。
+- What worked: cutover 不需要改变 `WikiRepository` trait；在 `SqliteRepository` 内部重排读取优先级即可。
+- What caused rework: recovery 不能靠口头说明，必须保留 blob 双写和 read-only verification API 给后续生产核对。
+- Spec changes needed: 兼容层删除仍需等生产验证；本 PR 不删除 `wiki_state`。
+- Tests or reviews that caught issues: focused storage tests 证明 row-primary 胜过 stale blob、rows absent 时 fallback、verification 能报 match/mismatch。
+- Next plan note: 下一项进入 CLI Command Modularization phase 1，先拆低风险命令域，不动 clap 行为。
+
 ## 2026-04-28 / PR #76 Row-level Wiki State Storage migration
 
 - Scope: 为 `wiki_state` 增加 row-level mirror，但保留单行 JSON blob 为主读路径。
