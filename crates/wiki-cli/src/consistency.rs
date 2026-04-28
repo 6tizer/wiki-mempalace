@@ -1614,7 +1614,7 @@ fn percent_decode(input: &str) -> String {
     let mut i = 0usize;
     while i < bytes.len() {
         if bytes[i] == b'%' && i + 2 < bytes.len() {
-            if let Ok(value) = u8::from_str_radix(&input[i + 1..i + 3], 16) {
+            if let Some(value) = hex_pair_value(bytes[i + 1], bytes[i + 2]) {
                 out.push(value);
                 i += 3;
                 continue;
@@ -1624,6 +1624,19 @@ fn percent_decode(input: &str) -> String {
         i += 1;
     }
     String::from_utf8_lossy(&out).into_owned()
+}
+
+fn hex_pair_value(hi: u8, lo: u8) -> Option<u8> {
+    Some(hex_value(hi)? * 16 + hex_value(lo)?)
+}
+
+fn hex_value(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        b'A'..=b'F' => Some(byte - b'A' + 10),
+        _ => None,
+    }
 }
 
 fn looks_like_notion_export_filename(target: &str) -> bool {
@@ -1651,4 +1664,20 @@ fn relative_slash_path(root: &Path, path: &Path) -> String {
         .unwrap_or(path)
         .to_string_lossy()
         .replace('\\', "/")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::percent_decode;
+
+    #[test]
+    fn percent_decode_keeps_literal_percent_before_multibyte_text() {
+        let input = "摘要：OpenHarness：港大开源的轻量级 Agent 底座，80% 功能只用 3% 代码";
+        assert_eq!(percent_decode(input), input);
+    }
+
+    #[test]
+    fn percent_decode_decodes_valid_hex_bytes() {
+        assert_eq!(percent_decode("%E6%B5%8B%E8%AF%95%20Agent"), "测试 Agent");
+    }
 }

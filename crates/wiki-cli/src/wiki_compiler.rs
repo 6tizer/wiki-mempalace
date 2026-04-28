@@ -15,7 +15,7 @@ use wiki_kernel::{
 };
 use wiki_storage::{CanonicalAliasMapping, SqliteRepository};
 
-const MIN_COMPILER_SOURCE_BODY_CHARS: usize = 300;
+const COMPILER_MAX_TOKENS: u32 = 16_384;
 
 pub(crate) struct BatchIngestOptions<'a> {
     pub(crate) vault: &'a Path,
@@ -363,8 +363,7 @@ impl WikiCompilerRunner<'_> {
         };
 
         let user = format!("Source URI:\n{uri}\n\nBody:\n{}", src.body);
-        let reply = llm::complete_chat(self.cfg, llm::ingest_llm_system_prompt(), &user, 8192)?;
-        let plan = parse_compiler_plan_json(&reply)?;
+        let plan = complete_compiler_plan(self.cfg, &user)?;
         preflight_llm_plan_tags(&plan, batch_source_tags_for_ingest(&batch), self.schema)?;
 
         let sid = match self.existing_source_id(src.source_id, &uri) {
@@ -564,12 +563,8 @@ fn scan_uncompiled_sources(
             content.trim().to_string()
         };
 
-        let body_chars = body.chars().count();
-        if body_chars < MIN_COMPILER_SOURCE_BODY_CHARS {
-            eprintln!(
-                "  跳过（正文过短 < {MIN_COMPILER_SOURCE_BODY_CHARS} 字符）：{}",
-                title
-            );
+        if body.trim().is_empty() {
+            eprintln!("  跳过（正文为空）：{}", title);
             continue;
         }
 
@@ -953,6 +948,8 @@ fn render_summary_markdown(
     } else {
         resolved_links
             .iter()
+            .map(|name| sanitize_compiler_title(name))
+            .filter(|name| !name.is_empty())
             .map(|name| format!("- [[{name}]]"))
             .collect::<Vec<_>>()
             .join("\n")
@@ -968,6 +965,30 @@ fn parse_compiler_plan_json(reply: &str) -> Result<LlmIngestPlanV1, Box<dyn std:
     let plan: LlmIngestPlanV1 =
         serde_json::from_value(value).map_err(|e| format!("JSON parse error: {e}; raw={reply}"))?;
     Ok(plan)
+}
+
+fn complete_compiler_plan(
+    cfg: &llm::LlmConfig,
+    user: &str,
+) -> Result<LlmIngestPlanV1, Box<dyn std::error::Error>> {
+    let attempts = cfg.max_retries.saturating_add(1).max(1);
+    let mut last_err = String::new();
+    for attempt in 1..=attempts {
+        let reply = llm::complete_chat_json_object(
+            cfg,
+            llm::ingest_llm_system_prompt(),
+            user,
+            COMPILER_MAX_TOKENS,
+        )?;
+        match parse_compiler_plan_json(&reply) {
+            Ok(plan) => return Ok(plan),
+            Err(err) => {
+                last_err = err.to_string();
+                eprintln!("  ! compiler JSON boundary retry {attempt}/{attempts}: {last_err}");
+            }
+        }
+    }
+    Err(format!("compiler JSON boundary failed after {attempts} attempt(s): {last_err}").into())
 }
 
 fn compiler_page_kind(ed: &LlmEntityDraft) -> Option<EntryType> {
@@ -1047,7 +1068,7 @@ struct DraftResolverItem {
 impl DraftResolverItem {
     fn concept(concept: &LlmConceptDraft) -> Self {
         Self {
-            title: concept.canonical_name.trim().to_string(),
+            title: sanitize_compiler_title(&concept.canonical_name),
             entry_type: EntryType::Concept,
             body_hint: truncate_chars(&concept.definition, 700),
         }
@@ -1055,7 +1076,7 @@ impl DraftResolverItem {
 
     fn entity(entity: &LlmEntityDraft, entry_type: EntryType) -> Self {
         Self {
-            title: entity.canonical_or_label().trim().to_string(),
+            title: sanitize_compiler_title(entity.canonical_or_label()),
             entry_type,
             body_hint: truncate_chars(entity.profile_or_definition(), 700),
         }
@@ -1579,7 +1600,8 @@ fn push_unique_link(out: &mut Vec<String>, seen: &mut HashSet<String>, title: &s
 }
 
 fn canonical_output_title(kind: &EntryType, requested_title: &str) -> String {
-    let title = requested_title.trim();
+    let cleaned = sanitize_compiler_title(requested_title);
+    let title = cleaned.trim();
     if *kind == EntryType::Entity {
         if let Some(repo) = github_repo_name(title) {
             return canonical_repo_title(repo);
@@ -1589,6 +1611,21 @@ fn canonical_output_title(kind: &EntryType, requested_title: &str) -> String {
         }
     }
     format_cjk_ascii_boundaries(title)
+}
+
+fn sanitize_compiler_title(raw: &str) -> String {
+    let mut value = raw.trim();
+    if let Some(inner) = value.strip_prefix("[[").and_then(|s| s.strip_suffix("]]")) {
+        value = inner.trim();
+    }
+    if let Some(inner) = value.strip_prefix('[') {
+        if let Some((text, rest)) = inner.split_once("](") {
+            if rest.ends_with(')') {
+                value = text.trim();
+            }
+        }
+    }
+    value.to_string()
 }
 
 fn github_repo_name(title: &str) -> Option<&str> {
@@ -2307,7 +2344,7 @@ mod tests {
     }
 
     #[test]
-    fn temp_vault_smoke_skips_short_sources_before_llm() {
+    fn temp_vault_smoke_includes_short_nonempty_sources() {
         let dir = tempfile::tempdir().unwrap();
         let x_dir = dir.path().join("sources/x");
         std::fs::create_dir_all(&x_dir).unwrap();
@@ -2327,9 +2364,10 @@ mod tests {
 
         let entries = scan_uncompiled_sources(dir.path(), Some("all"), None).unwrap();
 
-        assert_eq!(entries.len(), 1);
+        assert_eq!(entries.len(), 2);
         assert_eq!(entries[0].title, "Long source");
-        assert!(entries[0].body.chars().count() >= MIN_COMPILER_SOURCE_BODY_CHARS);
+        assert_eq!(entries[1].title, "Short source");
+        assert_eq!(entries[1].body, "Too short.");
     }
 
     #[test]
@@ -2524,6 +2562,10 @@ mod tests {
             canonical_output_title(&EntryType::Entity, "CodeX Agent"),
             "CodeX Agent"
         );
+        assert_eq!(
+            canonical_output_title(&EntryType::Entity, "[TyClaw.rs](http://TyClaw.rs)"),
+            "TyClaw.rs"
+        );
     }
 
     #[test]
@@ -2670,6 +2712,49 @@ mod tests {
                 .count(),
             3
         );
+    }
+
+    #[test]
+    fn materialization_sanitizes_markdown_link_entity_titles() {
+        let mut eng = LlmWikiEngine::new(DomainSchema::permissive_default());
+        let plan = plan_with_entities(vec![LlmEntityDraft {
+            label: "[TyClaw.rs](http://TyClaw.rs)".into(),
+            kind: "project".into(),
+            canonical_name: "[TyClaw.rs](http://TyClaw.rs)".into(),
+            category: None,
+            definition: String::new(),
+            profile: "Rust Agent system".into(),
+            key_points: Vec::new(),
+            tags: Vec::new(),
+            related_names: Vec::new(),
+        }]);
+        let batch = BatchIngestContext {
+            source_title: "Source Markdown Link".into(),
+            source_url: "https://example.test/markdown-link".into(),
+            source_tags: vec![],
+        };
+
+        let stats = materialize_compiler_pages(
+            &mut eng,
+            &plan,
+            &batch,
+            "https://example.test/markdown-link",
+            &test_scope(),
+            &DomainSchema::permissive_default(),
+        );
+
+        assert!(stats.summary_created);
+        assert_eq!(stats.entities_created, 1);
+        assert!(eng.store.pages.values().any(|p| p.title == "TyClaw.rs"));
+        let summary = eng
+            .store
+            .pages
+            .values()
+            .find(|p| p.title == "摘要：Source Markdown Link")
+            .unwrap();
+        assert!(summary.markdown.contains("[[TyClaw.rs]]"));
+        assert!(!summary.markdown.contains("[[[TyClaw.rs]"));
+        assert!(!summary.markdown.contains("http://TyClaw.rs]]"));
     }
 
     #[test]
