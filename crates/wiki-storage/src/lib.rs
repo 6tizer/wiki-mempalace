@@ -74,6 +74,15 @@ pub struct OutboxConsumerProgress {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OutboxConsumerCursorExport {
+    pub consumer_tag: String,
+    pub start_after_id: i64,
+    pub head_id: i64,
+    pub event_count: usize,
+    pub ndjson: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AutomationJobFailureSummary {
     pub job_name: String,
     pub consecutive_failures: usize,
@@ -119,6 +128,10 @@ pub trait WikiRepository {
     ) -> Result<usize, StorageError>;
     fn export_outbox_ndjson(&self) -> Result<String, StorageError>;
     fn export_outbox_ndjson_from_id(&self, last_id: i64) -> Result<String, StorageError>;
+    fn export_outbox_ndjson_for_consumer(
+        &self,
+        consumer_tag: &str,
+    ) -> Result<OutboxConsumerCursorExport, StorageError>;
     fn mark_outbox_processed(
         &self,
         up_to_id: i64,
@@ -1059,6 +1072,24 @@ impl WikiRepository for SqliteRepository {
         Ok(out)
     }
 
+    fn export_outbox_ndjson_for_consumer(
+        &self,
+        consumer_tag: &str,
+    ) -> Result<OutboxConsumerCursorExport, StorageError> {
+        let progress = self.get_outbox_consumer_progress(consumer_tag)?;
+        let start_after_id = progress.acked_up_to_id.unwrap_or(0);
+        let stats = self.get_outbox_stats()?;
+        let ndjson = self.export_outbox_ndjson_from_id(start_after_id)?;
+        let event_count = ndjson.lines().count();
+        Ok(OutboxConsumerCursorExport {
+            consumer_tag: consumer_tag.to_string(),
+            start_after_id,
+            head_id: stats.head_id,
+            event_count,
+            ndjson,
+        })
+    }
+
     fn mark_outbox_processed(
         &self,
         up_to_id: i64,
@@ -1305,6 +1336,47 @@ mod tests {
         let _scope = Scope::Private {
             agent_id: "a".into(),
         };
+    }
+
+    #[test]
+    fn outbox_export_for_consumer_uses_independent_cursor() {
+        let dir = tempdir().unwrap();
+        let db = dir.path().join("wiki.db");
+        let repo = SqliteRepository::open(&db).unwrap();
+
+        repo.append_outbox(&WikiEvent::QueryServed {
+            query_fingerprint: "q1".into(),
+            top_doc_ids: vec!["a".into()],
+            at: time::OffsetDateTime::now_utc(),
+        })
+        .unwrap();
+        repo.append_outbox(&WikiEvent::SourceIngested {
+            source_id: wiki_core::SourceId(uuid::Uuid::new_v4()),
+            redacted: false,
+            at: time::OffsetDateTime::now_utc(),
+        })
+        .unwrap();
+
+        let first = repo
+            .export_outbox_ndjson_for_consumer("consumer-a")
+            .unwrap();
+        assert_eq!(first.consumer_tag, "consumer-a");
+        assert_eq!(first.start_after_id, 0);
+        assert_eq!(first.head_id, 2);
+        assert_eq!(first.event_count, 2);
+
+        repo.mark_outbox_processed(1, "consumer-a").unwrap();
+        let after_ack = repo
+            .export_outbox_ndjson_for_consumer("consumer-a")
+            .unwrap();
+        assert_eq!(after_ack.start_after_id, 1);
+        assert_eq!(after_ack.event_count, 1);
+
+        let other = repo
+            .export_outbox_ndjson_for_consumer("consumer-b")
+            .unwrap();
+        assert_eq!(other.start_after_id, 0);
+        assert_eq!(other.event_count, 2);
     }
 
     #[test]

@@ -10,7 +10,7 @@
 - 持久化接口：`wiki_storage::WikiRepository::append_outbox()`。
 - 事件表：`wiki_outbox(id, event_json, processed_at, consumer_tag)`。
 - 消费者进度表：`wiki_outbox_consumer_progress(consumer_tag, acked_up_to_id, acked_at)`。
-- 导出接口：`export_outbox_ndjson()` / `export_outbox_ndjson_from_id(last_id)`。
+- 导出接口：`export_outbox_ndjson()` / `export_outbox_ndjson_from_id(last_id)`；Phase 1 新增 storage API `export_outbox_ndjson_for_consumer(consumer_tag)`。
 - CLI 命令：`export-outbox-ndjson`、`export-outbox-ndjson-from`、`ack-outbox`、`consume-to-mempalace`。
 
 ## 写入顺序
@@ -38,6 +38,13 @@
 - 若 `up_to_id` 大于旧 progress，推进到新值。
 - 若 `up_to_id` 小于或等于旧 progress，不回退。
 - 返回值是该 consumer 自己本次新 ack 的事件数。
+
+`export_outbox_ndjson_for_consumer(consumer_tag)` 的语义：
+
+- 从该 consumer 的 `acked_up_to_id` 之后开始导出。
+- 没有 progress 行时从 `0` 开始。
+- 返回 `consumer_tag`、`start_after_id`、`head_id`、`event_count` 和 `ndjson`。
+- 这是 storage API；CLI 默认切换在后续 cutover PR 中完成。
 
 ## mempalace 消费
 
