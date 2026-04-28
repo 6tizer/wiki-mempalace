@@ -7,7 +7,7 @@ description = "Adapter hooks for optional integration with rust-mempalace (local
 
 [features]
 default = []
-live = ["dep:rust-mempalace", "dep:rusqlite", "dep:sha2", "dep:chrono", "dep:shellexpand"]
+live = ["dep:rust-mempalace", "dep:rusqlite", "dep:sha2", "dep:time", "dep:shellexpand"]
 
 [dependencies]
 wiki-core = { path = "../wiki-core" }
@@ -17,7 +17,7 @@ uuid = { version = "1", features = ["v4"] }
 rust-mempalace = { path = "../rust-mempalace", optional = true }
 rusqlite = { version = "0.31", features = ["bundled"], optional = true }
 sha2 = { version = "0.10", optional = true }
-chrono = { version = "0.4", features = ["clock"], optional = true }
+time = { version = "0.3", features = ["formatting"], optional = true }
 shellexpand = { version = "3", optional = true }
 
 [dev-dependencies]

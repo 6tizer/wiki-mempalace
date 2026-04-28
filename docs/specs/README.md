@@ -51,4 +51,5 @@
 - [row-level-wiki-state/](row-level-wiki-state/) — row-level `wiki_state` migration/dual-write while keeping blob compatibility。已合入 PR #76。
 - [row-level-wiki-state-cutover/](row-level-wiki-state-cutover/) — row-primary snapshot read path with blob fallback and verification API。已合入 PR #77。
 - [cli-command-modularization-phase1/](cli-command-modularization-phase1/) — low-risk `wiki-cli` command handler extraction into `commands/`。已合入 PR #78。
-- [cli-command-modularization-phase2/](cli-command-modularization-phase2/) — no-engine dispatcher and shared runtime setup extraction with CLI smoke coverage。PR #79 quick green。
+- [cli-command-modularization-phase2/](cli-command-modularization-phase2/) — no-engine dispatcher and shared runtime setup extraction with CLI smoke coverage。已合入 PR #79。
+- [time-library-unification/](time-library-unification/) — replace remaining `chrono` timestamp usage with `time` across local crates。已合入 PR #80。

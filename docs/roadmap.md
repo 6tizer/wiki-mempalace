@@ -45,7 +45,7 @@
 | Reliability Test Matrix | ✅ 已合入 PR #65 | 审计延后项：已补 DB batch rollback failure injection、大 snapshot smoke、MCP malformed parse、LLM malformed JSON extraction；writer lease busy / MCP oversized 已在相邻测试覆盖 |
 | Automation Integrity Check | ✅ 已合入 PR #58 | PR #58 已把 `PRAGMA integrity_check` 纳入 `automation health` 输出；scheduled report 保留策略仍属于 `Scheduled Vault Reports` |
 | Dependency Audit Automation | ✅ 已合入 PR #66 | 审计建议：已新增 scheduled/manual `cargo audit` workflow，上传 JSON/stderr artifact；quick CI 只做 wrapper 语法检查 |
-| Time Library Unification | 💤 未开始 | 审计低优先项：评估 `chrono` vs `time` 双时间库，长期优先统一到 `time`；若保留 mempalace 独立性，文档化边界 |
+| Time Library Unification | ✅ PR #80 | 审计低优先项：PR #80 统一剩余 `chrono::Utc` 当前时间格式化到 `time::OffsetDateTime`；不改变 RFC3339 字符串格式 |
 | Scheduled Vault Reports | ✅ 已合入 PR #67 | 已新增 automation `vault-reports` job：timestamped bundle、`latest.json/latest.md` 指针、`WIKI_SCHEDULED_REPORT_KEEP` 保留策略 |
 | C16A Atomic snapshot + outbox | ✅ 已合入 | PR #25 已 merge；新增 `save_snapshot_and_append_outbox` 单事务持久化路径；CLI/MCP/backfill 写路径已切到原子提交 |
 | C16B Embedding ANN index | ✅ PR #72/#73 | `ann-embed` feature gate、locality-bucket bounded search、fallback full scan、ranking 回归已完成 |
@@ -101,7 +101,7 @@ scale-up 混做。
 1. CLI Command Modularization phase 1：PR #78 已拆低风险命令域，减少 `main.rs` 体积。
 2. CLI Command Modularization phase 2：PR #79 已拆 no-engine dispatcher/shared runtime setup，并补命令 smoke。
 3. MCP Typed Errors：PR #60 已完成 typed JSON-RPC error mapping。
-4. Time Library Unification：评估统一时间库和 crate 独立性边界。
+4. Time Library Unification：PR #80 已统一剩余 `chrono` 使用到 `time`。
 
 ### P7：M12 executor（最后）
 
@@ -146,7 +146,7 @@ scale-up 混做。
 | 18 | Row-level Wiki State Storage cutover/cleanup | `Row-level Wiki State Storage` | ✅ PR #77 | 主路径切到行级 state，保留验证和恢复说明。 |
 | 19 | CLI Command Modularization phase 1 | `CLI Command Modularization` | ✅ PR #78 | 先拆低风险命令域，不改 CLI 行为。 |
 | 20 | CLI Command Modularization phase 2 | `CLI Command Modularization` | ✅ PR #79 | 再拆 dispatcher/shared config，补 smoke。 |
-| 21 | Time Library Unification | `Time Library Unification` | 💤 未开始 | 统一或文档化 `chrono` / `time` 边界。 |
+| 21 | Time Library Unification | `Time Library Unification` | ✅ PR #80 | 统一或文档化 `chrono` / `time` 边界。 |
 | 22 | M12 executor dry-run planner | `M12 Executor` | 💤 未开始 | 只产出 action plan，不执行写入。 |
 | 23 | M12 executor guarded apply | `M12 Executor` | 💤 未开始 | allowlist + dry-run-first + explicit apply flag。 |
 
