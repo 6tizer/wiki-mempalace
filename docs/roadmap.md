@@ -20,7 +20,7 @@
 | M12 策略层增强 | ✅ 已合入 | PR #16 已 merge；`wiki-cli suggest` 已实现；支持文本、`--json`、`--report-dir [PATH]`；timestamped JSON 为真源、Markdown 为同源人读视图；默认只读，不执行 supersede/crystallize/fix 写入 |
 | Schema T2 tag governance | ✅ 已合入 | PR #13 已 merge；`Claim/Source/LlmClaimDraft` tags、tag normalize/validate、deprecated_tags 拦截、max_new_tags_per_ingest 限流、CLI/MCP/batch ingest tags 已实现 |
 | J13 LongMemEval auto benchmark | ✅ 已合入 | PR #19 已 merge；`rust-mempalace` 本地检索基线 runner、fetch/cache script、nightly/weekly workflow、30 天 artifact、fixture tests、review handoff 已实现；不进 PR 必跑 CI |
-| J14 Semantic Fusion Benchmark | 💤 未开始 | 在 J13 基础上增加 semantic/query fusion 对照 benchmark；评估 lane，不因低分阻断 CI，broken run 才 fail |
+| J14 Semantic Fusion Benchmark | ✅ PR #75 | 在 J13 LongMemEval lane 上增加 query baseline vs semantic fusion 对照；低分不阻断 CI |
 | Vault Backfill + Palace Init | ✅ 已合入并已跑生产初始化 | PR #23 已 merge；`vault-audit`、`vault-backfill`、`palace-init`、MCP `shared:wiki` runtime defaults 已实现；2026-04-25 已对 `/Users/mac-mini/Documents/wiki` 完成生产 backfill + palace init |
 | B5 Orphan Governance | ✅ 已合入并已跑生产 apply | PR #28 / PR #30 已 merge；`vault-audit` timestamped 报告、LLM plan、中文报告、白名单 apply 已实现；生产 vault 已真实跑过 |
 | DB/Vault/Palace Consistency Governance | ✅ 已合入并已跑生产 apply | PR #32 已 merge；已真实 apply 到 `/Users/mac-mini/Documents/wiki`，最终 plan 可执行动作 0，Vault 无新 pages 文件，Mempalace 缺失 page drawer 0 |
@@ -93,7 +93,7 @@ scale-up 混做。
 3. C16B Embedding ANN spike / feature gate：PR #72 已确定 feature gate、fallback 和 CI story。
 4. C16B Embedding ANN implementation：PR #73 已实现 locality-bucket bounded search、fallback full scan、ranking 回归测试。
 5. Contradiction Scan Scaling：PR #74 已优化 contradiction O(n²) 路径。
-6. J14 Semantic Fusion Benchmark：在 J13 基础上增加 semantic/query fusion 对照 benchmark。
+6. J14 Semantic Fusion Benchmark：PR #75 已在 J13 基础上增加 semantic/query fusion 对照 benchmark。
 7. Row-level Wiki State Storage：分 migration/dual-write 与 cutover/cleanup 两 PR 做。
 
 ### P6：DX / Maintainability
@@ -141,7 +141,7 @@ scale-up 混做。
 | 13 | C16B Embedding ANN spike / feature gate | `C16B Embedding ANN index` | ✅ PR #72 | 先确定 ANN 技术路径、fallback 和 CI story。 |
 | 14 | C16B Embedding ANN implementation | `C16B Embedding ANN index` | ✅ PR #73 | bounded vector search、fallback full scan、ranking 回归。 |
 | 15 | Contradiction Scan Scaling | `Contradiction Scan Scaling` | ✅ PR #74 | 降低 `naive_contradiction_pairs` O(n²) 爆炸风险。 |
-| 16 | J14 Semantic Fusion Benchmark | `J14 Semantic Fusion Benchmark` | 💤 未开始 | semantic/query fusion 对照评估 lane。 |
+| 16 | J14 Semantic Fusion Benchmark | `J14 Semantic Fusion Benchmark` | ✅ PR #75 | semantic/query fusion 对照评估 lane。 |
 | 17 | Row-level Wiki State Storage migration/dual-write | `Row-level Wiki State Storage` | 💤 未开始 | 加行级表与迁移路径，保留快照兼容。 |
 | 18 | Row-level Wiki State Storage cutover/cleanup | `Row-level Wiki State Storage` | 💤 未开始 | 主路径切到行级 state，保留验证和恢复说明。 |
 | 19 | CLI Command Modularization phase 1 | `CLI Command Modularization` | 💤 未开始 | 先拆低风险命令域，不改 CLI 行为。 |

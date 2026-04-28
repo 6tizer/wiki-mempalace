@@ -26,6 +26,15 @@
 - Agent-facing CLI 默认值不要依赖 cwd；只要语义属于 vault 输出，相对路径应在
   `--wiki-dir` 存在时解析为 vault-relative，并用测试固定。
 
+## 2026-04-28 / PR #75 J14 Semantic Fusion Benchmark
+
+- Scope: 给 LongMemEval runner 增加 `--compare-semantic-fusion`，同一 case 同时报告 `query_baseline` 与 `semantic_fusion`。
+- What worked: 复用 J13 runner 和 artifact 合同，只新增 `metrics_by_variant` / `variant_results`，避免新建一套 workflow。
+- What caused rework: 真正外部 embedding 会引入 key、费用和限流；本 PR 先用本地 sparse semantic fusion 做评估 lane。
+- Spec changes needed: J14 低分仍只写报告，broken run 才 fail；不能变成 PR required check。
+- Tests or reviews that caught issues: fixture fake CLI 读取 per-variant `config.json`，验证 semantic_fusion 与 query_baseline 指标分开输出。
+- Next plan note: 下一项进入 `Row-level Wiki State Storage migration/dual-write`，先做兼容表和双写，不直接 cutover。
+
 ## 2026-04-28 / PR #74 Contradiction Scan Scaling
 
 - Scope: 把 `naive_contradiction_pairs` 从 visible all-pairs 改为 stale 预过滤、scope 分桶、contradiction signal index 和每 claim 256 候选上限。

@@ -161,6 +161,96 @@ class LongMemEvalRunnerTest(unittest.TestCase):
         )
         self.assertEqual(proc.stdout.strip(), "3")
 
+    def test_semantic_fusion_comparison_metrics(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            fake_cli = tmp_path / "fake_mempalace.py"
+            fake_cli.write_text(
+                textwrap.dedent(
+                    """\
+                    #!/usr/bin/env python3
+                    import json
+                    import sys
+                    from pathlib import Path
+
+                    args = sys.argv[1:]
+                    cmd = args[args.index("mine") if "mine" in args else args.index("search")]
+                    if cmd == "mine":
+                        print(json.dumps({"filed_drawers": 2}))
+                        raise SystemExit(0)
+
+                    query = args[args.index("search") + 1]
+                    palace = Path(args[args.index("--palace") + 1])
+                    config = json.loads((palace / "config.json").read_text())
+                    semantic = config["retrieval"]["vector_weight"] > 0
+                    sessions = palace.parent / "sessions"
+
+                    def row(name, score):
+                        return {
+                            "id": int(score * 100),
+                            "wing": "w",
+                            "hall": "h",
+                            "room": "r",
+                            "bank_id": "b",
+                            "source_path": str(sessions / name),
+                            "snippet": name,
+                            "score": score,
+                            "explain": None,
+                        }
+
+                    if "Postgres" in query:
+                        results = [row("s1.txt", 1.0)]
+                    elif "amber token" in query:
+                        results = [row("s3.txt", 1.0)]
+                    elif "missing nebula" in query and semantic:
+                        results = [row("s5.txt", 1.0)]
+                    else:
+                        results = []
+                    print(json.dumps({"results": results}))
+                    """
+                ),
+                encoding="utf-8",
+            )
+            fake_cli.chmod(0o755)
+
+            out_dir = tmp_path / "out"
+            env = {**os.environ, "LONGMEMEVAL_MEMPALACE_BIN": str(fake_cli)}
+            subprocess.run(
+                [
+                    sys.executable,
+                    str(RUNNER),
+                    "--dataset",
+                    str(FIXTURE),
+                    "--out-dir",
+                    str(out_dir),
+                    "--mode",
+                    "fixture",
+                    "--sample-size",
+                    "3",
+                    "--top-k",
+                    "5",
+                    "--repo-root",
+                    str(REPO_ROOT),
+                    "--compare-semantic-fusion",
+                ],
+                cwd=str(REPO_ROOT),
+                env=env,
+                check=True,
+            )
+
+            report = json.loads((out_dir / "longmemeval-report.json").read_text(encoding="utf-8"))
+            self.assertTrue(report["comparison_enabled"])
+            self.assertEqual(report["primary_variant"], "semantic_fusion")
+            self.assertAlmostEqual(
+                report["metrics_by_variant"]["query_baseline"]["metrics"]["r_at_5"], 2 / 3
+            )
+            self.assertAlmostEqual(
+                report["metrics_by_variant"]["semantic_fusion"]["metrics"]["r_at_5"], 1.0
+            )
+            markdown = (out_dir / "longmemeval-report.md").read_text(encoding="utf-8")
+            self.assertIn("## Variant Metrics", markdown)
+            self.assertLess(markdown.index("## Variant Metrics"), markdown.index("## Failed Cases"))
+
     def test_real_cli_smoke_has_at_least_one_hit(self):
         binary = REPO_ROOT / "target" / "debug" / "rust-mempalace"
         if not binary.exists():

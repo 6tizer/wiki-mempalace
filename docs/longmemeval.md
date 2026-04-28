@@ -39,26 +39,24 @@ PR 仍跑仓库常规检查。LongMemEval 走 scheduled / manual workflow，上�
 
 ## J14：语义融合评测
 
-J14 是后续模块，不属于 J13 验收。
+J14 已作为 J13 runner 的扩展实现：使用 `--compare-semantic-fusion` 时，
+每个 case 会复用同一份 mined palace 数据，分别跑：
 
-J14 要考的是接入语义引擎后的整体效果，比如：
+- `query_baseline`：关闭 vector / RRF 权重的 query baseline。
+- `semantic_fusion`：当前 `rust-mempalace` 默认 sparse semantic + RRF 融合检索。
 
-```bash
-wiki-cli --vectors --llm-config llm-config.toml query ... --palace-db ...
-```
+报告保持原有顶层 `metrics` / `runtime` / `failed_cases` 字段，并新增：
 
-这条线会引入外部 embedding、key、费用、限流、缓存和两条 lane 对比报告，范围比 J13 大。
+- `comparison_enabled`
+- `primary_variant`
+- `metrics_by_variant`
+- 每个 case 的 `variant_results`
 
-建议 J14 启动条件：
+scheduled / manual LongMemEval workflow 默认启用比较。低分只进 artifact，不让
+workflow 失败；脚本崩、数据坏、超时、报告缺失仍然 fail。
 
-- J13 已合并。
-- 至少有 7 份有效 nightly report。
-- 至少有 1 份有效 weekly full report。
-- weekly full 没有超时。
-- artifact 格式稳定。
-- full run 的真实耗时已知。
-
-如果 J13 的错题主要来自同义表达、问法变化、词面不匹配，可以优先启动 J14。若失败主要来自数据没装好、scope 过滤、runner bug，先修 J13，不急着上语义融合。
+外部 embedding / LLM rerank 仍未进入默认 J14。那条线会引入 key、费用、限流和
+缓存，后续要另开 PRD/spec。
 
 ## 数据与许可
 

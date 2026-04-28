@@ -14,8 +14,10 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-RUNNER_VERSION = "j13-runner-v1"
+RUNNER_VERSION = "j14-runner-v2"
 DEFAULT_COMMAND_TIMEOUT_SECS = 120
+QUERY_BASELINE_VARIANT = "query_baseline"
+SEMANTIC_FUSION_VARIANT = "semantic_fusion"
 REQUIRED_FIELDS = {
     "question_id",
     "question_type",
@@ -43,6 +45,11 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--command-timeout-secs", type=int, default=DEFAULT_COMMAND_TIMEOUT_SECS)
     parser.add_argument("--repo-root", type=Path, default=Path(__file__).resolve().parents[1])
     parser.add_argument("--include-abstention", action="store_true")
+    parser.add_argument(
+        "--compare-semantic-fusion",
+        action="store_true",
+        help="Run query-baseline and semantic-fusion variants and report side-by-side metrics.",
+    )
     return parser.parse_args(argv)
 
 
@@ -175,6 +182,33 @@ def run_cli(
         ) from exc
 
 
+def retrieval_config_for_variant(variant: str) -> dict:
+    if variant == QUERY_BASELINE_VARIANT:
+        return {
+            "lexical_weight": 1.0,
+            "vector_weight": 0.0,
+            "rrf_k": 60.0,
+            "rrf_weight": 0.0,
+        }
+    if variant == SEMANTIC_FUSION_VARIANT:
+        return {
+            "lexical_weight": 1.0,
+            "vector_weight": 1.3,
+            "rrf_k": 60.0,
+            "rrf_weight": 18.0,
+        }
+    raise BrokenRun(f"unknown retrieval variant: {variant}")
+
+
+def write_variant_config(palace: Path, variant: str) -> None:
+    palace.mkdir(parents=True, exist_ok=True)
+    config = {"retrieval": retrieval_config_for_variant(variant)}
+    (palace / "config.json").write_text(
+        json.dumps(config, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+
+
 def mine_sessions(
     palace: Path, sessions_dir: Path, repo_root: Path, bank: str, timeout_secs: int
 ) -> None:
@@ -253,9 +287,9 @@ def short_snippet(value: object, limit: int = 220) -> str:
     return text[:limit]
 
 
-def timeout_case_row(case: dict, reason: str) -> dict:
+def timeout_case_row(case: dict, reason: str, variant: str | None = None) -> dict:
     qid = str(case["question_id"])
-    return {
+    row = {
         "case_id": qid,
         "question_type": case["question_type"],
         "query": case["question"],
@@ -269,24 +303,19 @@ def timeout_case_row(case: dict, reason: str) -> dict:
         "timed_out": True,
         "failure_reason": reason,
     }
+    if variant is not None:
+        row["variant"] = variant
+    return row
 
 
-def run_case(
-    case: dict, repo_root: Path, top_k: int, work_root: Path, timeout_secs: int
-) -> tuple[dict, float, bool]:
-    qid = str(case["question_id"])
-    case_root = work_root / safe_name(qid)
-    sessions_dir = case_root / "sessions"
-    palace = case_root / "palace"
-    path_to_session = write_sessions(case, sessions_dir)
-    bank = f"longmemeval-{safe_name(qid)}"
-    try:
-        mine_sessions(palace, sessions_dir, repo_root, bank, timeout_secs)
-        results, query_ms = search(
-            palace, str(case["question"]), repo_root, top_k, bank, timeout_secs
-        )
-    except TimeoutError as exc:
-        return timeout_case_row(case, str(exc)), 0.0, True
+def build_case_row(
+    case: dict,
+    results: list[dict],
+    query_ms: float,
+    path_to_session: dict[str, str],
+    top_k: int,
+    variant: str | None = None,
+) -> dict:
     returned_ids = [
         sid
         for sid in (session_from_source(row.get("source_path"), path_to_session) for row in results)
@@ -294,7 +323,7 @@ def run_case(
     ]
     r1, r5, mrr = score_case(case, returned_ids)
     row = {
-        "case_id": qid,
+        "case_id": str(case["question_id"]),
         "question_type": case["question_type"],
         "query": case["question"],
         "expected_session_ids": [str(v) for v in case["answer_session_ids"]],
@@ -314,7 +343,76 @@ def run_case(
         "query_ms": query_ms,
         "timed_out": False,
     }
-    return row, query_ms, False
+    if variant is not None:
+        row["variant"] = variant
+    return row
+
+
+def run_case_variant(
+    case: dict,
+    repo_root: Path,
+    top_k: int,
+    timeout_secs: int,
+    palace: Path,
+    bank: str,
+    path_to_session: dict[str, str],
+    variant: str,
+) -> tuple[dict, float, bool]:
+    write_variant_config(palace, variant)
+    try:
+        results, query_ms = search(
+            palace, str(case["question"]), repo_root, top_k, bank, timeout_secs
+        )
+    except TimeoutError as exc:
+        return timeout_case_row(case, str(exc), variant), 0.0, True
+    return build_case_row(case, results, query_ms, path_to_session, top_k, variant), query_ms, False
+
+
+def run_case(
+    case: dict,
+    repo_root: Path,
+    top_k: int,
+    work_root: Path,
+    timeout_secs: int,
+    compare_semantic_fusion: bool,
+) -> tuple[dict, float, bool]:
+    qid = str(case["question_id"])
+    case_root = work_root / safe_name(qid)
+    sessions_dir = case_root / "sessions"
+    palace = case_root / "palace"
+    path_to_session = write_sessions(case, sessions_dir)
+    bank = f"longmemeval-{safe_name(qid)}"
+    try:
+        mine_sessions(palace, sessions_dir, repo_root, bank, timeout_secs)
+    except TimeoutError as exc:
+        return timeout_case_row(case, str(exc)), 0.0, True
+
+    if not compare_semantic_fusion:
+        return run_case_variant(
+            case,
+            repo_root,
+            top_k,
+            timeout_secs,
+            palace,
+            bank,
+            path_to_session,
+            SEMANTIC_FUSION_VARIANT,
+        )
+
+    variant_rows = {}
+    primary_query_ms = 0.0
+    primary_timed_out = False
+    for variant in (QUERY_BASELINE_VARIANT, SEMANTIC_FUSION_VARIANT):
+        row, query_ms, timed_out = run_case_variant(
+            case, repo_root, top_k, timeout_secs, palace, bank, path_to_session, variant
+        )
+        variant_rows[variant] = row
+        if variant == SEMANTIC_FUSION_VARIANT:
+            primary_query_ms = query_ms
+            primary_timed_out = timed_out
+    primary = dict(variant_rows[SEMANTIC_FUSION_VARIANT])
+    primary["variant_results"] = variant_rows
+    return primary, primary_query_ms, primary_timed_out
 
 
 def aggregate(
@@ -324,20 +422,19 @@ def aggregate(
     timeout_count: int,
     args: argparse.Namespace,
 ) -> dict:
+    metrics = metric_summary(case_rows)
     total = len(case_rows)
     failures = [row for row in case_rows if not row["hit_at_5"]]
     avg_query_ms = sum(query_latencies) / len(query_latencies) if query_latencies else 0.0
-    return {
+    report = {
         "runner_version": RUNNER_VERSION,
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "mode": args.mode,
         "sample_count": total,
         "top_k": args.top_k,
-        "metrics": {
-            "r_at_1": sum(1 for row in case_rows if row["hit_at_1"]) / total,
-            "r_at_5": sum(1 for row in case_rows if row["hit_at_5"]) / total,
-            "mrr": sum(row["reciprocal_rank"] for row in case_rows) / total,
-        },
+        "comparison_enabled": args.compare_semantic_fusion,
+        "primary_variant": SEMANTIC_FUSION_VARIANT,
+        "metrics": metrics,
         "runtime": {
             "total_runtime_sec": total_runtime_sec,
             "avg_query_ms": avg_query_ms,
@@ -348,6 +445,42 @@ def aggregate(
         "failed_cases": failures,
         "cases": case_rows,
     }
+    if args.compare_semantic_fusion:
+        report["metrics_by_variant"] = aggregate_variants(case_rows)
+    return report
+
+
+def metric_summary(rows: list[dict]) -> dict:
+    total = len(rows)
+    return {
+        "r_at_1": sum(1 for row in rows if row["hit_at_1"]) / total,
+        "r_at_5": sum(1 for row in rows if row["hit_at_5"]) / total,
+        "mrr": sum(row["reciprocal_rank"] for row in rows) / total,
+    }
+
+
+def aggregate_variants(case_rows: list[dict]) -> dict:
+    out = {}
+    for variant in (QUERY_BASELINE_VARIANT, SEMANTIC_FUSION_VARIANT):
+        rows = [
+            row["variant_results"][variant]
+            for row in case_rows
+            if variant in row.get("variant_results", {})
+        ]
+        if not rows:
+            continue
+        latencies = [row["query_ms"] for row in rows if not row.get("timed_out", False)]
+        failures = [row for row in rows if not row["hit_at_5"]]
+        out[variant] = {
+            "sample_count": len(rows),
+            "metrics": metric_summary(rows),
+            "runtime": {
+                "avg_query_ms": sum(latencies) / len(latencies) if latencies else 0.0,
+                "timeout_count": sum(1 for row in rows if row.get("timed_out", False)),
+            },
+            "failed_count": len(failures),
+        }
+    return out
 
 
 def write_artifacts(report: dict, args: argparse.Namespace, selected_count: int) -> None:
@@ -369,6 +502,8 @@ def write_artifacts(report: dict, args: argparse.Namespace, selected_count: int)
         "command_timeout_secs": args.command_timeout_secs,
         "repo_root": str(args.repo_root),
         "include_abstention": args.include_abstention,
+        "compare_semantic_fusion": args.compare_semantic_fusion,
+        "primary_variant": SEMANTIC_FUSION_VARIANT,
     }
     config_path.write_text(json.dumps(config, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     with failed_path.open("w", encoding="utf-8") as fh:
@@ -395,6 +530,8 @@ def markdown_report(report: dict) -> str:
         "",
         f"- Mode: {report['mode']}",
         f"- Sample count: {report['sample_count']}",
+        f"- Primary variant: {report.get('primary_variant', SEMANTIC_FUSION_VARIANT)}",
+        f"- Comparison enabled: {str(report.get('comparison_enabled', False)).lower()}",
         f"- R@1: {metrics['r_at_1']:.4f}",
         f"- R@5: {metrics['r_at_5']:.4f}",
         f"- MRR: {metrics['mrr']:.4f}",
@@ -404,9 +541,27 @@ def markdown_report(report: dict) -> str:
         f"- Timeout count: {runtime['timeout_count']}",
         f"- Failed cases: {report['failed_count']}",
         "",
-        "## Failed Cases",
-        "",
     ]
+    if report.get("metrics_by_variant"):
+        lines.extend(["## Variant Metrics", ""])
+        for variant, data in report["metrics_by_variant"].items():
+            vm = data["metrics"]
+            vr = data["runtime"]
+            lines.extend(
+                [
+                    f"### {variant}",
+                    "",
+                    f"- Sample count: {data['sample_count']}",
+                    f"- R@1: {vm['r_at_1']:.4f}",
+                    f"- R@5: {vm['r_at_5']:.4f}",
+                    f"- MRR: {vm['mrr']:.4f}",
+                    f"- Avg query ms: {vr['avg_query_ms']:.3f}",
+                    f"- Timeout count: {vr['timeout_count']}",
+                    f"- Failed cases: {data['failed_count']}",
+                    "",
+                ]
+            )
+    lines.extend(["## Failed Cases", ""])
     if not report["failed_cases"]:
         lines.append("None.")
     else:
@@ -444,7 +599,12 @@ def main(argv: list[str]) -> int:
             work_root = Path(tmp)
             for case in selected:
                 row, query_ms, timed_out = run_case(
-                    case, args.repo_root, args.top_k, work_root, args.command_timeout_secs
+                    case,
+                    args.repo_root,
+                    args.top_k,
+                    work_root,
+                    args.command_timeout_secs,
+                    args.compare_semantic_fusion,
                 )
                 case_rows.append(row)
                 if not timed_out:
