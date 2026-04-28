@@ -1,5 +1,9 @@
 # PRD: Audit Report Hardening
 
+## Status
+
+已于 2026-04-28 通过 PR #58 合入。剩余审计报告项保留在 `docs/roadmap.md`，按独立 PRD/spec 推进。
+
 ## Goal
 
 把 Notion「wiki-mempalace 全方位代码审计报告」中能安全落地的安全、可靠性、DX 问题收敛为一轮小补丁；架构迁移项继续留在已有专门 PRD/spec。

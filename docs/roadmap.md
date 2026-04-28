@@ -34,15 +34,15 @@
 | Production Wiki Compiler | ✅ 已合入并已跑完 scale-up 闭环 | PR #44/#46/#47/#54/#56 已 merge；compiler 已支持 raw source -> resolver -> summary + concept/entity pages -> Vault projection -> Mempalace -> lint/audit；2026-04-28 全量小批量生产执行完成，remaining uncompiled = 0 |
 | Compiler Canonicalization v2 | ✅ 已合入 | PR #47 已 merge；在 compiler draft 和 DB 写入之间插入 pre-write resolver；新增 bounded candidate retrieval、`wiki_canonical_alias` persisted alias/canonical mapping、small LLM fallback、machine-owned `deferred_resolutions` JSON；低置信度/模糊项不污染 active graph，交给后续 resolver/lint/fixer agent lane |
 | Compiler Deferred Resolution Agent | ✅ 已合入并已跑生产 apply | PR #54 已 merge；`compiler-resolve-deferred` 机器-only 后置治理已实现并用于真实 production reports；apply 顺序为 DB -> Vault -> Mempalace -> lint/audit；最新复查 deferred dry-run 为 aliases=0 / creates=0 / changed=0，低置信 `keep_deferred` 保留不污染 active graph |
-| Audit Report Hardening | ✅ 本地完成，待 PR | 按 Notion 全方位代码审计报告修复可落地项：MCP 10MiB 输入上限、LLM plan bounds、脱敏扩展、outbox batch transaction、FTS token quoting；剩余审计项已拆成独立 roadmap 条目 |
+| Audit Report Hardening | ✅ 已合入 PR #58 | 按 Notion 全方位代码审计报告修复可落地项：MCP 10MiB 输入上限、LLM plan bounds、脱敏扩展、outbox batch transaction、FTS token quoting；剩余审计项已拆成独立 roadmap 条目 |
 | Row-level Wiki State Storage | 💤 未开始 | 审计延后项：把 `wiki_state` 单行 JSON blob 迁移到 claims/pages/sources/entities/edges/audits 行级表，保留快照兼容和迁移/回滚故事；需独立存储迁移 PRD/spec |
 | CLI Command Modularization | 💤 未开始 | 审计延后项：拆分 `wiki-cli/src/main.rs` 的子命令处理到 `commands/` 模块，降低 main.rs 规模；纯重构，需独立 PRD 和分阶段 review |
 | MCP Typed Errors | 💤 未开始 | 审计延后项：把 `wiki-cli/src/mcp.rs` 大量 `.map_err(|e| e.to_string())?` 收敛为 typed `McpToolError` / JSON-RPC error mapping，保留可诊断错误分类 |
-| MCP API Reference | ✅ 本地完成，待 PR | PR #58 新增 `docs/mcp-api-reference.md`，覆盖统一 MCP Server 工具参数、scope 默认值、写入副作用、输入上限和错误形状 |
+| MCP API Reference | ✅ 已合入 PR #58 | PR #58 新增 `docs/mcp-api-reference.md`，覆盖统一 MCP Server 工具参数、scope 默认值、写入副作用、输入上限和错误形状 |
 | Multi-process Write Guardrails | 💤 部分完成，待 lock/lease | PR #58 已补 README/AGENTS writer safety 警告；后续评估 advisory lock 或 writer lease |
 | Contradiction Scan Scaling | 💤 未开始 | 审计延后项：优化 `naive_contradiction_pairs` O(n²) 路径，加入 stale 预过滤、scope 分桶、可选 embedding 预筛或 bounded candidates |
 | Reliability Test Matrix | 💤 未开始 | 审计延后项：补并发写入、1w+ claims/pages 大数据量性能回归、MCP malformed/oversized/fuzz、LLM 畸形 JSON、DB lock/failure injection 测试 |
-| Automation Integrity Check | ✅ 本地完成，待 PR | PR #58 已把 `PRAGMA integrity_check` 纳入 `automation health` 输出；scheduled report 保留策略仍属于 `Scheduled Vault Reports` |
+| Automation Integrity Check | ✅ 已合入 PR #58 | PR #58 已把 `PRAGMA integrity_check` 纳入 `automation health` 输出；scheduled report 保留策略仍属于 `Scheduled Vault Reports` |
 | Dependency Audit Automation | 💤 未开始 | 审计建议：定期运行 `cargo audit` 或等价供应链检查，并把结果接入报告/CI 低频 job |
 | Time Library Unification | 💤 未开始 | 审计低优先项：评估 `chrono` vs `time` 双时间库，长期优先统一到 `time`；若保留 mempalace 独立性，文档化边界 |
 | Scheduled Vault Reports | 💤 未开始 | 待 PRD；把 `vault-audit`、`metrics`、`dashboard`、`automation health`、`suggest` 等报告接入定时生成和保留策略 |
