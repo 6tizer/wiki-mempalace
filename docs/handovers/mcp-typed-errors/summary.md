@@ -4,6 +4,10 @@
 
 `codex/mcp-typed-errors`
 
+## Merge
+
+PR #60 merged on 2026-04-28.
+
 ## Completed
 
 - Added private `McpToolError` classification in MCP server.

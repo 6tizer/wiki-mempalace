@@ -2,7 +2,7 @@
 
 ## Status
 
-Implemented in PR #TBD.
+Implemented in PR #60.
 
 ## Goal
 
