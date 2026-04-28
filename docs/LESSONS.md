@@ -26,6 +26,15 @@
 - Agent-facing CLI 默认值不要依赖 cwd；只要语义属于 vault 输出，相对路径应在
   `--wiki-dir` 存在时解析为 vault-relative，并用测试固定。
 
+## 2026-04-28 / PR #78 CLI Command Modularization phase 1
+
+- Scope: 先搬低风险命令域：`schema-validate`、`llm-smoke`、outbox export/ack。
+- What worked: 保留 clap enum 和大 dispatcher，先建立 `commands/` 模块壳，避免参数行为漂移。
+- What caused rework: `cargo test` 多 filter 不能一次传多个测试名；需要拆成单 filter 命令。
+- Spec changes needed: phase 2 才拆 dispatcher/shared config；phase 1 不移动 clap 定义。
+- Tests or reviews that caught issues: outbox cursor focused test 和 schema_validate integration tests 固定搬迁后行为。
+- Next plan note: 下一 PR 拆 dispatcher/shared config，并补命令级 smoke。
+
 ## 2026-04-28 / PR #77 Row-level Wiki State Storage cutover
 
 - Scope: `load_snapshot` 切为 rows-present 时 row-primary，rows 为空时 blob fallback。

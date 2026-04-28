@@ -31,6 +31,7 @@ use wiki_storage::{
 };
 
 mod banner;
+mod commands;
 mod compiler_deferred;
 mod consistency;
 mod dashboard;
@@ -2060,21 +2061,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // SchemaValidate 不需要 DB / engine，直接短路
     if let Cmd::SchemaValidate { path } = cli.cmd {
-        let p = path.unwrap_or_else(|| PathBuf::from("DomainSchema.json"));
-        match DomainSchema::from_json_path(&p) {
-            Ok(schema) => {
-                println!(
-                    "schema ok: title={} lifecycle_rules={}",
-                    schema.title,
-                    schema.lifecycle_rules.len()
-                );
-                Ok(())
-            }
-            Err(e) => {
-                eprintln!("schema invalid: {e}");
-                std::process::exit(1);
-            }
-        }
+        commands::schema::run(path)
     } else {
         run_with_engine(cli)
     }
@@ -2883,21 +2870,19 @@ fn run_with_engine(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             println!("page={}", pid.0);
         }
         Cmd::ExportOutboxNdjson => {
-            print!("{}", repo.export_outbox_ndjson()?);
+            commands::outbox::run_export_all(&repo)?;
         }
         Cmd::ExportOutboxNdjsonFrom {
             consumer_tag,
             last_id,
         } => {
-            let export = export_outbox_ndjson_for_consumer_floor(&repo, &consumer_tag, last_id)?;
-            print!("{}", export.ndjson);
+            commands::outbox::run_export_from(&repo, &consumer_tag, last_id)?;
         }
         Cmd::AckOutbox {
             up_to_id,
             consumer_tag,
         } => {
-            let n = repo.mark_outbox_processed(up_to_id, &consumer_tag)?;
-            println!("acked={n}");
+            commands::outbox::run_ack(&repo, up_to_id, &consumer_tag)?;
         }
         Cmd::ConsumeToMempalace {
             last_id,
@@ -3100,9 +3085,7 @@ fn run_with_engine(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             }
         }
         Cmd::LlmSmoke { config, prompt } => {
-            let cfg = llm::load_llm_config(&config)?;
-            let out = llm::smoke_chat_completion(&cfg, &prompt)?;
-            println!("{out}");
+            commands::llm_smoke::run(config, prompt)?;
         }
         Cmd::Mcp { once } => {
             mcp::run_mcp(
@@ -4234,14 +4217,6 @@ mod tests {
     }
 
     #[test]
-    fn cursor_start_id_respects_last_id_floor() {
-        assert_eq!(effective_cursor_start_id(3, 0), 3);
-        assert_eq!(effective_cursor_start_id(3, 5), 5);
-        assert_eq!(effective_cursor_start_id(0, 0), 0);
-        assert_eq!(effective_cursor_start_id(0, 4), 4);
-    }
-
-    #[test]
     fn export_outbox_from_uses_consumer_cursor_with_last_id_floor() {
         let dir = tempfile::tempdir().unwrap();
         let db_path = dir.path().join("test.db");
@@ -4262,18 +4237,21 @@ mod tests {
         repo.mark_outbox_processed(1, "mempalace").unwrap();
 
         let mempalace_export =
-            export_outbox_ndjson_for_consumer_floor(&repo, "mempalace", 0).unwrap();
+            commands::outbox::export_outbox_ndjson_for_consumer_floor(&repo, "mempalace", 0)
+                .unwrap();
         assert_eq!(mempalace_export.start_id, 1);
         assert_eq!(mempalace_export.head_id, 2);
         assert!(!mempalace_export.ndjson.contains("first"));
         assert!(mempalace_export.ndjson.contains("second"));
 
-        let fresh_export = export_outbox_ndjson_for_consumer_floor(&repo, "archive", 0).unwrap();
+        let fresh_export =
+            commands::outbox::export_outbox_ndjson_for_consumer_floor(&repo, "archive", 0).unwrap();
         assert_eq!(fresh_export.start_id, 0);
         assert_eq!(fresh_export.ndjson.lines().count(), 2);
 
         let override_export =
-            export_outbox_ndjson_for_consumer_floor(&repo, "mempalace", 2).unwrap();
+            commands::outbox::export_outbox_ndjson_for_consumer_floor(&repo, "mempalace", 2)
+                .unwrap();
         assert_eq!(override_export.start_id, 2);
         assert_eq!(override_export.head_id, 2);
         assert!(override_export.ndjson.is_empty());
@@ -5255,36 +5233,6 @@ fn run_maintenance_job(
     Ok(())
 }
 
-fn effective_cursor_start_id(cursor_start_after_id: i64, requested_last_id: i64) -> i64 {
-    cursor_start_after_id.max(requested_last_id)
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-struct ConsumerOutboxNdjson {
-    start_id: i64,
-    head_id: i64,
-    ndjson: String,
-}
-
-fn export_outbox_ndjson_for_consumer_floor(
-    repo: &SqliteRepository,
-    consumer_tag: &str,
-    last_id: i64,
-) -> Result<ConsumerOutboxNdjson, Box<dyn std::error::Error>> {
-    let export = repo.export_outbox_ndjson_for_consumer(consumer_tag)?;
-    let start_id = effective_cursor_start_id(export.start_after_id, last_id);
-    let ndjson = if start_id == export.start_after_id {
-        export.ndjson
-    } else {
-        repo.export_outbox_ndjson_from_id(start_id)?
-    };
-    Ok(ConsumerOutboxNdjson {
-        start_id,
-        head_id: export.head_id,
-        ndjson,
-    })
-}
-
 fn mempalace_bank_from_viewer_scope(viewer_scope: &str) -> String {
     match parse_scope(viewer_scope) {
         Scope::Private { agent_id } => agent_id,
@@ -5300,7 +5248,8 @@ fn run_consume_to_mempalace_job(
     palace_path: Option<&std::path::Path>,
     viewer_scope: &str,
 ) -> Result<(OutboxDispatchStats, i64, usize), Box<dyn std::error::Error>> {
-    let export = export_outbox_ndjson_for_consumer_floor(repo, consumer_tag, last_id)?;
+    let export =
+        commands::outbox::export_outbox_ndjson_for_consumer_floor(repo, consumer_tag, last_id)?;
     let start_id = export.start_id;
     if start_id >= export.head_id {
         return Ok((OutboxDispatchStats::default(), start_id, 0));
