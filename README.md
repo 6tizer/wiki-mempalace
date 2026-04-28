@@ -14,6 +14,11 @@
 > 所有 source / summary / concept / entity 文件的目录、命名、frontmatter、正文骨架必须遵守该文档；
 > 未对齐的内容必须在写入前修复，不得通过新增"兼容写法"绕过。
 
+> **Writer safety**：同一个 `wiki.db` 同一时间只应有一个长期运行的 writer
+> (`wiki-cli mcp` / `LlmWikiEngine`)。SQLite transaction 保证单次提交原子性，
+> 但不能合并多个进程各自持有的旧内存 snapshot。多 agent 共享时优先共用同一个
+> MCP server，或串行执行写命令。
+
 ---
 
 ## 仓库结构
@@ -174,6 +179,7 @@ Agent 或 CLI 使用者请优先阅读 [AGENTS.md](AGENTS.md)，其中定义了 
 - [docs/vault-standards.md](docs/vault-standards.md)：**Vault 目录/命名/frontmatter/正文骨架唯一标准**
 - [docs/architecture.md](docs/architecture.md)：架构图与业务流
 - [docs/mempalace-linkage.md](docs/mempalace-linkage.md)：bridge 契约与数据映射
+- [docs/mcp-api-reference.md](docs/mcp-api-reference.md)：统一 MCP Server 工具参数、scope 和副作用参考
 - [docs/archive/README.md](docs/archive/README.md)：历史计划归档
 - [Progress.md](Progress.md)：每轮工作日志
 - [crates/rust-mempalace/README.md](crates/rust-mempalace/README.md)：

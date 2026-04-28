@@ -88,6 +88,133 @@ pub struct LlmIngestPlanV1 {
 }
 
 impl LlmIngestPlanV1 {
+    pub const MAX_CLAIMS: usize = 100;
+    pub const MAX_CONCEPTS: usize = 100;
+    pub const MAX_ENTITIES: usize = 100;
+    pub const MAX_RELATIONSHIPS: usize = 250;
+    pub const MAX_TAGS: usize = 50;
+    pub const MAX_TEXT_CHARS: usize = 16_000;
+    pub const MAX_FIELD_CHARS: usize = 4_000;
+
+    /// Validate untrusted LLM JSON before it mutates engine state.
+    pub fn validate_bounds(&self) -> Result<(), String> {
+        if self.version != 1 {
+            return Err(format!("unsupported ingest plan version: {}", self.version));
+        }
+        ensure_count("claims", self.claims.len(), Self::MAX_CLAIMS)?;
+        ensure_count("concepts", self.concepts.len(), Self::MAX_CONCEPTS)?;
+        ensure_count("entities", self.entities.len(), Self::MAX_ENTITIES)?;
+        ensure_count(
+            "relationships",
+            self.relationships.len(),
+            Self::MAX_RELATIONSHIPS,
+        )?;
+        ensure_count("tags", self.tags.len(), Self::MAX_TAGS)?;
+        ensure_len("summary_title", &self.summary_title, Self::MAX_FIELD_CHARS)?;
+        ensure_len(
+            "summary_markdown",
+            &self.summary_markdown,
+            Self::MAX_TEXT_CHARS,
+        )?;
+        ensure_len(
+            "one_sentence_summary",
+            &self.one_sentence_summary,
+            Self::MAX_FIELD_CHARS,
+        )?;
+        validate_summary_bounds("summary", &self.summary)?;
+        validate_string_list("key_insights", &self.key_insights, Self::MAX_TAGS)?;
+        validate_string_list("tags", &self.tags, Self::MAX_TAGS)?;
+        for (idx, claim) in self.claims.iter().enumerate() {
+            ensure_len(
+                &format!("claims[{idx}].text"),
+                &claim.text,
+                Self::MAX_TEXT_CHARS,
+            )?;
+            ensure_len(&format!("claims[{idx}].tier"), &claim.tier, 64)?;
+            validate_string_list(&format!("claims[{idx}].tags"), &claim.tags, Self::MAX_TAGS)?;
+        }
+        for (idx, concept) in self.concepts.iter().enumerate() {
+            ensure_len(
+                &format!("concepts[{idx}].canonical_name"),
+                &concept.canonical_name,
+                Self::MAX_FIELD_CHARS,
+            )?;
+            ensure_len(&format!("concepts[{idx}].kind"), &concept.kind, 64)?;
+            ensure_len(
+                &format!("concepts[{idx}].definition"),
+                &concept.definition,
+                Self::MAX_TEXT_CHARS,
+            )?;
+            validate_string_list(
+                &format!("concepts[{idx}].key_points"),
+                &concept.key_points,
+                Self::MAX_TAGS,
+            )?;
+            validate_string_list(
+                &format!("concepts[{idx}].tags"),
+                &concept.tags,
+                Self::MAX_TAGS,
+            )?;
+            validate_string_list(
+                &format!("concepts[{idx}].related_names"),
+                &concept.related_names,
+                Self::MAX_TAGS,
+            )?;
+        }
+        for (idx, entity) in self.entities.iter().enumerate() {
+            ensure_len(
+                &format!("entities[{idx}].label"),
+                &entity.label,
+                Self::MAX_FIELD_CHARS,
+            )?;
+            ensure_len(&format!("entities[{idx}].kind"), &entity.kind, 64)?;
+            ensure_len(
+                &format!("entities[{idx}].canonical_name"),
+                &entity.canonical_name,
+                Self::MAX_FIELD_CHARS,
+            )?;
+            ensure_len(
+                &format!("entities[{idx}].definition"),
+                &entity.definition,
+                Self::MAX_TEXT_CHARS,
+            )?;
+            ensure_len(
+                &format!("entities[{idx}].profile"),
+                &entity.profile,
+                Self::MAX_TEXT_CHARS,
+            )?;
+            validate_string_list(
+                &format!("entities[{idx}].key_points"),
+                &entity.key_points,
+                Self::MAX_TAGS,
+            )?;
+            validate_string_list(
+                &format!("entities[{idx}].tags"),
+                &entity.tags,
+                Self::MAX_TAGS,
+            )?;
+            validate_string_list(
+                &format!("entities[{idx}].related_names"),
+                &entity.related_names,
+                Self::MAX_TAGS,
+            )?;
+        }
+        for (idx, rel) in self.relationships.iter().enumerate() {
+            ensure_len(
+                &format!("relationships[{idx}].from_label"),
+                &rel.from_label,
+                Self::MAX_FIELD_CHARS,
+            )?;
+            ensure_len(&format!("relationships[{idx}].relation"), &rel.relation, 64)?;
+            ensure_len(
+                &format!("relationships[{idx}].to_label"),
+                &rel.to_label,
+                Self::MAX_FIELD_CHARS,
+            )?;
+        }
+        Ok(())
+    }
+
     /// 将 LLM 填写的 `confidence` 规范为 `high` | `medium` | `low`。
     pub fn normalized_summary_confidence(&self) -> &'static str {
         let confidence = if self.confidence.trim().is_empty() {
@@ -239,6 +366,64 @@ impl LlmIngestPlanV1 {
              （暂无）\n"
         )
     }
+}
+
+fn ensure_count(name: &str, actual: usize, max: usize) -> Result<(), String> {
+    if actual > max {
+        Err(format!("{name} count {actual} exceeds limit {max}"))
+    } else {
+        Ok(())
+    }
+}
+
+fn ensure_len(name: &str, value: &str, max_chars: usize) -> Result<(), String> {
+    let actual = value.chars().count();
+    if actual > max_chars {
+        Err(format!("{name} length {actual} exceeds limit {max_chars}"))
+    } else {
+        Ok(())
+    }
+}
+
+fn validate_string_list(name: &str, values: &[String], max_items: usize) -> Result<(), String> {
+    ensure_count(name, values.len(), max_items)?;
+    for (idx, value) in values.iter().enumerate() {
+        ensure_len(
+            &format!("{name}[{idx}]"),
+            value,
+            LlmIngestPlanV1::MAX_FIELD_CHARS,
+        )?;
+    }
+    Ok(())
+}
+
+fn validate_summary_bounds(name: &str, summary: &LlmSummaryDraft) -> Result<(), String> {
+    ensure_len(
+        &format!("{name}.title"),
+        &summary.title,
+        LlmIngestPlanV1::MAX_FIELD_CHARS,
+    )?;
+    ensure_len(
+        &format!("{name}.one_sentence_summary"),
+        &summary.one_sentence_summary,
+        LlmIngestPlanV1::MAX_FIELD_CHARS,
+    )?;
+    validate_string_list(
+        &format!("{name}.key_insights"),
+        &summary.key_insights,
+        LlmIngestPlanV1::MAX_TAGS,
+    )?;
+    ensure_len(
+        &format!("{name}.personal_note"),
+        &summary.personal_note,
+        LlmIngestPlanV1::MAX_TEXT_CHARS,
+    )?;
+    validate_string_list(
+        &format!("{name}.tags"),
+        &summary.tags,
+        LlmIngestPlanV1::MAX_TAGS,
+    )?;
+    Ok(())
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -434,6 +619,34 @@ mod tests {
         assert_eq!(p.version, 1);
         assert_eq!(p.claims.len(), 1);
         assert!(parse_memory_tier(&p.claims[0].tier).is_ok());
+    }
+
+    #[test]
+    fn validate_bounds_rejects_oversized_plan() {
+        let p = LlmIngestPlanV1 {
+            version: 1,
+            summary: LlmSummaryDraft::default(),
+            summary_title: "t".into(),
+            summary_markdown: String::new(),
+            one_sentence_summary: String::new(),
+            key_insights: vec![],
+            confidence: String::new(),
+            tags: vec![],
+            source_author: None,
+            source_publisher: None,
+            source_published_at: None,
+            claims: (0..=LlmIngestPlanV1::MAX_CLAIMS)
+                .map(|idx| LlmClaimDraft {
+                    text: format!("claim {idx}"),
+                    tier: "semantic".into(),
+                    tags: vec![],
+                })
+                .collect(),
+            concepts: vec![],
+            entities: vec![],
+            relationships: vec![],
+        };
+        assert!(p.validate_bounds().is_err());
     }
 
     #[test]

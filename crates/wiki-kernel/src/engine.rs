@@ -820,27 +820,22 @@ impl<H: WikiHook> LlmWikiEngine<H> {
         let mut next = 0usize;
         while next < self.outbox.len() {
             let batch_end = usize::min(next + size, self.outbox.len());
-            let batch_start = next;
-            for offset in 0..(batch_end - batch_start) {
-                let idx = batch_start + offset;
-                let mut last_err: Option<EngineError> = None;
-                for _ in 0..=retry_count {
-                    match repo.append_outbox(&self.outbox[idx]) {
-                        Ok(()) => {
-                            last_err = None;
-                            break;
-                        }
-                        Err(err) => {
-                            last_err = Some(err.into());
-                        }
+            let mut last_err: Option<EngineError> = None;
+            for _ in 0..=retry_count {
+                match repo.append_outbox_batch(&self.outbox[next..batch_end]) {
+                    Ok(_) => {
+                        last_err = None;
+                        break;
+                    }
+                    Err(err) => {
+                        last_err = Some(err.into());
                     }
                 }
-                if let Some(err) = last_err {
-                    // Trim only the successfully flushed events so a retry won't re-append them.
-                    let flushed = batch_start + offset;
-                    self.outbox.drain(..flushed);
-                    return Err(err);
-                }
+            }
+            if let Some(err) = last_err {
+                // Trim only whole batches known to have committed.
+                self.outbox.drain(..next);
+                return Err(err);
             }
             next = batch_end;
         }

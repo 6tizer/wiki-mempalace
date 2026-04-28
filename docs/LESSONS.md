@@ -151,3 +151,12 @@
 - Spec changes needed: 模型替换不能只看成功率和速度，compiler temp-vault regression 要加入“主实体页存在、近义 concept 不重复、人名/文件名 Unicode 正常化”验收项。
 - Tests or reviews that caught issues: 临时 3-source smoke 抓到 `自愈式浏览器自动化` / `自愈浏览器自动化` 重复，以及 `Magnus M ü ller` 标题异常；`compiler-resolve-deferred` dry-run 仍保持低置信 deferred。
 - Next plan note: 记录 `deepseek/deepseek-v4-flash` 为待选模型；生产默认暂不切换，先补 resolver/fixer 归一化能力。
+
+## 2026-04-28 / Audit Report Hardening
+
+- Scope: 按 Notion 全方位代码审计报告修复可一轮安全落地项：MCP 输入上限、LLM plan 后置校验、脱敏规则、outbox 独立 flush batch transaction、`rust-mempalace` FTS query quoting、automation DB integrity、single-writer docs、MCP API reference。
+- What worked: 先把报告项映射到真实代码，再区分“小补丁可修”和“需独立架构迁移”；这避免把 `wiki_state` 行级迁移、ANN、`main.rs` 大拆分硬塞进同一 PR。
+- What caused rework: 并行跑多个 `cargo test` 会互相等待 package/artifact lock，输出噪音大；以后 cargo 验证默认顺序跑，只有纯读命令并行。clippy 抓到新 MCP loop 可写成 `while let`。
+- Spec changes needed: 安全/可靠性审计类修复也要补 PRD/spec/handoff；否则“按审计报告修复”很容易失去剩余架构项的明确落点。
+- Tests or reviews that caught issues: 新增 redaction、LLM bounds、MCP line cap、FTS quoting、automation health integrity 测试；`cargo test --workspace`、`cargo fmt --all -- --check`、`cargo clippy --workspace --all-targets -- -D warnings` 通过。
+- Next plan note: 剩余审计项应拆成独立 PRD/roadmap 条目：row-level storage、ANN vector path、CLI command modularization、MCP typed errors、multi-process writer lock/lease、contradiction scaling、reliability/fuzz/perf tests、dependency audit、time library unification；不要和 production compiler scale-up 混做。
