@@ -14,6 +14,88 @@ use crate::{parse_scope, parse_tier};
 
 const MAX_MCP_LINE_BYTES: usize = 10 * 1024 * 1024;
 
+#[derive(Debug, thiserror::Error)]
+enum McpToolError {
+    #[error("{0}")]
+    InvalidParams(String),
+    #[error("{0}")]
+    MethodNotFound(String),
+    #[error("{0}")]
+    ToolNotFound(String),
+    #[error("{0}")]
+    Engine(String),
+    #[error("{0}")]
+    Storage(String),
+    #[error("{0}")]
+    Llm(String),
+    #[error("{0}")]
+    Mempalace(String),
+}
+
+impl McpToolError {
+    fn invalid_params(message: impl std::fmt::Display) -> Self {
+        Self::InvalidParams(message.to_string())
+    }
+
+    fn method_not_found(method: &str) -> Self {
+        Self::MethodNotFound(format!("unknown method: {method}"))
+    }
+
+    fn tool_not_found(tool: &str) -> Self {
+        Self::ToolNotFound(format!("unknown tool: {tool}"))
+    }
+
+    fn engine(error: impl std::fmt::Display) -> Self {
+        Self::Engine(error.to_string())
+    }
+
+    fn storage(error: impl std::fmt::Display) -> Self {
+        Self::Storage(error.to_string())
+    }
+
+    fn llm(error: impl std::fmt::Display) -> Self {
+        Self::Llm(error.to_string())
+    }
+
+    fn mempalace(error: impl std::fmt::Display) -> Self {
+        Self::Mempalace(error.to_string())
+    }
+
+    fn json_rpc_code(&self) -> i64 {
+        match self {
+            Self::InvalidParams(_) | Self::ToolNotFound(_) => -32602,
+            Self::MethodNotFound(_) => -32601,
+            Self::Engine(_) | Self::Storage(_) | Self::Llm(_) | Self::Mempalace(_) => -32000,
+        }
+    }
+
+    fn kind(&self) -> &'static str {
+        match self {
+            Self::InvalidParams(_) => "invalid_params",
+            Self::MethodNotFound(_) => "method_not_found",
+            Self::ToolNotFound(_) => "tool_not_found",
+            Self::Engine(_) => "engine_error",
+            Self::Storage(_) => "storage_error",
+            Self::Llm(_) => "llm_error",
+            Self::Mempalace(_) => "mempalace_error",
+        }
+    }
+
+    fn error_object(&self) -> Value {
+        json!({
+            "code": self.json_rpc_code(),
+            "message": self.to_string(),
+            "data": {"kind": self.kind()}
+        })
+    }
+}
+
+fn required_str<'a>(args: &'a Value, key: &str) -> Result<&'a str, McpToolError> {
+    args.get(key)
+        .and_then(Value::as_str)
+        .ok_or_else(|| McpToolError::invalid_params(format!("missing {key}")))
+}
+
 pub fn run_mcp(
     db_path: &std::path::Path,
     schema: DomainSchema,
@@ -41,7 +123,15 @@ pub fn run_mcp(
                 writeln!(
                     stdout,
                     "{}",
-                    json!({"jsonrpc":"2.0","id":Value::Null,"error":{"code":-32700,"message":e.to_string()}})
+                    json!({
+                        "jsonrpc":"2.0",
+                        "id":Value::Null,
+                        "error":{
+                            "code":-32700,
+                            "message":e.to_string(),
+                            "data":{"kind":"parse_error"}
+                        }
+                    })
                 )?;
                 stdout.flush()?;
                 if once {
@@ -105,12 +195,12 @@ fn handle_request(
             wiki_dir,
             palace_path,
         ),
-        _ => Err(format!("unknown method: {method}")),
+        _ => Err(McpToolError::method_not_found(method)),
     };
 
     match result {
         Ok(v) => json!({"jsonrpc":"2.0","id":id,"result":v}),
-        Err(e) => json!({"jsonrpc":"2.0","id":id,"error":{"code":-32000,"message":e}}),
+        Err(e) => json!({"jsonrpc":"2.0","id":id,"error":e.error_object()}),
     }
 }
 
@@ -299,7 +389,7 @@ fn call_tool(
     vectors: bool,
     _wiki_dir: Option<&std::path::Path>,
     palace_path: Option<&str>,
-) -> Result<Value, String> {
+) -> Result<Value, McpToolError> {
     let name = params.get("name").and_then(Value::as_str).unwrap_or("");
     let args = params
         .get("arguments")
@@ -323,71 +413,54 @@ fn call_tool(
             }))
         }
         "wiki_ingest" => {
-            let uri = args
-                .get("uri")
-                .and_then(Value::as_str)
-                .ok_or("missing uri")?;
-            let body = args
-                .get("body")
-                .and_then(Value::as_str)
-                .ok_or("missing body")?;
+            let uri = required_str(&args, "uri")?;
+            let body = required_str(&args, "body")?;
             let scope = resolve_write_scope(&args, viewer);
             let tags = tags_arg_from_value(&args, "tags")?;
             let sid = eng
                 .ingest_raw_with_tags(uri.to_string(), body, scope, "mcp", &tags)
-                .map_err(|e| e.to_string())?;
-            save_and_flush(eng, repo).map_err(|e| e.to_string())?;
+                .map_err(McpToolError::engine)?;
+            save_and_flush(eng, repo).map_err(McpToolError::storage)?;
             if vectors {
                 embed_source(repo, llm_config_path, &sid.0.to_string(), body)
-                    .map_err(|e| e.to_string())?;
+                    .map_err(McpToolError::llm)?;
             }
             Ok(json!({"source_id": sid.0.to_string()}))
         }
         "wiki_file_claim" => {
-            let text = args
-                .get("text")
-                .and_then(Value::as_str)
-                .ok_or("missing text")?;
+            let text = required_str(&args, "text")?;
             let scope = resolve_write_scope(&args, viewer);
             let tier = args
                 .get("tier")
                 .and_then(Value::as_str)
                 .unwrap_or("working");
-            let tier = parse_tier(tier).map_err(|e| e.to_string())?;
+            let tier = parse_tier(tier).map_err(McpToolError::invalid_params)?;
             let tags = tags_arg_from_value(&args, "tags")?;
             let cid = eng
                 .file_claim_with_tags(text.to_string(), scope, tier, "mcp", &tags)
-                .map_err(|e| e.to_string())?;
-            save_and_flush(eng, repo).map_err(|e| e.to_string())?;
+                .map_err(McpToolError::engine)?;
+            save_and_flush(eng, repo).map_err(McpToolError::storage)?;
             Ok(json!({"claim_id": cid.0.to_string()}))
         }
         "wiki_supersede_claim" => {
-            let old_id_str = args
-                .get("old_claim_id")
-                .and_then(Value::as_str)
-                .ok_or("missing old_claim_id")?;
-            let new_text = args
-                .get("new_text")
-                .and_then(Value::as_str)
-                .ok_or("missing new_text")?;
+            let old_id_str = required_str(&args, "old_claim_id")?;
+            let new_text = required_str(&args, "new_text")?;
             let scope = resolve_write_scope(&args, viewer);
             let tier = args
                 .get("tier")
                 .and_then(Value::as_str)
                 .unwrap_or("working");
-            let old = ClaimId(uuid::Uuid::parse_str(old_id_str).map_err(|e| e.to_string())?);
-            let tier = parse_tier(tier).map_err(|e| e.to_string())?;
+            let old =
+                ClaimId(uuid::Uuid::parse_str(old_id_str).map_err(McpToolError::invalid_params)?);
+            let tier = parse_tier(tier).map_err(McpToolError::invalid_params)?;
             let new_id = eng
                 .supersede(old, new_text.to_string(), scope, tier, "mcp")
-                .map_err(|e| e.to_string())?;
-            save_and_flush(eng, repo).map_err(|e| e.to_string())?;
+                .map_err(McpToolError::engine)?;
+            save_and_flush(eng, repo).map_err(McpToolError::storage)?;
             Ok(json!({"new_claim_id": new_id.0.to_string()}))
         }
         "wiki_query" => {
-            let query = args
-                .get("query")
-                .and_then(Value::as_str)
-                .ok_or("missing query")?;
+            let query = required_str(&args, "query")?;
             let rrf_k = args.get("rrf_k").and_then(Value::as_f64).unwrap_or(60.0);
             let limit = args
                 .get("per_stream_limit")
@@ -412,7 +485,7 @@ fn call_tool(
                 let page = WikiPage::new(title, md, viewer.clone());
                 eng.store.pages.insert(page.id, page);
             }
-            save_and_flush(eng, repo).map_err(|e| e.to_string())?;
+            save_and_flush(eng, repo).map_err(McpToolError::storage)?;
             Ok(json!({
                 "results": ranked.iter().take(20).map(|(id, score)| json!({
                     "doc_id": id,
@@ -421,14 +494,12 @@ fn call_tool(
             }))
         }
         "wiki_promote_claim" => {
-            let cid_str = args
-                .get("claim_id")
-                .and_then(Value::as_str)
-                .ok_or("missing claim_id")?;
-            let cid = ClaimId(uuid::Uuid::parse_str(cid_str).map_err(|e| e.to_string())?);
+            let cid_str = required_str(&args, "claim_id")?;
+            let cid =
+                ClaimId(uuid::Uuid::parse_str(cid_str).map_err(McpToolError::invalid_params)?);
             eng.promote_if_qualified(cid, "mcp", viewer)
-                .map_err(|e| e.to_string())?;
-            save_and_flush(eng, repo).map_err(|e| e.to_string())?;
+                .map_err(McpToolError::engine)?;
+            save_and_flush(eng, repo).map_err(McpToolError::storage)?;
             let claim = eng.store.claims.get(&cid);
             Ok(json!({
                 "claim_id": cid_str,
@@ -436,10 +507,7 @@ fn call_tool(
             }))
         }
         "wiki_crystallize" => {
-            let question = args
-                .get("question")
-                .and_then(Value::as_str)
-                .ok_or("missing question")?;
+            let question = required_str(&args, "question")?;
             let findings: Vec<String> = args
                 .get("findings")
                 .and_then(Value::as_array)
@@ -472,7 +540,7 @@ fn call_tool(
                 .unwrap_or_default();
             let entry_type_raw = args.get("entry_type").and_then(Value::as_str);
             let entry_type = match entry_type_raw {
-                Some(s) => Some(EntryType::parse(s).map_err(|e| e.to_string())?),
+                Some(s) => Some(EntryType::parse(s).map_err(McpToolError::invalid_params)?),
                 None => None,
             };
             let draft = eng
@@ -486,7 +554,7 @@ fn call_tool(
                     },
                     "mcp",
                 )
-                .map_err(|e| e.to_string())?;
+                .map_err(McpToolError::engine)?;
             // crystallize 内部已经 insert page，此处覆盖 entry_type 和 status
             let status = initial_status_for(entry_type.as_ref(), &eng.schema);
             if let Some(page) = eng.store.pages.get_mut(&draft.page.id) {
@@ -498,7 +566,7 @@ fn call_tool(
                     page.status_entered_at = Some(OffsetDateTime::now_utc());
                 }
             }
-            save_and_flush(eng, repo).map_err(|e| e.to_string())?;
+            save_and_flush(eng, repo).map_err(McpToolError::storage)?;
             Ok(json!({
                 "page_id": draft.page.id.0.to_string(),
                 "page_title": draft.page.title,
@@ -507,7 +575,7 @@ fn call_tool(
         }
         "wiki_lint" => {
             let findings = eng.run_basic_lint("mcp", Some(viewer));
-            save_and_flush(eng, repo).map_err(|e| e.to_string())?;
+            save_and_flush(eng, repo).map_err(McpToolError::storage)?;
             Ok(json!({
                 "findings": findings.iter().map(|f| json!({
                     "severity": format!("{:?}", f.severity),
@@ -582,7 +650,7 @@ fn call_tool(
                     promoted += 1;
                 }
             }
-            save_and_flush(eng, repo).map_err(|e| e.to_string())?;
+            save_and_flush(eng, repo).map_err(McpToolError::storage)?;
             Ok(json!({
                 "decay_applied": true,
                 "lint_findings": findings.len(),
@@ -619,14 +687,8 @@ fn call_tool(
             Ok(json!({"dot": dot}))
         }
         "wiki_ingest_llm" => {
-            let uri = args
-                .get("uri")
-                .and_then(Value::as_str)
-                .ok_or("missing uri")?;
-            let body = args
-                .get("body")
-                .and_then(Value::as_str)
-                .ok_or("missing body")?;
+            let uri = required_str(&args, "uri")?;
+            let body = required_str(&args, "body")?;
             let scope = resolve_write_scope(&args, viewer);
             let dry_run = args
                 .get("dry_run")
@@ -639,7 +701,7 @@ fn call_tool(
                 );
             }
 
-            let cfg = crate::llm::load_llm_config(llm_config_path).map_err(|e| e.to_string())?;
+            let cfg = crate::llm::load_llm_config(llm_config_path).map_err(McpToolError::llm)?;
             let user_msg = format!("Source URI:\n{uri}\n\nBody:\n{body}");
             let reply = crate::llm::complete_chat(
                 &cfg,
@@ -647,16 +709,17 @@ fn call_tool(
                 &user_msg,
                 8192,
             )
-            .map_err(|e| e.to_string())?;
+            .map_err(McpToolError::llm)?;
             let slice = crate::llm::parse_json_object_slice(&reply);
-            let plan: wiki_core::LlmIngestPlanV1 =
-                serde_json::from_str(slice).map_err(|e| format!("JSON parse error: {e}"))?;
+            let plan: wiki_core::LlmIngestPlanV1 = serde_json::from_str(slice)
+                .map_err(|e| McpToolError::llm(format!("JSON parse error: {e}")))?;
             plan.validate_bounds()
-                .map_err(|e| format!("ingest plan validation error: {e}"))?;
+                .map_err(|e| McpToolError::llm(format!("ingest plan validation error: {e}")))?;
             if dry_run {
                 return Ok(json!({"plan": serde_json::to_value(&plan).unwrap_or(Value::Null)}));
             }
-            preflight_llm_plan_tags(&plan, &plan.tags, &eng.schema).map_err(|e| e.to_string())?;
+            preflight_llm_plan_tags(&plan, &plan.tags, &eng.schema)
+                .map_err(McpToolError::invalid_params)?;
             let sid = eng
                 .ingest_raw_with_tags(
                     uri.to_string(),
@@ -665,9 +728,9 @@ fn call_tool(
                     "mcp",
                     plan.tags.iter().map(String::as_str),
                 )
-                .map_err(|e| e.to_string())?;
+                .map_err(McpToolError::engine)?;
             for c in &plan.claims {
-                let tier = parse_memory_tier(&c.tier).map_err(|e| e.to_string())?;
+                let tier = parse_memory_tier(&c.tier).map_err(McpToolError::invalid_params)?;
                 let cid = eng
                     .file_claim_with_tags(
                         c.text.clone(),
@@ -676,8 +739,9 @@ fn call_tool(
                         "mcp",
                         c.tags.iter().map(String::as_str),
                     )
-                    .map_err(|e| e.to_string())?;
-                eng.attach_sources(cid, &[sid]).map_err(|e| e.to_string())?;
+                    .map_err(McpToolError::engine)?;
+                eng.attach_sources(cid, &[sid])
+                    .map_err(McpToolError::engine)?;
                 if vectors {
                     // Best-effort vector write; log errors instead of silently swallowing.
                     if let Ok(app) = crate::llm::load_app_config(llm_config_path) {
@@ -708,7 +772,7 @@ fn call_tool(
                 summary_page_id = Some(page.id.0.to_string());
                 eng.store.pages.insert(page.id, page);
             }
-            save_and_flush(eng, repo).map_err(|e| e.to_string())?;
+            save_and_flush(eng, repo).map_err(McpToolError::storage)?;
             Ok(json!({
                 "source_id": sid.0.to_string(),
                 "claims_filed": plan.claims.len(),
@@ -720,23 +784,23 @@ fn call_tool(
         // ──── Mempalace passthrough tools ────
         n if n.starts_with("mempalace_") => call_mempalace_tool(n, &args, palace_path),
 
-        _ => Err(format!("unknown tool: {name}")),
+        _ => Err(McpToolError::tool_not_found(name)),
     }
 }
 
-fn tags_arg_from_value(args: &Value, key: &str) -> Result<Vec<String>, String> {
+fn tags_arg_from_value(args: &Value, key: &str) -> Result<Vec<String>, McpToolError> {
     let Some(raw) = args.get(key) else {
         return Ok(Vec::new());
     };
-    let arr = raw
-        .as_array()
-        .ok_or_else(|| format!("{key} must be an array of strings"))?;
+    let arr = raw.as_array().ok_or_else(|| {
+        McpToolError::invalid_params(format!("{key} must be an array of strings"))
+    })?;
     arr.iter()
         .enumerate()
         .map(|(idx, v)| {
-            v.as_str()
-                .map(ToString::to_string)
-                .ok_or_else(|| format!("{key}[{idx}] must be a string"))
+            v.as_str().map(ToString::to_string).ok_or_else(|| {
+                McpToolError::invalid_params(format!("{key}[{idx}] must be a string"))
+            })
         })
         .collect()
 }
@@ -804,17 +868,14 @@ fn call_mempalace_tool(
     name: &str,
     args: &Value,
     palace_path: Option<&str>,
-) -> Result<Value, String> {
-    let tools = wiki_mempalace_bridge::make_tools(palace_path).map_err(|e| e.to_string())?;
+) -> Result<Value, McpToolError> {
+    let tools = wiki_mempalace_bridge::make_tools(palace_path).map_err(McpToolError::mempalace)?;
 
     match name {
-        "mempalace_status" => tools.status().map_err(|e| e.to_string()),
+        "mempalace_status" => tools.status().map_err(McpToolError::mempalace),
 
         "mempalace_search" => {
-            let query = args
-                .get("query")
-                .and_then(Value::as_str)
-                .ok_or("missing query")?;
+            let query = required_str(args, "query")?;
             let wing = args.get("wing").and_then(Value::as_str);
             let hall = args.get("hall").and_then(Value::as_str);
             let room = args.get("room").and_then(Value::as_str);
@@ -826,59 +887,48 @@ fn call_mempalace_tool(
                 .unwrap_or(false);
             tools
                 .search(query, wing, hall, room, bank_id, limit, explain)
-                .map_err(|e| e.to_string())
+                .map_err(McpToolError::mempalace)
         }
 
         "mempalace_wake_up" => {
             let wing = args.get("wing").and_then(Value::as_str);
             let bank_id = args.get("bank_id").and_then(Value::as_str);
-            tools.wake_up(wing, bank_id).map_err(|e| e.to_string())
+            tools
+                .wake_up(wing, bank_id)
+                .map_err(McpToolError::mempalace)
         }
 
         "mempalace_taxonomy" => {
             let bank_id = args.get("bank_id").and_then(Value::as_str);
-            tools.taxonomy(bank_id).map_err(|e| e.to_string())
+            tools.taxonomy(bank_id).map_err(McpToolError::mempalace)
         }
 
         "mempalace_traverse" => {
-            let wing = args
-                .get("wing")
-                .and_then(Value::as_str)
-                .ok_or("missing wing")?;
-            let room = args
-                .get("room")
-                .and_then(Value::as_str)
-                .ok_or("missing room")?;
+            let wing = required_str(args, "wing")?;
+            let room = required_str(args, "room")?;
             let bank_id = args.get("bank_id").and_then(Value::as_str);
             tools
                 .traverse(wing, room, bank_id)
-                .map_err(|e| e.to_string())
+                .map_err(McpToolError::mempalace)
         }
 
         "mempalace_kg_query" => {
-            let subject = args
-                .get("subject")
-                .and_then(Value::as_str)
-                .ok_or("missing subject")?;
+            let subject = required_str(args, "subject")?;
             let as_of = args.get("as_of").and_then(Value::as_str);
-            tools.kg_query(subject, as_of).map_err(|e| e.to_string())
+            tools
+                .kg_query(subject, as_of)
+                .map_err(McpToolError::mempalace)
         }
 
         "mempalace_kg_timeline" => {
-            let subject = args
-                .get("subject")
-                .and_then(Value::as_str)
-                .ok_or("missing subject")?;
-            tools.kg_timeline(subject).map_err(|e| e.to_string())
+            let subject = required_str(args, "subject")?;
+            tools.kg_timeline(subject).map_err(McpToolError::mempalace)
         }
 
-        "mempalace_kg_stats" => tools.kg_stats().map_err(|e| e.to_string()),
+        "mempalace_kg_stats" => tools.kg_stats().map_err(McpToolError::mempalace),
 
         "mempalace_reflect" => {
-            let query = args
-                .get("query")
-                .and_then(Value::as_str)
-                .ok_or("missing query")?;
+            let query = required_str(args, "query")?;
             let search_limit = args
                 .get("search_limit")
                 .and_then(Value::as_u64)
@@ -886,16 +936,18 @@ fn call_mempalace_tool(
             let bank_id = args.get("bank_id").and_then(Value::as_str);
             tools
                 .reflect(query, search_limit, bank_id)
-                .map_err(|e| e.to_string())
+                .map_err(McpToolError::mempalace)
         }
 
         "mempalace_extract" => {
             let text = args.get("text").and_then(Value::as_str);
             let drawer_id = args.get("drawer_id").and_then(Value::as_i64);
-            tools.extract(text, drawer_id).map_err(|e| e.to_string())
+            tools
+                .extract(text, drawer_id)
+                .map_err(McpToolError::mempalace)
         }
 
-        _ => Err(format!("unknown mempalace tool: {name}")),
+        _ => Err(McpToolError::tool_not_found(name)),
     }
 }
 
@@ -954,6 +1006,129 @@ mod tests {
     }
 
     #[test]
+    fn mcp_error_object_maps_invalid_params() {
+        let error = McpToolError::invalid_params("missing query");
+        let object = error.error_object();
+
+        assert_eq!(object.get("code").and_then(Value::as_i64), Some(-32602));
+        assert_eq!(
+            object.get("message").and_then(Value::as_str),
+            Some("missing query")
+        );
+        assert_eq!(
+            object.pointer("/data/kind").and_then(Value::as_str),
+            Some("invalid_params")
+        );
+    }
+
+    #[test]
+    fn mcp_unknown_method_uses_json_rpc_method_not_found() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let repo = SqliteRepository::open(tmp.path().join("wiki.db")).expect("repo");
+        let schema = DomainSchema::permissive_default();
+        let mut eng = LlmWikiEngine::load_from_repo(schema, &repo, NoopWikiHook).expect("engine");
+        let viewer = Scope::Shared {
+            team_id: "wiki".into(),
+        };
+
+        let resp = handle_request(
+            "not_a_method",
+            json!({}),
+            json!(1),
+            &mut eng,
+            &repo,
+            &viewer,
+            std::path::Path::new("llm-config.toml"),
+            false,
+            None,
+            None,
+        );
+
+        assert_eq!(
+            resp.pointer("/error/code").and_then(Value::as_i64),
+            Some(-32601)
+        );
+        assert_eq!(
+            resp.pointer("/error/data/kind").and_then(Value::as_str),
+            Some("method_not_found")
+        );
+    }
+
+    #[test]
+    fn mcp_missing_tool_argument_uses_invalid_params_error() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let repo = SqliteRepository::open(tmp.path().join("wiki.db")).expect("repo");
+        let schema = DomainSchema::permissive_default();
+        let mut eng = LlmWikiEngine::load_from_repo(schema, &repo, NoopWikiHook).expect("engine");
+        let viewer = Scope::Shared {
+            team_id: "wiki".into(),
+        };
+
+        let resp = handle_request(
+            "tools/call",
+            json!({"name": "wiki_query", "arguments": {}}),
+            json!(1),
+            &mut eng,
+            &repo,
+            &viewer,
+            std::path::Path::new("llm-config.toml"),
+            false,
+            None,
+            None,
+        );
+
+        assert_eq!(
+            resp.pointer("/error/code").and_then(Value::as_i64),
+            Some(-32602)
+        );
+        assert_eq!(
+            resp.pointer("/error/message").and_then(Value::as_str),
+            Some("missing query")
+        );
+        assert_eq!(
+            resp.pointer("/error/data/kind").and_then(Value::as_str),
+            Some("invalid_params")
+        );
+    }
+
+    #[test]
+    fn mcp_unknown_tool_uses_tool_not_found_kind() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let repo = SqliteRepository::open(tmp.path().join("wiki.db")).expect("repo");
+        let schema = DomainSchema::permissive_default();
+        let mut eng = LlmWikiEngine::load_from_repo(schema, &repo, NoopWikiHook).expect("engine");
+        let viewer = Scope::Shared {
+            team_id: "wiki".into(),
+        };
+
+        let resp = handle_request(
+            "tools/call",
+            json!({"name": "not_a_tool", "arguments": {}}),
+            json!(1),
+            &mut eng,
+            &repo,
+            &viewer,
+            std::path::Path::new("llm-config.toml"),
+            false,
+            None,
+            None,
+        );
+
+        assert_eq!(
+            resp.pointer("/error/code").and_then(Value::as_i64),
+            Some(-32602)
+        );
+        assert_eq!(
+            resp.pointer("/error/message").and_then(Value::as_str),
+            Some("unknown tool: not_a_tool")
+        );
+        assert_eq!(
+            resp.pointer("/error/data/kind").and_then(Value::as_str),
+            Some("tool_not_found")
+        );
+    }
+
+    #[test]
     fn tag_tools_list_exposes_ingest_and_claim_tags() {
         let v = tools_list();
         let tools = v.get("tools").and_then(Value::as_array).expect("tools[]");
@@ -993,7 +1168,8 @@ mod tests {
         let err = tags_arg_from_value(&json!({"tags": ["alpha", 42]}), "tags")
             .expect_err("non-string item should fail");
 
-        assert_eq!(err, "tags[1] must be a string");
+        assert_eq!(err.to_string(), "tags[1] must be a string");
+        assert_eq!(err.kind(), "invalid_params");
     }
 
     #[test]

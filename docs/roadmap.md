@@ -37,7 +37,7 @@
 | Audit Report Hardening | ✅ 已合入 PR #58 | 按 Notion 全方位代码审计报告修复可落地项：MCP 10MiB 输入上限、LLM plan bounds、脱敏扩展、outbox batch transaction、FTS token quoting；剩余审计项已拆成独立 roadmap 条目 |
 | Row-level Wiki State Storage | 💤 未开始 | 审计延后项：把 `wiki_state` 单行 JSON blob 迁移到 claims/pages/sources/entities/edges/audits 行级表，保留快照兼容和迁移/回滚故事；需独立存储迁移 PRD/spec |
 | CLI Command Modularization | 💤 未开始 | 审计延后项：拆分 `wiki-cli/src/main.rs` 的子命令处理到 `commands/` 模块，降低 main.rs 规模；纯重构，需独立 PRD 和分阶段 review |
-| MCP Typed Errors | 💤 未开始 | 审计延后项：把 `wiki-cli/src/mcp.rs` 大量 `.map_err(|e| e.to_string())?` 收敛为 typed `McpToolError` / JSON-RPC error mapping，保留可诊断错误分类 |
+| MCP Typed Errors | ✅ 已实现，待 PR #TBD 合入 | 审计延后项：`wiki-cli/src/mcp.rs` 已收敛为 typed `McpToolError` / JSON-RPC error mapping，输出稳定 `error.data.kind` |
 | MCP API Reference | ✅ 已合入 PR #58 | PR #58 新增 `docs/mcp-api-reference.md`，覆盖统一 MCP Server 工具参数、scope 默认值、写入副作用、输入上限和错误形状 |
 | Multi-process Write Guardrails | 💤 部分完成，待 lock/lease | PR #58 已补 README/AGENTS writer safety 警告；后续评估 advisory lock 或 writer lease |
 | Contradiction Scan Scaling | 💤 未开始 | 审计延后项：优化 `naive_contradiction_pairs` O(n²) 路径，加入 stale 预过滤、scope 分桶、可选 embedding 预筛或 bounded candidates |

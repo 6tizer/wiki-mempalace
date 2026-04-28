@@ -169,3 +169,12 @@
 - Spec changes needed: 安全/可靠性审计类修复也要补 PRD/spec/handoff；否则“按审计报告修复”很容易失去剩余架构项的明确落点。
 - Tests or reviews that caught issues: 新增 redaction、LLM bounds、MCP line cap、FTS quoting、automation health integrity 测试；`cargo test --workspace`、`cargo fmt --all -- --check`、`cargo clippy --workspace --all-targets -- -D warnings` 通过。
 - Next plan note: 剩余审计项应拆成独立 PRD/roadmap 条目：row-level storage、ANN vector path、CLI command modularization、MCP typed errors、multi-process writer lock/lease、contradiction scaling、reliability/fuzz/perf tests、dependency audit、time library unification；不要和 production compiler scale-up 混做。
+
+## 2026-04-28 / MCP Typed Errors
+
+- Scope: 把 MCP `tools/call` 的字符串错误映射成 JSON-RPC typed error shape：`error.code` + `error.data.kind`。
+- What worked: 在 MCP edge 私有化 `McpToolError`，不动 core engine/storage error 类型，改动面小且后续 MCP Vault Sync 可复用。
+- What caused rework: 参数错误要保留旧 human message，同时新增 machine kind；测试应同时断言 code、message、kind。
+- Spec changes needed: `docs/mcp-api-reference.md` 要列出 error kind 表，否则客户端仍只能靠 message parse。
+- Tests or reviews that caught issues: `cargo test -p wiki-cli mcp::tests:: -- --nocapture` 覆盖 unknown method、missing arg、tag invalid item 和旧 MCP scope 行为。
+- Next plan note: 下一项优先做 `MCP Vault Sync`，直接复用本轮 typed errors 作为 projection 失败的诊断出口。
