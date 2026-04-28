@@ -2,7 +2,7 @@
 
 ## Status
 
-Phase 1 schema/API implemented in PR #TBD. Cutover remains a separate PR.
+Phase 1 schema/API implemented in PR #62. Cutover remains a separate PR.
 
 ## Goal
 

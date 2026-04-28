@@ -11,7 +11,7 @@
 - [x] Workspace tests
 - [x] Clippy
 - [x] Handoff
-- [ ] PR + CI
+- [x] PR + CI
 
 ## Subtasks
 
@@ -28,3 +28,7 @@
 - `cargo test --workspace`
 - `cargo fmt --all -- --check`
 - `cargo clippy --workspace --all-targets -- -D warnings`
+
+## Merge
+
+- Phase 1 PR #62 merged on 2026-04-28.

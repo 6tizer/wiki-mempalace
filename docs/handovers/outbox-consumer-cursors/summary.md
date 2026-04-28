@@ -4,6 +4,10 @@
 
 `codex/outbox-consumer-cursors-api`
 
+## Merge
+
+Phase 1 PR #62 merged on 2026-04-28.
+
 ## Completed
 
 - Added `OutboxConsumerCursorExport`.
