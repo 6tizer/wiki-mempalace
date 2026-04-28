@@ -223,3 +223,12 @@
 - Spec changes needed: quick 矩阵和慢速 fuzz/perf 要拆开；本 PR 只放能进日常 CI 的确定性测试。
 - Tests or reviews that caught issues: focused `cargo test -p wiki-storage reliability` 和 `cargo test -p wiki-cli reliability` 覆盖新增路径；workspace test 验证大 snapshot smoke 没拖垮 quick。
 - Next plan note: 下一项进入 `Dependency Audit Automation`，保持低频 job，不塞进 quick 必跑路径。
+
+## 2026-04-28 / Dependency Audit Automation
+
+- Scope: 新增 scheduled/manual supply-chain audit lane；quick CI 只做脚本语法检查，不安装或运行 `cargo-audit`。
+- What worked: 用独立 workflow 承载慢速外部 advisory DB 检查，避免 PR 必跑路径被网络/安装时间污染。
+- What caused rework: 无。
+- Spec changes needed: audit artifacts 只上传 GitHub Actions artifact；生产 Vault 报告接入留给 `Scheduled Vault Reports`。
+- Tests or reviews that caught issues: `bash -n` 覆盖 wrapper 语法；workspace gate 确认 workflow/docs 改动不影响 Rust crates。
+- Next plan note: 下一项进入 `Scheduled Vault Reports`，把应用层报告做定时生成、latest 指针和保留策略。
