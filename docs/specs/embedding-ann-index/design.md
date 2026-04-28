@@ -12,21 +12,22 @@
 | --- | --- | --- |
 | **sqlite-vec** (`vec0` virtual table) | Native SQLite extension, in-process | Build/link complexity with `libsqlite3-sys` + bundle |
 | **sqlite-vss** (FAISS-backed) | Mature | Heavier build, FAISS dependency |
+| **Locality-bucket shadow index** | No native dependency; deterministic; bounded candidate scoring | Approximate; may fall back to full scan when bucket coverage is sparse |
 | **Keep scan + `LIMIT` prefilter in SQL** | No extension | Not true ANN, still O(n) |
 | **External index file** (e.g. hnswlib sidecar) | Full control | Two sources of truth, backup pain |
 
-**Chosen path after spike**: keep `sqlite-vec` as the preferred implementation
-target, but do not link or load a native extension in the default build. PR #72
-adds the `ann-embed` Cargo feature and backend dispatch first; with the feature
-enabled, storage still falls back to the exact full scan until the implementation
-PR adds the virtual table / extension loading path.
+**Chosen path after implementation**: PR #73 uses a local locality-bucket shadow
+index behind the existing `ann-embed` Cargo feature. This avoids platform-native
+extension packaging while still bounding candidate scoring for the feature path.
+`sqlite-vec` remains a possible future replacement if release packaging becomes
+worth the complexity.
 
 Reasons:
 
 - default `rusqlite` bundled builds remain portable;
-- CI can prove the feature gate compiles without platform-specific binaries;
-- the implementation PR can add native extension wiring behind the already
-  tested gate instead of changing product semantics and build story together.
+- CI can test the feature path without platform-specific binaries;
+- the shadow table lives in the same SQLite DB and is rebuilt from
+  `wiki_embedding`, so backup/restore remains DB-local.
 
 ## Data Model
 
@@ -34,21 +35,23 @@ Reasons:
 - **Feature gate PR #72**: no new schema. `EmbeddingSearchBackend` reports
   `AnnFeatureFallback` when `ann-embed` is enabled and still reads
   `wiki_embedding`.
-- **Implementation PR**: add a virtual table or shadow table, e.g.
-  `wiki_embedding_vvec(doc_id, embedding)` with triggers or same-transaction
-  writes from `save_snapshot_and_append_outbox_with_embeddings` /
-  `delete_embedding`.
+- **Implementation PR #73**: adds `wiki_embedding_ann(doc_id, dim, bucket,
+  updated_at)` and `wiki_embedding_ann_dim_bucket_doc_idx`. The bucket is a
+  deterministic 16-bit locality signature derived from the vector.
 
 ## Query Flow
 
-1. `upsert_embedding`: within same transaction, update blob row **and** index
-   row, or `INSERT` into virtual table. PR #71 already made source/claim blob
-   writes atomic with snapshot/outbox; the implementation PR must preserve that
-   boundary for any ANN secondary structure.
+1. `upsert_embedding`: within the same transaction, update `wiki_embedding`
+   and `wiki_embedding_ann`. `delete_embedding` removes both rows in one
+   transaction. PR #71 already made source/claim blob writes atomic with
+   snapshot/outbox; PR #73 preserves that boundary for ANN metadata.
 2. `search_embeddings_cosine`:
-   - If `ann-embed` + ANN backend available: KNN or range query → at most `limit * k_probe` distance
-     computations in extension, return map to `doc_id` + re-score if needed.
-   - Else: current full scan (documented C15 “slow path”).
+   - If `ann-embed` is enabled: compute query bucket + one-bit neighbor buckets,
+     read at most `clamp(limit * 64, 64, 4096)` candidates through the indexed
+     `(dim, bucket, doc_id)` table, then re-rank by exact cosine.
+   - If the index is empty, stale, or yields fewer candidates than requested:
+     warn and fall back to the current full scan.
+   - Else: current full scan.
 
 ## `rusqlite` + bundled SQLite
 
@@ -61,26 +64,23 @@ Reasons:
 
 - **No** change to `search_embeddings_cosine` signature; internal dispatch only.
 - `SqliteRepository::embedding_search_backend()` exposes which path is active:
-  `FullScan` by default, `AnnFeatureFallback` when `ann-embed` is compiled but
-  no native backend is active yet. The implementation PR will add a third
-  backend variant for the real ANN path.
+  `FullScan` by default, `AnnLocalityBuckets` when `ann-embed` is compiled.
 
 ## Edge Cases
 
 - **Dimension change**: if `doc_id` row changes `dim`, index row must
   replace, not update in place with wrong size.
 - **Empty table**: return `Ok([])` as today; no ANN call.
-- **Corrupt index**: mark rebuild + fall back to scan, log `warn!` (or
-  return error, product choice — lock in requirements when implementing).
+- **Corrupt / stale index**: on feature-enabled open, rebuild the shadow index
+  when row counts differ. During search, warn and fall back to scan when bucket
+  candidates are missing or insufficient.
 
 ## Test Strategy
 
 - Unit: with ANN off, same golden vectors as current `embedding_cosine_ranking` test.
-- With `ann-embed` feature on: PR #72 CI runs
-  `cargo test -p wiki-storage --features ann-embed
-  embedding_ann_feature_gate_reports_backend_and_falls_back_to_scan`.
-- With real ANN path on: run same assertions on result **set** (order may differ
-  for ANN; if approximate, use recall@k or exact re-rank in SQL).
+- With `ann-embed` feature on: run targeted tests for backend selection,
+  locality search exact re-rank, fallback, index rebuild, and delete cleanup.
+- Default feature set keeps the existing exact full-scan ranking test.
 
 ## Spec Sync Rules
 

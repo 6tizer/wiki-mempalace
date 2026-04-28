@@ -223,6 +223,7 @@ pub struct SqliteRepository {
 pub enum EmbeddingSearchBackend {
     FullScan,
     AnnFeatureFallback,
+    AnnLocalityBuckets,
 }
 
 #[derive(Debug, Clone)]
@@ -396,6 +397,14 @@ CREATE TABLE IF NOT EXISTS wiki_embedding (
   vec BLOB NOT NULL,
   updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
+CREATE TABLE IF NOT EXISTS wiki_embedding_ann (
+  doc_id TEXT PRIMARY KEY,
+  dim INTEGER NOT NULL,
+  bucket TEXT NOT NULL,
+  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+CREATE INDEX IF NOT EXISTS wiki_embedding_ann_dim_bucket_doc_idx
+  ON wiki_embedding_ann(dim, bucket, doc_id);
 CREATE TABLE IF NOT EXISTS wiki_automation_run (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   job_name TEXT NOT NULL,
@@ -438,7 +447,11 @@ CREATE INDEX IF NOT EXISTS wiki_canonical_alias_page_idx
   ON wiki_canonical_alias(canonical_page_id);
 "#,
         )?;
-        Ok(Self { conn })
+        let repo = Self { conn };
+        if cfg!(feature = "ann-embed") {
+            repo.ensure_embedding_ann_index_current()?;
+        }
+        Ok(repo)
     }
 
     pub fn start_automation_run(&self, job_name: &str) -> Result<i64, StorageError> {
@@ -608,7 +621,18 @@ CREATE INDEX IF NOT EXISTS wiki_canonical_alias_page_idx
 
     /// 写入或更新一条向量（`vec` 为 little-endian `f32` 序列）。
     pub fn upsert_embedding(&self, doc_id: &str, vector: &[f32]) -> Result<(), StorageError> {
-        self.upsert_embedding_inner(doc_id, vector)
+        self.conn.execute_batch("BEGIN IMMEDIATE")?;
+        let result = self.upsert_embedding_inner(doc_id, vector);
+        match result {
+            Ok(()) => {
+                self.conn.execute_batch("COMMIT")?;
+                Ok(())
+            }
+            Err(error) => {
+                let _ = self.conn.execute_batch("ROLLBACK");
+                Err(error)
+            }
+        }
     }
 
     pub fn save_snapshot_and_append_outbox_with_embeddings(
@@ -649,20 +673,50 @@ CREATE INDEX IF NOT EXISTS wiki_canonical_alias_page_idx
              ON CONFLICT(doc_id) DO UPDATE SET dim=excluded.dim, vec=excluded.vec, updated_at=excluded.updated_at",
             params![doc_id, dim, blob],
         )?;
+        self.upsert_embedding_ann_inner(doc_id, vector)?;
         Ok(())
     }
 
-    pub fn delete_embedding(&self, doc_id: &str) -> Result<(), StorageError> {
+    fn upsert_embedding_ann_inner(&self, doc_id: &str, vector: &[f32]) -> Result<(), StorageError> {
+        let dim = vector.len() as i32;
+        let bucket = embedding_ann_bucket(vector);
         self.conn.execute(
-            "DELETE FROM wiki_embedding WHERE doc_id = ?1",
-            params![doc_id],
+            "INSERT INTO wiki_embedding_ann(doc_id, dim, bucket, updated_at)
+             VALUES(?1, ?2, ?3, datetime('now'))
+             ON CONFLICT(doc_id) DO UPDATE SET dim=excluded.dim, bucket=excluded.bucket, updated_at=excluded.updated_at",
+            params![doc_id, dim, bucket],
         )?;
         Ok(())
     }
 
+    pub fn delete_embedding(&self, doc_id: &str) -> Result<(), StorageError> {
+        self.conn.execute_batch("BEGIN IMMEDIATE")?;
+        let result = (|| {
+            self.conn.execute(
+                "DELETE FROM wiki_embedding_ann WHERE doc_id = ?1",
+                params![doc_id],
+            )?;
+            self.conn.execute(
+                "DELETE FROM wiki_embedding WHERE doc_id = ?1",
+                params![doc_id],
+            )?;
+            Ok(())
+        })();
+        match result {
+            Ok(()) => {
+                self.conn.execute_batch("COMMIT")?;
+                Ok(())
+            }
+            Err(error) => {
+                let _ = self.conn.execute_batch("ROLLBACK");
+                Err(error)
+            }
+        }
+    }
+
     pub fn embedding_search_backend(&self) -> EmbeddingSearchBackend {
         if cfg!(feature = "ann-embed") {
-            EmbeddingSearchBackend::AnnFeatureFallback
+            EmbeddingSearchBackend::AnnLocalityBuckets
         } else {
             EmbeddingSearchBackend::FullScan
         }
@@ -678,7 +732,106 @@ CREATE INDEX IF NOT EXISTS wiki_canonical_alias_page_idx
             EmbeddingSearchBackend::FullScan | EmbeddingSearchBackend::AnnFeatureFallback => {
                 self.search_embeddings_cosine_full_scan(query, limit)
             }
+            EmbeddingSearchBackend::AnnLocalityBuckets => {
+                self.search_embeddings_cosine_ann_buckets(query, limit)
+            }
         }
+    }
+
+    fn search_embeddings_cosine_ann_buckets(
+        &self,
+        query: &[f32],
+        limit: usize,
+    ) -> Result<Vec<(String, f32)>, StorageError> {
+        let qn = l2_norm(query);
+        if qn <= 1e-12 || limit == 0 {
+            return Ok(Vec::new());
+        }
+        let candidate_limit = embedding_ann_candidate_limit(limit);
+        let buckets = embedding_ann_probe_buckets(query);
+        let mut candidates: Vec<(String, Vec<u8>, i32)> = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        let mut stmt = self.conn.prepare(
+            "SELECT e.doc_id, e.vec, e.dim
+             FROM wiki_embedding_ann a
+             JOIN wiki_embedding e ON e.doc_id = a.doc_id
+             WHERE a.dim = ?1 AND a.bucket = ?2
+             ORDER BY a.doc_id ASC
+             LIMIT ?3",
+        )?;
+        for bucket in buckets {
+            if candidates.len() >= candidate_limit {
+                break;
+            }
+            let remaining = candidate_limit - candidates.len();
+            let rows = stmt.query_map(
+                params![query.len() as i32, bucket, remaining as i64],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, Vec<u8>>(1)?,
+                        row.get::<_, i32>(2)?,
+                    ))
+                },
+            )?;
+            for row in rows {
+                let (doc_id, blob, dim) = row?;
+                if seen.insert(doc_id.clone()) {
+                    candidates.push((doc_id, blob, dim));
+                }
+            }
+        }
+        if candidates.is_empty() {
+            eprintln!(
+                "warning: wiki_embedding_ann returned no candidates; falling back to full scan"
+            );
+            return self.search_embeddings_cosine_full_scan(query, limit);
+        }
+
+        let mut scored: Vec<(String, f32)> = Vec::new();
+        for (doc_id, blob, dim) in candidates {
+            let Some(v) = try_blob_to_f32(&blob, dim as usize) else {
+                eprintln!(
+                    "warning: wiki_embedding_ann candidate doc_id={doc_id} blob length mismatch (expected {} bytes, got {})",
+                    dim as usize * 4,
+                    blob.len()
+                );
+                continue;
+            };
+            if v.len() != query.len() {
+                eprintln!(
+                    "warning: wiki_embedding_ann candidate doc_id={doc_id} dim mismatch (expected {}, got {})",
+                    query.len(),
+                    v.len()
+                );
+                continue;
+            }
+            let vn = l2_norm(&v);
+            if vn <= 1e-12 {
+                continue;
+            }
+            let dot: f32 = query.iter().zip(v.iter()).map(|(a, b)| a * b).sum();
+            let c = dot / (qn * vn);
+            if c.is_nan() {
+                continue;
+            }
+            scored.push((doc_id, c));
+        }
+        if scored.is_empty() {
+            eprintln!(
+                "warning: wiki_embedding_ann produced no scoreable candidates; falling back to full scan"
+            );
+            return self.search_embeddings_cosine_full_scan(query, limit);
+        }
+        if scored.len() < limit {
+            eprintln!(
+                "warning: wiki_embedding_ann produced fewer candidates than requested; falling back to full scan"
+            );
+            return self.search_embeddings_cosine_full_scan(query, limit);
+        }
+        scored.sort_by(|a, b| a.1.total_cmp(&b.1).reverse().then_with(|| a.0.cmp(&b.0)));
+        scored.truncate(limit);
+        Ok(scored)
     }
 
     fn search_embeddings_cosine_full_scan(
@@ -729,6 +882,65 @@ CREATE INDEX IF NOT EXISTS wiki_canonical_alias_page_idx
         scored.sort_by(|a, b| a.1.total_cmp(&b.1).reverse().then_with(|| a.0.cmp(&b.0)));
         scored.truncate(limit);
         Ok(scored)
+    }
+
+    fn ensure_embedding_ann_index_current(&self) -> Result<(), StorageError> {
+        let embedding_count: i64 =
+            self.conn
+                .query_row("SELECT COUNT(*) FROM wiki_embedding", [], |row| row.get(0))?;
+        let ann_count: i64 =
+            self.conn
+                .query_row("SELECT COUNT(*) FROM wiki_embedding_ann", [], |row| {
+                    row.get(0)
+                })?;
+        if embedding_count == ann_count {
+            return Ok(());
+        }
+        self.rebuild_embedding_ann_index()
+    }
+
+    fn rebuild_embedding_ann_index(&self) -> Result<(), StorageError> {
+        self.conn.execute_batch("BEGIN IMMEDIATE")?;
+        let result = (|| {
+            self.conn.execute("DELETE FROM wiki_embedding_ann", [])?;
+            let embedding_rows = {
+                let mut stmt = self
+                    .conn
+                    .prepare("SELECT doc_id, dim, vec FROM wiki_embedding ORDER BY doc_id ASC")?;
+                let rows = stmt.query_map([], |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, i32>(1)?,
+                        row.get::<_, Vec<u8>>(2)?,
+                    ))
+                })?;
+                let mut out = Vec::new();
+                for row in rows {
+                    out.push(row?);
+                }
+                out
+            };
+            for (doc_id, dim, blob) in embedding_rows {
+                let Some(vector) = try_blob_to_f32(&blob, dim as usize) else {
+                    eprintln!(
+                        "warning: wiki_embedding row doc_id={doc_id} blob length mismatch during ANN rebuild"
+                    );
+                    continue;
+                };
+                self.upsert_embedding_ann_inner(&doc_id, &vector)?;
+            }
+            Ok(())
+        })();
+        match result {
+            Ok(()) => {
+                self.conn.execute_batch("COMMIT")?;
+                Ok(())
+            }
+            Err(error) => {
+                let _ = self.conn.execute_batch("ROLLBACK");
+                Err(error)
+            }
+        }
     }
 
     pub fn upsert_canonical_alias(
@@ -1093,6 +1305,68 @@ fn try_blob_to_f32(blob: &[u8], expected_len: usize) -> Option<Vec<f32>> {
 
 fn l2_norm(v: &[f32]) -> f32 {
     v.iter().map(|x| x * x).sum::<f32>().sqrt()
+}
+
+const EMBEDDING_ANN_SIGNATURE_BITS: u8 = 16;
+const EMBEDDING_ANN_MIN_CANDIDATES: usize = 64;
+const EMBEDDING_ANN_MAX_CANDIDATES: usize = 4096;
+const EMBEDDING_ANN_CANDIDATES_PER_RESULT: usize = 64;
+
+fn embedding_ann_candidate_limit(limit: usize) -> usize {
+    limit
+        .saturating_mul(EMBEDDING_ANN_CANDIDATES_PER_RESULT)
+        .clamp(EMBEDDING_ANN_MIN_CANDIDATES, EMBEDDING_ANN_MAX_CANDIDATES)
+}
+
+fn embedding_ann_bucket(vector: &[f32]) -> String {
+    format!("{:04x}", embedding_ann_signature(vector))
+}
+
+fn embedding_ann_probe_buckets(vector: &[f32]) -> Vec<String> {
+    let signature = embedding_ann_signature(vector);
+    let mut out = Vec::with_capacity(EMBEDDING_ANN_SIGNATURE_BITS as usize + 1);
+    out.push(format!("{signature:04x}"));
+    for bit in 0..EMBEDDING_ANN_SIGNATURE_BITS {
+        out.push(format!("{:04x}", signature ^ (1_u16 << bit)));
+    }
+    out
+}
+
+fn embedding_ann_signature(vector: &[f32]) -> u16 {
+    let mut signature = 0_u16;
+    for bit in 0..EMBEDDING_ANN_SIGNATURE_BITS {
+        let mut projection = 0.0_f32;
+        for (idx, value) in vector.iter().enumerate() {
+            if !value.is_finite() {
+                continue;
+            }
+            let sign = if embedding_ann_projection_is_positive(idx, bit) {
+                1.0
+            } else {
+                -1.0
+            };
+            projection += value * sign;
+        }
+        if projection >= 0.0 {
+            signature |= 1_u16 << bit;
+        }
+    }
+    signature
+}
+
+fn embedding_ann_projection_is_positive(index: usize, bit: u8) -> bool {
+    let seed = (index as u64)
+        .wrapping_mul(0x9e37_79b9_7f4a_7c15)
+        .wrapping_add((bit as u64).wrapping_mul(0xbf58_476d_1ce4_e5b9));
+    splitmix64(seed) & 1 == 1
+}
+
+fn splitmix64(mut value: u64) -> u64 {
+    value = value.wrapping_add(0x9e37_79b9_7f4a_7c15);
+    let mut z = value;
+    z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+    z ^ (z >> 31)
 }
 
 fn encode_time(value: OffsetDateTime) -> Result<String, StorageError> {
@@ -1739,7 +2013,7 @@ mod tests {
         if cfg!(feature = "ann-embed") {
             assert_eq!(
                 repo.embedding_search_backend(),
-                EmbeddingSearchBackend::AnnFeatureFallback
+                EmbeddingSearchBackend::AnnLocalityBuckets
             );
         } else {
             assert_eq!(
@@ -1752,6 +2026,102 @@ mod tests {
         let hits = repo.search_embeddings_cosine(&[1.0_f32, 0.0], 1).unwrap();
 
         assert_eq!(hits[0].0, "doc:a");
+    }
+
+    #[test]
+    fn embedding_ann_locality_search_reranks_bounded_candidates() {
+        if !cfg!(feature = "ann-embed") {
+            return;
+        }
+        let dir = tempdir().unwrap();
+        let db = dir.path().join("wiki.db");
+        let repo = SqliteRepository::open(&db).unwrap();
+        let exact = vec![1.0_f32, 0.0, 0.0];
+        let near = vec![1.0_f32, 0.001, 0.0];
+        assert_eq!(embedding_ann_bucket(&exact), embedding_ann_bucket(&near));
+
+        repo.upsert_embedding("doc:near", &near).unwrap();
+        repo.upsert_embedding("doc:exact", &exact).unwrap();
+
+        let hits = repo.search_embeddings_cosine(&exact, 2).unwrap();
+
+        assert_eq!(hits.len(), 2);
+        assert_eq!(hits[0].0, "doc:exact");
+        assert_eq!(hits[1].0, "doc:near");
+        assert!(hits[0].1 > hits[1].1);
+    }
+
+    #[test]
+    fn embedding_ann_index_is_maintained_and_rebuilt() {
+        if !cfg!(feature = "ann-embed") {
+            return;
+        }
+        let dir = tempdir().unwrap();
+        let db = dir.path().join("wiki.db");
+        {
+            let repo = SqliteRepository::open(&db).unwrap();
+            repo.upsert_embedding("doc:a", &[1.0_f32, 0.0]).unwrap();
+            let count: i64 = repo
+                .conn
+                .query_row("SELECT COUNT(*) FROM wiki_embedding_ann", [], |row| {
+                    row.get(0)
+                })
+                .unwrap();
+            assert_eq!(count, 1);
+            repo.conn
+                .execute("DELETE FROM wiki_embedding_ann", [])
+                .unwrap();
+        }
+
+        let repo = SqliteRepository::open(&db).unwrap();
+        let count: i64 = repo
+            .conn
+            .query_row("SELECT COUNT(*) FROM wiki_embedding_ann", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn embedding_ann_falls_back_to_scan_when_index_empty() {
+        if !cfg!(feature = "ann-embed") {
+            return;
+        }
+        let dir = tempdir().unwrap();
+        let db = dir.path().join("wiki.db");
+        let repo = SqliteRepository::open(&db).unwrap();
+        repo.upsert_embedding("doc:a", &[1.0_f32, 0.0]).unwrap();
+        repo.conn
+            .execute("DELETE FROM wiki_embedding_ann", [])
+            .unwrap();
+
+        let hits = repo.search_embeddings_cosine(&[1.0_f32, 0.0], 1).unwrap();
+
+        assert_eq!(hits[0].0, "doc:a");
+    }
+
+    #[test]
+    fn embedding_delete_removes_ann_index_row() {
+        let dir = tempdir().unwrap();
+        let db = dir.path().join("wiki.db");
+        let repo = SqliteRepository::open(&db).unwrap();
+        repo.upsert_embedding("doc:a", &[1.0_f32, 0.0]).unwrap();
+        repo.delete_embedding("doc:a").unwrap();
+
+        let embedding_count: i64 = repo
+            .conn
+            .query_row("SELECT COUNT(*) FROM wiki_embedding", [], |row| row.get(0))
+            .unwrap();
+        let ann_count: i64 = repo
+            .conn
+            .query_row("SELECT COUNT(*) FROM wiki_embedding_ann", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+
+        assert_eq!(embedding_count, 0);
+        assert_eq!(ann_count, 0);
     }
 
     #[test]
