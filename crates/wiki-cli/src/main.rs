@@ -55,6 +55,7 @@ const DEFAULT_DASHBOARD_OUTPUT: &str = "wiki/reports/dashboard.html";
 const VAULT_DASHBOARD_OUTPUT: &str = "reports/dashboard.html";
 const DEFAULT_SUGGEST_REPORT_DIR: &str = "wiki/reports/suggestions";
 const VAULT_SUGGEST_REPORT_DIR: &str = "reports/suggestions";
+const DEFAULT_SCHEDULED_REPORT_KEEP: usize = 14;
 
 #[derive(Parser)]
 #[command(name = "wiki")]
@@ -586,6 +587,8 @@ enum AutomationJob {
     LlmSmoke,
     #[value(name = "notion-sync")]
     NotionSync,
+    #[value(name = "vault-reports")]
+    VaultReports,
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -639,6 +642,13 @@ const AUTOMATION_JOB_SPECS: &[AutomationJobSpec] = &[
         requires_network: true,
         short_circuit: false,
         description: "Incrementally sync Notion databases (X书签 and 微信文章) into wiki.db.",
+    },
+    AutomationJobSpec {
+        job: AutomationJob::VaultReports,
+        in_daily: true,
+        requires_network: false,
+        short_circuit: false,
+        description: "Generate scheduled Vault reports, latest pointers, and retention cleanup.",
     },
 ];
 
@@ -726,6 +736,7 @@ fn automation_job_name(job: AutomationJob) -> &'static str {
         AutomationJob::ConsumeToMempalace => "consume-to-mempalace",
         AutomationJob::LlmSmoke => "llm-smoke",
         AutomationJob::NotionSync => "notion-sync",
+        AutomationJob::VaultReports => "vault-reports",
     }
 }
 
@@ -1110,6 +1121,19 @@ fn strategy_report_prefix(generated_at: OffsetDateTime) -> String {
     )
 }
 
+fn scheduled_report_timestamp(generated_at: OffsetDateTime) -> String {
+    format!(
+        "{:04}-{:02}-{:02}T{:02}{:02}{:02}.{:09}Z",
+        generated_at.year(),
+        generated_at.month() as u8,
+        generated_at.day(),
+        generated_at.hour(),
+        generated_at.minute(),
+        generated_at.second(),
+        generated_at.nanosecond()
+    )
+}
+
 fn parse_outbox_events(ndjson: &str) -> Result<Vec<WikiEvent>, Box<dyn std::error::Error>> {
     let mut events = Vec::new();
     for (idx, line) in ndjson.lines().enumerate() {
@@ -1468,6 +1492,167 @@ fn emit_automation_health_alert(level: AutomationHealthLevel) {
             eprintln!("\x1b[31mALERT RED\x1b[0m automation health requires intervention");
         }
     }
+}
+
+fn scheduled_report_keep_count() -> usize {
+    env_or("WIKI_SCHEDULED_REPORT_KEEP", DEFAULT_SCHEDULED_REPORT_KEEP).max(1)
+}
+
+fn path_for_report(path: &Path) -> String {
+    path.display().to_string()
+}
+
+fn prune_scheduled_report_runs(root: &Path, keep: usize) -> std::io::Result<usize> {
+    if !root.exists() {
+        return Ok(0);
+    }
+
+    let mut dirs = Vec::new();
+    for entry in std::fs::read_dir(root)? {
+        let entry = entry?;
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+        let Some(name) = path.file_name().and_then(|value| value.to_str()) else {
+            continue;
+        };
+        if name.ends_with("-scheduled") {
+            dirs.push((name.to_string(), path));
+        }
+    }
+    dirs.sort_by(|a, b| b.0.cmp(&a.0));
+
+    let mut pruned = 0;
+    for (_, path) in dirs.into_iter().skip(keep) {
+        std::fs::remove_dir_all(path)?;
+        pruned += 1;
+    }
+    Ok(pruned)
+}
+
+fn run_scheduled_vault_reports_job(
+    eng: &LlmWikiEngine<NoopWikiHook>,
+    repo: &SqliteRepository,
+    viewer: &Scope,
+    schema: &DomainSchema,
+    wiki_root: Option<&std::path::Path>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let vault = wiki_root
+        .map(PathBuf::from)
+        .unwrap_or_else(wiki_compiler::default_vault_path);
+    let now = OffsetDateTime::now_utc();
+    let keep = scheduled_report_keep_count();
+    let reports_root = vault.join("reports").join("scheduled");
+    let run_dir = reports_root.join(format!("{}-scheduled", scheduled_report_timestamp(now)));
+
+    let vault_report = vault_audit::scan_vault(&vault)?;
+    std::fs::create_dir_all(&run_dir)?;
+    let audit_files =
+        vault_audit::write_json_and_markdown(&vault_report, run_dir.join("vault-audit"))
+            .map_err(|err| -> Box<dyn std::error::Error> { err.to_string().into() })?;
+
+    let outbox_stats = repo.get_outbox_stats()?;
+    let outbox_progress = repo.get_outbox_consumer_progress(DEFAULT_MEMPALACE_CONSUMER_TAG)?;
+    let metrics = collect_wiki_metrics(
+        &eng.store,
+        schema,
+        Some(viewer),
+        Some(&outbox_stats),
+        Some(&outbox_progress),
+        2,
+        now,
+    );
+    let metrics_json = run_dir.join("metrics.json");
+    let metrics_md = run_dir.join("metrics.md");
+    std::fs::write(&metrics_json, serde_json::to_string_pretty(&metrics)?)?;
+    std::fs::write(&metrics_md, render_metrics_markdown(&metrics))?;
+
+    let health = collect_automation_health_report(
+        repo,
+        &automation_all_jobs(),
+        DEFAULT_MEMPALACE_CONSUMER_TAG,
+        now,
+    )?;
+    let health_txt = run_dir.join("automation-health.txt");
+    std::fs::write(
+        &health_txt,
+        render_automation_health_report(&health, DEFAULT_MEMPALACE_CONSUMER_TAG),
+    )?;
+
+    let dashboard_html = run_dir.join("dashboard.html");
+    std::fs::write(
+        &dashboard_html,
+        dashboard::render_dashboard_html(&health, &metrics, DEFAULT_MEMPALACE_CONSUMER_TAG),
+    )?;
+
+    let query_events = parse_outbox_events(&repo.export_outbox_ndjson()?)?;
+    let strategy_report = run_strategy_scan(
+        &eng.store,
+        schema,
+        &metrics,
+        &query_events,
+        StrategyScanOptions {
+            viewer_scope: Some(viewer),
+            low_coverage_threshold: 2,
+            generated_at: now,
+            report_id: strategy_report_prefix(now),
+        },
+    );
+    let suggestions_dir = run_dir.join("suggestions");
+    std::fs::create_dir_all(&suggestions_dir)?;
+    let suggest_json_name = format!("{}.json", strategy_report.report_id);
+    let suggest_md_name = format!("{}.md", strategy_report.report_id);
+    let suggest_json = suggestions_dir.join(&suggest_json_name);
+    let suggest_md = suggestions_dir.join(&suggest_md_name);
+    std::fs::write(
+        &suggest_json,
+        serde_json::to_string_pretty(&strategy_report)?,
+    )?;
+    std::fs::write(
+        &suggest_md,
+        render_strategy_report_markdown(&strategy_report, &suggest_json_name),
+    )?;
+
+    let latest_json = reports_root.join("latest.json");
+    let latest_md = reports_root.join("latest.md");
+    let latest = serde_json::json!({
+        "generated_at": format_automation_time(now),
+        "run_dir": path_for_report(&run_dir),
+        "retention_keep": keep,
+        "files": {
+            "vault_audit_json": path_for_report(&audit_files.json_path),
+            "vault_audit_markdown": path_for_report(&audit_files.markdown_path),
+            "metrics_json": path_for_report(&metrics_json),
+            "metrics_markdown": path_for_report(&metrics_md),
+            "automation_health": path_for_report(&health_txt),
+            "dashboard_html": path_for_report(&dashboard_html),
+            "suggest_json": path_for_report(&suggest_json),
+            "suggest_markdown": path_for_report(&suggest_md),
+        }
+    });
+    std::fs::write(&latest_json, serde_json::to_string_pretty(&latest)?)?;
+    std::fs::write(
+        &latest_md,
+        format!(
+            "# Scheduled Vault Reports\n\n- generated_at: `{}`\n- run_dir: `{}`\n- latest_json: `{}`\n- retention_keep: `{}`\n",
+            format_automation_time(now),
+            run_dir.display(),
+            latest_json.display(),
+            keep
+        ),
+    )?;
+    let pruned = prune_scheduled_report_runs(&reports_root, keep)?;
+
+    println!(
+        "scheduled_vault_reports generated_at={} run_dir={} pruned={}",
+        format_automation_time(now),
+        run_dir.display(),
+        pruned
+    );
+    println!("latest_json={}", latest_json.display());
+    println!("latest_markdown={}", latest_md.display());
+    Ok(())
 }
 
 struct AutomationHeartbeat<'a> {
@@ -3583,6 +3768,7 @@ mod tests {
                 "maintenance",
                 "consume-to-mempalace",
                 "notion-sync",
+                "vault-reports",
             ]
         );
     }
@@ -3602,12 +3788,15 @@ mod tests {
                 "consume-to-mempalace",
                 "llm-smoke",
                 "notion-sync",
+                "vault-reports",
             ]
         );
         assert!(automation_job_spec(AutomationJob::LlmSmoke).requires_network);
         assert!(!automation_job_spec(AutomationJob::LlmSmoke).in_daily);
         assert!(automation_job_spec(AutomationJob::NotionSync).requires_network);
         assert!(automation_job_spec(AutomationJob::NotionSync).in_daily);
+        assert!(!automation_job_spec(AutomationJob::VaultReports).requires_network);
+        assert!(automation_job_spec(AutomationJob::VaultReports).in_daily);
         assert!(automation_notion_refresh_existing());
     }
 
@@ -3674,6 +3863,11 @@ mod tests {
                 job: AutomationJob::LlmSmoke,
             },
         }));
+        assert!(!cmd_needs_writer_lease(&Cmd::Automation {
+            cmd: AutomationCmd::Run {
+                job: AutomationJob::VaultReports,
+            },
+        }));
         assert!(cmd_needs_writer_lease(&Cmd::NotionSync {
             db_id: NotionDbTarget::All,
             since: None,
@@ -3734,7 +3928,30 @@ mod tests {
         assert!(stdout.contains("2. lint"));
         assert!(stdout.contains("3. maintenance"));
         assert!(stdout.contains("4. consume-to-mempalace"));
+        assert!(stdout.contains("6. vault-reports"));
         assert!(stdout.contains("dry-run: no jobs executed"));
+    }
+
+    #[test]
+    fn scheduled_report_prune_keeps_newest_runs_and_ignores_latest_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        for name in [
+            "2026-04-28T000000.000000001Z-scheduled",
+            "2026-04-28T000000.000000002Z-scheduled",
+            "2026-04-28T000000.000000003Z-scheduled",
+        ] {
+            std::fs::create_dir_all(root.join(name)).unwrap();
+        }
+        std::fs::write(root.join("latest.json"), "{}").unwrap();
+
+        let pruned = prune_scheduled_report_runs(root, 2).unwrap();
+
+        assert_eq!(pruned, 1);
+        assert!(!root.join("2026-04-28T000000.000000001Z-scheduled").exists());
+        assert!(root.join("2026-04-28T000000.000000002Z-scheduled").exists());
+        assert!(root.join("2026-04-28T000000.000000003Z-scheduled").exists());
+        assert!(root.join("latest.json").exists());
     }
 
     #[test]
@@ -4912,6 +5129,9 @@ fn dispatch_automation_job(
             0,
             false,
         ),
+        AutomationJob::VaultReports => {
+            run_scheduled_vault_reports_job(eng, repo, viewer, schema, wiki_root)
+        }
     }
 }
 

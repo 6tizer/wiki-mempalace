@@ -269,6 +269,7 @@ fn automation_run_daily_dry_run_prints_fixed_plan() {
         .stdout(predicate::str::contains("2. lint"))
         .stdout(predicate::str::contains("3. maintenance"))
         .stdout(predicate::str::contains("4. consume-to-mempalace"))
+        .stdout(predicate::str::contains("6. vault-reports"))
         .stdout(predicate::str::contains("dry-run: no jobs executed"))
         .stdout(predicate::str::contains("automation: running").not());
 }
@@ -285,7 +286,8 @@ fn automation_list_jobs_prints_registry() {
         .stdout(predicate::str::contains("lint daily=yes"))
         .stdout(predicate::str::contains("maintenance daily=yes"))
         .stdout(predicate::str::contains("consume-to-mempalace daily=yes"))
-        .stdout(predicate::str::contains("llm-smoke daily=no"));
+        .stdout(predicate::str::contains("llm-smoke daily=no"))
+        .stdout(predicate::str::contains("vault-reports daily=yes"));
 }
 
 #[test]
@@ -305,7 +307,8 @@ fn automation_status_prints_never_run_for_fresh_db() {
         .stdout(predicate::str::contains("lint: never-run"))
         .stdout(predicate::str::contains("maintenance: never-run"))
         .stdout(predicate::str::contains("consume-to-mempalace: never-run"))
-        .stdout(predicate::str::contains("llm-smoke: never-run"));
+        .stdout(predicate::str::contains("llm-smoke: never-run"))
+        .stdout(predicate::str::contains("vault-reports: never-run"));
 }
 
 #[test]
@@ -394,6 +397,62 @@ fn automation_run_maintenance_executes_only_target_job() {
         .get_latest_automation_run("consume-to-mempalace")
         .unwrap()
         .is_none());
+}
+
+#[test]
+fn automation_run_vault_reports_writes_scheduled_bundle_and_latest_pointer() {
+    let db = tempfile::NamedTempFile::new().unwrap();
+    let db_path = db.path().to_owned();
+    let _repo = SqliteRepository::open(&db_path).unwrap();
+
+    let vault_dir = tempfile::tempdir().unwrap();
+    make_minimal_vault(vault_dir.path());
+
+    wiki_cli()
+        .arg("--db")
+        .arg(&db_path)
+        .arg("--wiki-dir")
+        .arg(vault_dir.path())
+        .arg("automation")
+        .arg("run")
+        .arg("vault-reports")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "automation: running vault-reports",
+        ))
+        .stdout(predicate::str::contains("scheduled_vault_reports"))
+        .stdout(predicate::str::contains("latest_json="))
+        .stdout(predicate::str::contains("status=succeeded"));
+
+    let repo = SqliteRepository::open(&db_path).unwrap();
+    assert!(repo
+        .get_latest_automation_run("vault-reports")
+        .unwrap()
+        .is_some());
+
+    let latest_json_path = vault_dir.path().join("reports/scheduled/latest.json");
+    let latest_md_path = vault_dir.path().join("reports/scheduled/latest.md");
+    assert!(latest_json_path.exists());
+    assert!(latest_md_path.exists());
+
+    let latest: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&latest_json_path).unwrap()).unwrap();
+    let run_dir = PathBuf::from(latest["run_dir"].as_str().unwrap());
+    assert!(run_dir.exists());
+    for key in [
+        "vault_audit_json",
+        "vault_audit_markdown",
+        "metrics_json",
+        "metrics_markdown",
+        "automation_health",
+        "dashboard_html",
+        "suggest_json",
+        "suggest_markdown",
+    ] {
+        let path = PathBuf::from(latest["files"][key].as_str().unwrap());
+        assert!(path.exists(), "missing scheduled report file for {key}");
+    }
 }
 
 #[test]

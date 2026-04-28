@@ -45,7 +45,7 @@
 | Automation Integrity Check | ✅ 已合入 PR #58 | PR #58 已把 `PRAGMA integrity_check` 纳入 `automation health` 输出；scheduled report 保留策略仍属于 `Scheduled Vault Reports` |
 | Dependency Audit Automation | ✅ 已合入 PR #66 | 审计建议：已新增 scheduled/manual `cargo audit` workflow，上传 JSON/stderr artifact；quick CI 只做 wrapper 语法检查 |
 | Time Library Unification | 💤 未开始 | 审计低优先项：评估 `chrono` vs `time` 双时间库，长期优先统一到 `time`；若保留 mempalace 独立性，文档化边界 |
-| Scheduled Vault Reports | 💤 未开始 | 待 PRD；把 `vault-audit`、`metrics`、`dashboard`、`automation health`、`suggest` 等报告接入定时生成和保留策略 |
+| Scheduled Vault Reports | ✅ 已合入 PR #67 | 已新增 automation `vault-reports` job：timestamped bundle、`latest.json/latest.md` 指针、`WIKI_SCHEDULED_REPORT_KEEP` 保留策略 |
 | C16A Atomic snapshot + outbox | ✅ 已合入 | PR #25 已 merge；新增 `save_snapshot_and_append_outbox` 单事务持久化路径；CLI/MCP/backfill 写路径已切到原子提交 |
 | C16B Embedding ANN index | 💤 未开始 | 仍保留在 [embedding-ann-index](specs/embedding-ann-index/)；可单独规划，不和存储一致性混在一个 PR |
 
@@ -67,9 +67,9 @@
 
 ### P2：报告自动化（低风险独立批次）
 
-Scheduled Vault Reports：把 `vault-audit`、`metrics`、`dashboard`、
-`automation health`、`suggest` 接入定时生成、latest 指针、输出目录和历史保留/清理策略。
-`dashboard latest suggestion report` 可放进同一批次。
+Scheduled Vault Reports：PR #67 已把 `vault-audit`、`metrics`、`dashboard`、
+`automation health`、`suggest` 接入 automation `vault-reports`，支持 timestamped bundle、
+latest 指针和历史保留/清理策略。
 
 ### P3：Outbox 消费语义（独立批次）
 
@@ -131,7 +131,7 @@ PR #58 完成 hardening 小补丁后，剩余 12 个未完成/部分完成项按
 | 9 | Multi-process Write Lock / Lease | `Multi-process Write Guardrails` | 已由 PR #64 完成：`wiki.db.writer.lock` writer lease + 写入口 fail-fast。 |
 | 10 | Reliability Test Matrix | `Reliability Test Matrix` | 已由 PR #65 完成核心 quick 矩阵；慢速 fuzz/perf 可后续独立扩展。 |
 | 11 | Dependency Audit Automation | `Dependency Audit Automation` | 已由 PR #66 完成 scheduled/manual `cargo audit` lane；quick CI 不安装或运行 audit。 |
-| 12 | Scheduled Vault Reports | `Scheduled Vault Reports` | 定时生成 vault-audit/metrics/dashboard/health/suggest 报告；可包含 automation health 历史保留。 |
+| 12 | Scheduled Vault Reports | `Scheduled Vault Reports` | 已由 PR #67 完成 automation `vault-reports`、latest 指针和 retention。 |
 | 13 | Notion Archived Source Retirement audit/plan | `Notion Archived Source Retirement` | 先只做 archived source audit/plan，确保 DB-first 退役模型正确。 |
 | 14 | Notion Archived Source Retirement apply | `Notion Archived Source Retirement` | 再做 apply/production docs，避免手删 Markdown。 |
 | 15 | CLI Command Modularization phase 1 | `CLI Command Modularization` | 先拆低风险命令域，减少 `main.rs` 体积，不改行为。 |
