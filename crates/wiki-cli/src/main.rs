@@ -2,7 +2,7 @@
 
 use clap::{Parser, Subcommand, ValueEnum};
 use serde::Serialize;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use time::{format_description::well_known::Rfc3339, Duration, OffsetDateTime};
@@ -12,9 +12,10 @@ use wiki_core::{
     AuditRecord, ClaimId, CompositeSearchPorts, Confidence, DomainSchema, Entity, EntityId,
     EntityKind, EntryStatus, EntryType, FixAction, FixActionType, FixPatch, FusionConfig,
     GapFinding, GapSeverity, LlmIngestPlanV1, MemoryTier, PageContract, PageId, QueryContext,
-    RelationKind, Scope, SessionCrystallizationInput, SourceId, StrategyExecutionActionKind,
-    StrategyExecutionDryRunStatus, StrategyExecutionPlan, StrategyExecutionPolicy, StrategyReport,
-    StrategySeverity, TypedEdge, WikiEvent, WikiMetricsReport, WikiPage,
+    RelationKind, Scope, SessionCrystallizationInput, SourceId, StrategyExecutionAction,
+    StrategyExecutionActionKind, StrategyExecutionDryRunStatus, StrategyExecutionPlan,
+    StrategyExecutionPolicy, StrategyReport, StrategySeverity, TypedEdge, WikiEvent,
+    WikiMetricsReport, WikiPage,
 };
 use wiki_kernel::{
     collect_wiki_metrics, finalize_consumed_page, format_claim_doc_id, initial_status_for,
@@ -94,6 +95,25 @@ struct Cli {
     palace: Option<PathBuf>,
     #[command(subcommand)]
     cmd: Cmd,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+enum ExecutorAllow {
+    FixAutoSafe,
+}
+
+impl ExecutorAllow {
+    fn action_kind(self) -> StrategyExecutionActionKind {
+        match self {
+            ExecutorAllow::FixAutoSafe => StrategyExecutionActionKind::FixAutoSafe,
+        }
+    }
+
+    fn name(self) -> &'static str {
+        match self {
+            ExecutorAllow::FixAutoSafe => "fix_auto_safe",
+        }
+    }
 }
 
 #[derive(Subcommand)]
@@ -366,6 +386,24 @@ enum Cmd {
         #[arg(long, default_value_t = false)]
         executor_plan: bool,
         /// Also write timestamped JSON + Markdown reports to this directory.
+        #[arg(long, num_args = 0..=1)]
+        report_dir: Option<Option<PathBuf>>,
+    },
+    /// Apply an M12 executor plan with explicit allowlist guards.
+    SuggestExecutorApply {
+        /// JSON plan produced by `wiki-cli suggest --executor-plan --report-dir`.
+        #[arg(long)]
+        plan: PathBuf,
+        /// Allow a typed action kind. Repeatable; only `fix-auto-safe` is supported now.
+        #[arg(long = "allow", value_enum)]
+        allow: Vec<ExecutorAllow>,
+        /// Execute allowed actions. Without this flag the command only validates and previews.
+        #[arg(long, default_value_t = false)]
+        apply: bool,
+        /// Print pretty JSON instead of text.
+        #[arg(long, default_value_t = false)]
+        json: bool,
+        /// Also write timestamped JSON + Markdown execution reports to this directory.
         #[arg(long, num_args = 0..=1)]
         report_dir: Option<Option<PathBuf>>,
     },
@@ -1301,6 +1339,192 @@ fn serialize_strategy_suggest_json(
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum StrategyExecutorRunMode {
+    Preflight,
+    Apply,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum StrategyExecutorActionStatus {
+    WouldApply,
+    Applied,
+    Blocked,
+    Skipped,
+}
+
+#[derive(Debug, Serialize)]
+struct StrategyExecutorApplySummary {
+    total: usize,
+    would_apply: usize,
+    applied: usize,
+    blocked: usize,
+    skipped: usize,
+}
+
+#[derive(Debug, Serialize)]
+struct StrategyExecutorApplyActionReport {
+    action_id: String,
+    suggestion_id: String,
+    code: String,
+    subject: Option<String>,
+    action_kind: StrategyExecutionActionKind,
+    status: StrategyExecutorActionStatus,
+    reason: String,
+}
+
+#[derive(Debug, Serialize)]
+struct StrategyExecutorApplyReport {
+    report_id: String,
+    plan_id: String,
+    source_report_id: String,
+    generated_at: OffsetDateTime,
+    mode: StrategyExecutorRunMode,
+    apply_requested: bool,
+    allowlist: Vec<String>,
+    summary: StrategyExecutorApplySummary,
+    actions: Vec<StrategyExecutorApplyActionReport>,
+}
+
+fn strategy_executor_report_prefix(generated_at: OffsetDateTime) -> String {
+    format!(
+        "{:04}-{:02}-{:02}T{:02}{:02}{:02}.{:09}Z-m12-executor",
+        generated_at.year(),
+        generated_at.month() as u8,
+        generated_at.day(),
+        generated_at.hour(),
+        generated_at.minute(),
+        generated_at.second(),
+        generated_at.nanosecond()
+    )
+}
+
+fn strategy_executor_action_status_name(status: StrategyExecutorActionStatus) -> &'static str {
+    match status {
+        StrategyExecutorActionStatus::WouldApply => "would_apply",
+        StrategyExecutorActionStatus::Applied => "applied",
+        StrategyExecutorActionStatus::Blocked => "blocked",
+        StrategyExecutorActionStatus::Skipped => "skipped",
+    }
+}
+
+fn render_strategy_executor_apply_report_text(report: &StrategyExecutorApplyReport) -> String {
+    let generated_at = format_automation_time(report.generated_at);
+    let mode = match report.mode {
+        StrategyExecutorRunMode::Preflight => "preflight",
+        StrategyExecutorRunMode::Apply => "apply",
+    };
+    let mut out = format!(
+        "executor apply report: report_id={} plan_id={} source_report_id={} generated_at={} mode={} apply_requested={} actions={} would_apply={} applied={} blocked={} skipped={}\n",
+        report.report_id,
+        report.plan_id,
+        report.source_report_id,
+        generated_at,
+        mode,
+        report.apply_requested,
+        report.summary.total,
+        report.summary.would_apply,
+        report.summary.applied,
+        report.summary.blocked,
+        report.summary.skipped
+    );
+    if !report.allowlist.is_empty() {
+        out.push_str(&format!("allowlist={}\n", report.allowlist.join(",")));
+    }
+    for action in &report.actions {
+        out.push_str(&format!(
+            "- id={} suggestion_id={} code={} action_kind={} status={}\n  reason={}\n",
+            action.action_id,
+            action.suggestion_id,
+            action.code,
+            strategy_execution_action_kind_name(action.action_kind),
+            strategy_executor_action_status_name(action.status),
+            action.reason
+        ));
+    }
+    out
+}
+
+fn render_strategy_executor_apply_report_markdown(
+    report: &StrategyExecutorApplyReport,
+    sibling_json: &str,
+    plan_json: &str,
+) -> String {
+    let generated_at = format_automation_time(report.generated_at);
+    let mode = match report.mode {
+        StrategyExecutorRunMode::Preflight => "preflight",
+        StrategyExecutorRunMode::Apply => "apply",
+    };
+    let mut out = format!(
+        concat!(
+            "# M12 Executor Apply Report\n\n",
+            "- report_id: {}\n",
+            "- plan_id: {}\n",
+            "- source_report_id: {}\n",
+            "- generated_at: {}\n",
+            "- mode: {}\n",
+            "- apply_requested: {}\n",
+            "- allowlist: {}\n",
+            "- total: {}\n",
+            "- would_apply: {}\n",
+            "- applied: {}\n",
+            "- blocked: {}\n",
+            "- skipped: {}\n",
+            "- source_of_truth: {}\n",
+            "- plan_json: {}\n\n",
+            "> Sibling JSON `{}` is the source of truth. This report is derived from `{}`.\n\n",
+            "## Actions\n\n",
+        ),
+        report.report_id,
+        report.plan_id,
+        report.source_report_id,
+        generated_at,
+        mode,
+        report.apply_requested,
+        if report.allowlist.is_empty() {
+            "none".to_string()
+        } else {
+            report.allowlist.join(",")
+        },
+        report.summary.total,
+        report.summary.would_apply,
+        report.summary.applied,
+        report.summary.blocked,
+        report.summary.skipped,
+        sibling_json,
+        plan_json,
+        sibling_json,
+        plan_json
+    );
+    if report.actions.is_empty() {
+        out.push_str("No actions.\n");
+        return out;
+    }
+    for action in &report.actions {
+        out.push_str(&format!(
+            concat!(
+                "### {}\n\n",
+                "- suggestion_id: {}\n",
+                "- code: {}\n",
+                "- action_kind: {}\n",
+                "- status: {}\n",
+                "- subject: {}\n",
+                "- reason: {}\n\n",
+            ),
+            action.action_id,
+            action.suggestion_id,
+            action.code,
+            strategy_execution_action_kind_name(action.action_kind),
+            strategy_executor_action_status_name(action.status),
+            action.subject.as_deref().unwrap_or("none"),
+            action.reason
+        ));
+    }
+    out
+}
+
 fn strategy_report_prefix(generated_at: OffsetDateTime) -> String {
     format!(
         "{:04}-{:02}-{:02}T{:02}{:02}{:02}.{:09}Z-m12-suggest",
@@ -2127,6 +2351,7 @@ fn cmd_writer_lease_label(cmd: &Cmd) -> &'static str {
         Cmd::NotionArchivedRetirement { .. } => "notion-archived-retirement",
         Cmd::NotionSync { .. } => "notion-sync",
         Cmd::NotionSyncIndexBackfill { .. } => "notion-sync-index-backfill",
+        Cmd::SuggestExecutorApply { .. } => "suggest-executor-apply",
         Cmd::VaultBackfill { .. } => "vault-backfill",
         _ => "wiki-cli",
     }
@@ -2152,6 +2377,7 @@ fn cmd_needs_writer_lease(cmd: &Cmd) -> bool {
         | Cmd::Mcp { .. } => true,
         Cmd::IngestLlm { dry_run, .. } => !dry_run,
         Cmd::Fix { dry_run, write, .. } => *write && !dry_run,
+        Cmd::SuggestExecutorApply { apply, .. } => *apply,
         Cmd::VaultBackfill { apply, .. } => *apply,
         Cmd::ConsistencyApply { apply, .. } => *apply,
         Cmd::BatchIngest { dry_run, .. } => !dry_run,
@@ -2211,6 +2437,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             | Cmd::Metrics { .. }
             | Cmd::Dashboard { .. }
             | Cmd::Suggest { .. }
+            | Cmd::SuggestExecutorApply { .. }
     ) {
         banner::print_startup_banner();
     }
@@ -3108,6 +3335,70 @@ fn run_with_engine(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                 print!("{}", render_strategy_report_text(&report));
                 if let Some(plan) = &plan {
                     print!("{}", render_strategy_execution_plan_text(plan));
+                }
+            }
+        }
+        Cmd::SuggestExecutorApply {
+            plan,
+            allow,
+            apply,
+            json,
+            report_dir,
+        } => {
+            let plan_text = std::fs::read_to_string(&plan)?;
+            let plan_data: StrategyExecutionPlan = serde_json::from_str(&plan_text)
+                .map_err(|err| format!("executor plan JSON parse error: {err}"))?;
+            let report_dir = match report_dir {
+                Some(Some(dir)) => Some(resolve_wiki_relative_path(wiki_root.as_deref(), dir)),
+                Some(None) => Some(default_suggest_report_dir(wiki_root.as_deref())),
+                None => None,
+            };
+            if let Some(dir) = &report_dir {
+                std::fs::create_dir_all(dir)?;
+                let probe_path = dir.join(".m12-executor-write-check");
+                std::fs::write(&probe_path, b"")?;
+                let _ = std::fs::remove_file(&probe_path);
+            }
+            let report = build_strategy_executor_apply_report(
+                &mut eng,
+                &repo,
+                &viewer,
+                sync_wiki,
+                wiki_root.as_deref(),
+                &plan_data,
+                &allow,
+                apply,
+            )?;
+            let report_paths = if let Some(dir) = report_dir {
+                let json_name = format!("{}.json", report.report_id);
+                let markdown_name = format!("{}.md", report.report_id);
+                let json_path = dir.join(&json_name);
+                let markdown_path = dir.join(&markdown_name);
+                let plan_json_name = plan
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .unwrap_or("executor-plan.json");
+                std::fs::write(&json_path, serde_json::to_string_pretty(&report)?)?;
+                std::fs::write(
+                    &markdown_path,
+                    render_strategy_executor_apply_report_markdown(
+                        &report,
+                        &json_name,
+                        plan_json_name,
+                    ),
+                )?;
+                Some((json_path, markdown_path))
+            } else {
+                None
+            };
+
+            if json {
+                println!("{}", serde_json::to_string_pretty(&report)?);
+            } else {
+                print!("{}", render_strategy_executor_apply_report_text(&report));
+                if let Some((json_path, markdown_path)) = report_paths {
+                    println!("executor_apply_json_file={}", json_path.display());
+                    println!("executor_apply_markdown_file={}", markdown_path.display());
                 }
             }
         }
@@ -5185,6 +5476,167 @@ fn apply_auto_fixes(eng: &mut LlmWikiEngine<NoopWikiHook>, fixes: &[FixAction]) 
         }
     }
     modified_pages.len()
+}
+
+fn collect_auto_fixes_for_executor(
+    eng: &mut LlmWikiEngine<NoopWikiHook>,
+    viewer: &Scope,
+) -> Vec<FixAction> {
+    let lint_findings = eng.run_basic_lint("cli", Some(viewer));
+    let gap_findings = eng.run_gap_scan(Some(viewer), 2);
+    let mut fixes = map_findings_to_fixes(&lint_findings, &gap_findings);
+    fixes.retain(|fix| fix.fix_type == FixActionType::Auto);
+    fixes
+}
+
+fn auto_fix_suggestion_reason(fix: &FixAction) -> String {
+    format!("Low-risk fixer action is available: {}", fix.description)
+}
+
+fn matching_executor_auto_fix<'a>(
+    fixes: &'a [FixAction],
+    action: &StrategyExecutionAction,
+) -> Option<&'a FixAction> {
+    let subject = action.subject.as_deref()?;
+    fixes.iter().find(|fix| {
+        fix.subject.as_deref() == Some(subject)
+            && auto_fix_suggestion_reason(fix) == action.suggestion_reason
+    })
+}
+
+fn build_strategy_executor_apply_report(
+    eng: &mut LlmWikiEngine<NoopWikiHook>,
+    repo: &SqliteRepository,
+    viewer: &Scope,
+    sync_wiki: bool,
+    wiki_root: Option<&std::path::Path>,
+    plan: &StrategyExecutionPlan,
+    allow: &[ExecutorAllow],
+    apply: bool,
+) -> Result<StrategyExecutorApplyReport, Box<dyn std::error::Error>> {
+    if apply && allow.is_empty() {
+        return Err("--apply requires at least one --allow value".into());
+    }
+    let generated_at = OffsetDateTime::now_utc();
+    let allow_kinds = allow
+        .iter()
+        .map(|item| item.action_kind())
+        .collect::<HashSet<_>>();
+    let mut applied_signatures = HashSet::new();
+    let mut action_reports = Vec::new();
+    let fixes = collect_auto_fixes_for_executor(eng, viewer);
+
+    for action in &plan.actions {
+        let (status, reason) = if action.dry_run_status != StrategyExecutionDryRunStatus::WouldApply
+        {
+            (StrategyExecutorActionStatus::Blocked, action.reason.clone())
+        } else if !allow_kinds.contains(&action.action_kind) {
+            (
+                StrategyExecutorActionStatus::Blocked,
+                format!(
+                    "action_kind {} is not allowed; pass --allow fix-auto-safe to permit it",
+                    strategy_execution_action_kind_name(action.action_kind)
+                ),
+            )
+        } else if action.suggestion_reason.trim().is_empty() {
+            (
+                StrategyExecutorActionStatus::Blocked,
+                "plan action lacks suggestion_reason evidence; regenerate the dry-run plan"
+                    .to_string(),
+            )
+        } else if action.subject.is_none() {
+            (
+                StrategyExecutorActionStatus::Blocked,
+                "plan action has no subject".to_string(),
+            )
+        } else if let Some(fix) = matching_executor_auto_fix(&fixes, action) {
+            let signature = format!(
+                "{}\n{}",
+                action.subject.as_deref().unwrap_or_default(),
+                action.suggestion_reason
+            );
+            if !applied_signatures.insert(signature) {
+                (
+                    StrategyExecutorActionStatus::Skipped,
+                    "duplicate planned auto fix signature".to_string(),
+                )
+            } else if apply {
+                let modified = apply_auto_fixes(eng, std::slice::from_ref(fix));
+                if modified > 0 {
+                    (
+                        StrategyExecutorActionStatus::Applied,
+                        "applied allowlisted auto fix".to_string(),
+                    )
+                } else {
+                    (
+                        StrategyExecutorActionStatus::Skipped,
+                        "matched auto fix was already a no-op".to_string(),
+                    )
+                }
+            } else {
+                (
+                    StrategyExecutorActionStatus::WouldApply,
+                    "validated allowlisted auto fix; pass --apply to execute".to_string(),
+                )
+            }
+        } else {
+            (
+                StrategyExecutorActionStatus::Skipped,
+                "planned auto fix is no longer present; rerun suggest --executor-plan".to_string(),
+            )
+        };
+
+        action_reports.push(StrategyExecutorApplyActionReport {
+            action_id: action.action_id.clone(),
+            suggestion_id: action.suggestion_id.clone(),
+            code: action.code.clone(),
+            subject: action.subject.clone(),
+            action_kind: action.action_kind,
+            status,
+            reason,
+        });
+    }
+
+    let summary = StrategyExecutorApplySummary {
+        total: action_reports.len(),
+        would_apply: action_reports
+            .iter()
+            .filter(|action| action.status == StrategyExecutorActionStatus::WouldApply)
+            .count(),
+        applied: action_reports
+            .iter()
+            .filter(|action| action.status == StrategyExecutorActionStatus::Applied)
+            .count(),
+        blocked: action_reports
+            .iter()
+            .filter(|action| action.status == StrategyExecutorActionStatus::Blocked)
+            .count(),
+        skipped: action_reports
+            .iter()
+            .filter(|action| action.status == StrategyExecutorActionStatus::Skipped)
+            .count(),
+    };
+
+    if apply && summary.applied > 0 {
+        eng.save_to_repo_and_flush_outbox_with_policy(repo, 128, 3)?;
+        maybe_sync_projection(sync_wiki, wiki_root, eng)?;
+    }
+
+    Ok(StrategyExecutorApplyReport {
+        report_id: strategy_executor_report_prefix(generated_at),
+        plan_id: plan.plan_id.clone(),
+        source_report_id: plan.source_report_id.clone(),
+        generated_at,
+        mode: if apply {
+            StrategyExecutorRunMode::Apply
+        } else {
+            StrategyExecutorRunMode::Preflight
+        },
+        apply_requested: apply,
+        allowlist: allow.iter().map(|item| item.name().to_string()).collect(),
+        summary,
+        actions: action_reports,
+    })
 }
 
 /// 检测并修复 lint/gap finding，输出修复动作列表。

@@ -10,13 +10,13 @@
 
 ## Active PRDs
 
-- [m12-executor.md](m12-executor.md) — M12 executor dry-run planner and guarded apply lane. Dry-run planner complete in PR #81; guarded apply next.
 - [production-wiki-compiler.md](production-wiki-compiler.md) — Notion-equivalent local compiler operation: raw source -> resolver -> summary + concept/entity pages -> Vault -> outbox -> Mempalace -> query/explain; controlled production scale-up is active.
 - [vault-backfill-and-palace-init.md](vault-backfill-and-palace-init.md) — 历史 vault 回填、`wiki.db` 初始化、`palace.db` 初始化、共享 Agent 运行默认值。
 - [storage-embeddings-followup.md](storage-embeddings-followup.md) — C16 follow-up: single-transaction `wiki_state` + outbox write path; optional ANN/index for `wiki_embedding` search (replaces O(n) scan at scale). Spec: [persist-snapshot-outbox](../specs/persist-snapshot-outbox/requirements.md), [embedding-ann-index](../specs/embedding-ann-index/requirements.md).
 
 ## Completed PRDs Still Useful As Reference
 
+- [m12-executor.md](m12-executor.md) — PR #81/#82：M12 executor dry-run planner plus guarded apply with explicit allowlist.
 - [time-library-unification.md](time-library-unification.md) — PR #80：remove remaining `chrono` usage and standardize workspace timestamps on `time`.
 - [cli-command-modularization.md](cli-command-modularization.md) — PR #78/#79：staged `wiki-cli` command handler extraction, no-engine dispatch/runtime setup, and CLI smoke coverage without clap behavior drift.
 - [row-level-wiki-state.md](row-level-wiki-state.md) — PR #76/#77：row-level `wiki_state` migration/dual-write, row-primary read, blob fallback, and verification API.

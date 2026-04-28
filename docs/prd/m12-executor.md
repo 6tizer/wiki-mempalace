@@ -35,4 +35,6 @@ weakening the current read-only default.
 
 - **Dry-run planner complete in PR #81** — `suggest --executor-plan` emits typed
   dry-run plans and report siblings.
-- Guarded apply remains the next PR.
+- **Guarded apply complete in PR #82** — consume plan JSON with explicit
+  `--apply` + allowlist.
+- M12 executor roadmap item is complete.

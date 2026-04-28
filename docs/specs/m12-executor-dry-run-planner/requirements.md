@@ -6,7 +6,7 @@
   `StrategyReport`.
 - **R2 typed actions**: Each action must include `suggestion_id`, `code`,
   `subject`, `execution_policy`, `action_kind`, `dry_run_status`,
-  `command_preview`, and `reason`.
+  `command_preview`, `suggestion_reason`, and `reason`.
 - **R3 no writes**: Planner must not mutate DB, outbox, Vault projection, or
   Mempalace.
 - **R4 opt-in CLI**: `wiki-cli suggest` keeps existing output unless

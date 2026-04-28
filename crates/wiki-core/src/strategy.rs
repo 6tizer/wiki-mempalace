@@ -115,6 +115,8 @@ pub struct StrategyExecutionAction {
     pub action_kind: StrategyExecutionActionKind,
     pub dry_run_status: StrategyExecutionDryRunStatus,
     pub command_preview: Option<String>,
+    #[serde(default)]
+    pub suggestion_reason: String,
     pub reason: String,
 }
 
@@ -157,6 +159,7 @@ pub fn build_strategy_execution_plan(report: &StrategyReport) -> StrategyExecuti
                 action_kind,
                 dry_run_status,
                 command_preview: suggestion.suggested_command.clone(),
+                suggestion_reason: suggestion.reason.clone(),
                 reason: reason.to_string(),
             }
         })
@@ -347,6 +350,7 @@ mod tests {
         );
         assert_eq!(json["actions"][0]["dry_run_status"], "blocked");
         assert_eq!(json["actions"][0]["action_kind"], "human_required");
+        assert_eq!(json["actions"][0]["suggestion_reason"], "Needs human");
         assert_eq!(
             json["actions"][0]["execution_policy"],
             serde_json::json!("human_required")

@@ -367,3 +367,12 @@
 - Spec changes needed: `command_preview` 只能做审计展示；下一项 guarded apply 必须使用 `action_kind` + allowlist，不能 shell parse。
 - Tests or reviews that caught issues: 本 PR 增加 core plan 序列化/映射测试，以及 CLI JSON envelope/report-dir sibling 测试。
 - Next plan note: 最后一项进入 M12 executor guarded apply：dry-run-first、allowlist、explicit apply flag。
+
+## 2026-04-28 / M12 Executor Guarded Apply
+
+- Scope: 新增 `wiki-cli suggest-executor-apply`，消费 `*-executor-plan.json`，默认 preflight；只有 `--apply` + `--allow fix-auto-safe` 执行低风险 auto fix。
+- What worked: apply 不解析 `command_preview`，而是用 typed `action_kind`、`subject`、`suggestion_reason` 去匹配当前 auto fix，避免执行过期或伪造命令。
+- What caused rework: dry-run plan 需要补 `suggestion_reason` 作为 evidence；旧 plan 缺该字段时必须重新生成。
+- Spec changes needed: M12 executor 后续若增加 supersede/crystallize，必须先扩展 typed action 和 allowlist，不能直接复用 shell command。
+- Tests or reviews that caught issues: suggest 集成测试覆盖 preflight 不写、`--apply` 无 allowlist 失败、allowlisted auto fix 成功 apply。
+- Next plan note: 这项合并后 roadmap 23 项全部完成；剩余工作转入生产手动验收或新 roadmap。

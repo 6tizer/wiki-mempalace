@@ -1,10 +1,10 @@
 use assert_cmd::Command;
 use predicates::str::contains;
 use serde_json::Value;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use time::OffsetDateTime;
-use wiki_core::WikiEvent;
-use wiki_storage::{SqliteRepository, WikiRepository};
+use wiki_core::{EntryType, Scope, WikiEvent, WikiPage};
+use wiki_storage::{SqliteRepository, StorageSnapshot, WikiRepository};
 
 fn wiki_cli() -> Command {
     Command::cargo_bin("wiki-cli").unwrap()
@@ -31,6 +31,38 @@ fn append_query_event(db_path: &Path, fingerprint: &str, top_doc_ids: Vec<String
         at: OffsetDateTime::now_utc(),
     })
     .unwrap();
+}
+
+fn seed_incomplete_concept_page(db_path: &Path) -> wiki_core::PageId {
+    let scope = Scope::Private {
+        agent_id: "cli".to_string(),
+    };
+    let page = WikiPage::new("Concept A", "## 定义\nOnly one section", scope)
+        .with_entry_type(EntryType::Concept);
+    let page_id = page.id;
+    let repo = SqliteRepository::open(db_path).unwrap();
+    repo.save_snapshot(&StorageSnapshot {
+        pages: vec![page],
+        ..StorageSnapshot::default()
+    })
+    .unwrap();
+    page_id
+}
+
+fn find_executor_plan_json(report_dir: &Path) -> PathBuf {
+    std::fs::read_dir(report_dir)
+        .unwrap()
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .find(|path| {
+            path.extension().and_then(|ext| ext.to_str()) == Some("json")
+                && path
+                    .file_stem()
+                    .unwrap()
+                    .to_string_lossy()
+                    .ends_with("executor-plan")
+        })
+        .expect("executor plan json")
 }
 
 #[test]
@@ -204,6 +236,143 @@ fn suggest_executor_plan_report_dir_writes_plan_siblings() {
     assert_eq!(json["plan_id"], serde_json::json!(plan_id.as_ref()));
     assert_eq!(json["mode"], "dry_run");
     assert!(markdown.contains("does not execute writes"));
+}
+
+#[test]
+fn suggest_executor_apply_preflight_does_not_write() {
+    let db = tempfile::NamedTempFile::new().unwrap();
+    let db_path = db.path().to_owned();
+    let temp_dir = tempfile::tempdir().unwrap();
+    let report_dir = temp_dir.path().join("suggestions");
+    let page_id = seed_incomplete_concept_page(&db_path);
+
+    wiki_cli()
+        .arg("--db")
+        .arg(&db_path)
+        .arg("suggest")
+        .arg("--executor-plan")
+        .arg("--report-dir")
+        .arg(&report_dir)
+        .assert()
+        .success();
+    let plan_path = find_executor_plan_json(&report_dir);
+    let before = SqliteRepository::open(&db_path)
+        .unwrap()
+        .load_snapshot()
+        .unwrap();
+    let before_page = before
+        .pages
+        .iter()
+        .find(|page| page.id == page_id)
+        .expect("seed page exists")
+        .clone();
+
+    wiki_cli()
+        .arg("--db")
+        .arg(&db_path)
+        .arg("suggest-executor-apply")
+        .arg("--plan")
+        .arg(&plan_path)
+        .arg("--allow")
+        .arg("fix-auto-safe")
+        .assert()
+        .success()
+        .stdout(contains("mode=preflight"))
+        .stdout(contains("would_apply=1"))
+        .stdout(contains("applied=0"));
+
+    let after = SqliteRepository::open(&db_path)
+        .unwrap()
+        .load_snapshot()
+        .unwrap();
+    let after_page = after
+        .pages
+        .iter()
+        .find(|page| page.id == page_id)
+        .expect("page still exists");
+    assert_eq!(after_page.markdown, before_page.markdown);
+    assert_eq!(after_page.updated_at, before_page.updated_at);
+}
+
+#[test]
+fn suggest_executor_apply_requires_explicit_allowlist() {
+    let db = tempfile::NamedTempFile::new().unwrap();
+    let db_path = db.path().to_owned();
+    let temp_dir = tempfile::tempdir().unwrap();
+    let report_dir = temp_dir.path().join("suggestions");
+    seed_incomplete_concept_page(&db_path);
+
+    wiki_cli()
+        .arg("--db")
+        .arg(&db_path)
+        .arg("suggest")
+        .arg("--executor-plan")
+        .arg("--report-dir")
+        .arg(&report_dir)
+        .assert()
+        .success();
+    let plan_path = find_executor_plan_json(&report_dir);
+
+    wiki_cli()
+        .arg("--db")
+        .arg(&db_path)
+        .arg("suggest-executor-apply")
+        .arg("--plan")
+        .arg(&plan_path)
+        .arg("--apply")
+        .assert()
+        .failure()
+        .stderr(contains("--apply requires at least one --allow value"));
+}
+
+#[test]
+fn suggest_executor_apply_runs_allowlisted_auto_fix() {
+    let db = tempfile::NamedTempFile::new().unwrap();
+    let db_path = db.path().to_owned();
+    let temp_dir = tempfile::tempdir().unwrap();
+    let report_dir = temp_dir.path().join("suggestions");
+    let apply_report_dir = temp_dir.path().join("apply-reports");
+    let page_id = seed_incomplete_concept_page(&db_path);
+
+    wiki_cli()
+        .arg("--db")
+        .arg(&db_path)
+        .arg("suggest")
+        .arg("--executor-plan")
+        .arg("--report-dir")
+        .arg(&report_dir)
+        .assert()
+        .success();
+    let plan_path = find_executor_plan_json(&report_dir);
+
+    wiki_cli()
+        .arg("--db")
+        .arg(&db_path)
+        .arg("suggest-executor-apply")
+        .arg("--plan")
+        .arg(&plan_path)
+        .arg("--allow")
+        .arg("fix-auto-safe")
+        .arg("--apply")
+        .arg("--report-dir")
+        .arg(&apply_report_dir)
+        .assert()
+        .success()
+        .stdout(contains("mode=apply"))
+        .stdout(contains("applied=1"))
+        .stdout(contains("executor_apply_json_file="));
+
+    let snapshot = SqliteRepository::open(&db_path)
+        .unwrap()
+        .load_snapshot()
+        .unwrap();
+    let page = snapshot
+        .pages
+        .iter()
+        .find(|page| page.id == page_id)
+        .expect("page still exists");
+    assert!(page.markdown.contains("待补充"), "{}", page.markdown);
+    assert!(apply_report_dir.exists());
 }
 
 #[test]

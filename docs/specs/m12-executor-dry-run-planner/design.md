@@ -36,6 +36,7 @@ flowchart TD
   - `action_kind`
   - `dry_run_status`
   - `command_preview`
+  - `suggestion_reason`
   - `reason`
 
 ## Mapping

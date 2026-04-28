@@ -56,7 +56,7 @@
 
 - Internal operator/executor:
   - Dry-run planner: active in `docs/specs/m12-executor-dry-run-planner/`.
-  - Guarded apply remains future scope: allowlist, dry-run-first, explicit apply.
+  - Guarded apply: active in `docs/specs/m12-executor-guarded-apply/`.
 - Dashboard integration: after M12 lands, optionally show or link the latest
   suggestion report from `wiki-cli dashboard`.
 - Query history schema: consider adding explicit viewer scope or a true query
