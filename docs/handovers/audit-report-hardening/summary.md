@@ -4,6 +4,10 @@
 
 `codex/audit-report-hardening`
 
+## Merge
+
+PR #58 已于 2026-04-28 合入。
+
 ## Completed
 
 - Added bounded MCP stdin reader with 10 MiB per-line cap.
