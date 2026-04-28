@@ -17,6 +17,10 @@ on:
         description: "Sample size; use 0 for full dataset"
         required: true
         default: "50"
+      compare-semantic-fusion:
+        description: "Compare query baseline against semantic fusion"
+        required: true
+        default: "true"
   schedule:
     - cron: "0 19 * * *"
     - cron: "0 20 * * 6"
@@ -46,6 +50,7 @@ jobs:
           set -euo pipefail
           mode="${{ github.event.inputs.mode || 'nightly' }}"
           sample_size="${{ github.event.inputs['sample-size'] || '50' }}"
+          compare_semantic_fusion="${{ github.event.inputs['compare-semantic-fusion'] || 'true' }}"
 
           if [[ "${{ github.event_name }}" == "schedule" ]]; then
             case "${{ github.event.schedule }}" in
@@ -70,6 +75,7 @@ jobs:
 
           echo "mode=$mode" >> "$GITHUB_OUTPUT"
           echo "sample_size=$sample_size" >> "$GITHUB_OUTPUT"
+          echo "compare_semantic_fusion=$compare_semantic_fusion" >> "$GITHUB_OUTPUT"
 
       - name: Fetch LongMemEval dataset
         id: fetch
@@ -106,6 +112,9 @@ jobs:
           )
           if [[ "${{ steps.config.outputs.sample_size }}" != "0" ]]; then
             args+=(--sample-size "${{ steps.config.outputs.sample_size }}")
+          fi
+          if [[ "${{ steps.config.outputs.compare_semantic_fusion }}" == "true" ]]; then
+            args+=(--compare-semantic-fusion)
           fi
           python3 scripts/longmemeval_run.py "${args[@]}"
           test -s "$LONGMEMEVAL_ARTIFACT_DIR/longmemeval-report.json"
