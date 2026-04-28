@@ -54,3 +54,4 @@
 - [cli-command-modularization-phase2/](cli-command-modularization-phase2/) — no-engine dispatcher and shared runtime setup extraction with CLI smoke coverage。已合入 PR #79。
 - [time-library-unification/](time-library-unification/) — replace remaining `chrono` timestamp usage with `time` across local crates。已合入 PR #80。
 - [m12-executor-dry-run-planner/](m12-executor-dry-run-planner/) — derive typed dry-run executor plans from M12 `StrategyReport`。已合入 PR #81。
+- [m12-executor-guarded-apply/](m12-executor-guarded-apply/) — guarded apply for M12 executor plans with explicit allowlist。已合入 PR #82。
