@@ -39,3 +39,4 @@
 - [mcp-typed-errors/](mcp-typed-errors/) — MCP JSON-RPC typed error mapping：稳定 `error.code` 与 `error.data.kind`，供后续 MCP Vault Sync / 客户端诊断复用。已合入 PR #60。
 - [mcp-vault-sync/](mcp-vault-sync/) — MCP write tools 在 `--sync-wiki` 启用时自动刷新 Vault projection。已合入 PR #61。
 - [outbox-consumer-cursors/](outbox-consumer-cursors/) — Consumer-scoped outbox cursor export API plus CLI/consumer cutover。已合入 PR #62/#63。
+- [multi-process-writer-lease/](multi-process-writer-lease/) — `wiki.db.writer.lock` writer lease for write CLI/MCP entrypoints。已合入 PR #64。

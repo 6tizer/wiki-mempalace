@@ -82,10 +82,10 @@ MCP 写工具未显式传 `scope` 时使用 `--viewer-scope`；需要私域时�
 > outbox flush；自 C16A 起 snapshot 与本次 outbox 在同一 SQLite transaction
 > 内提交。Agent 无需手动触发持久化 / outbox flush。
 
-> **单 writer 约束**：不要让两个长期运行的 `wiki-cli mcp` / `LlmWikiEngine`
-> 进程同时写同一个 `wiki.db`。当前 SQLite transaction 能保护单次提交原子性，
-> 但每个进程仍持有自己的内存 snapshot；并行 writer 可能用旧 snapshot 覆盖新状态。
-> 多 agent 共享时，优先共用同一个 MCP server，或串行执行写入命令。
+> **单 writer 约束**：写入型 CLI / MCP 入口会先获取 `wiki.db.writer.lock`
+> writer lease；拿不到 lease 时 fail fast。SQLite transaction 仍保护单次提交原子性，
+> lease 避免多个进程各自持有旧内存 snapshot 后互相覆盖。多 agent 共享时仍优先共用
+> 同一个 MCP server，或串行执行写入命令。
 
 ## 1. Ingest
 

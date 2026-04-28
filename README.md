@@ -14,10 +14,10 @@
 > 所有 source / summary / concept / entity 文件的目录、命名、frontmatter、正文骨架必须遵守该文档；
 > 未对齐的内容必须在写入前修复，不得通过新增"兼容写法"绕过。
 
-> **Writer safety**：同一个 `wiki.db` 同一时间只应有一个长期运行的 writer
-> (`wiki-cli mcp` / `LlmWikiEngine`)。SQLite transaction 保证单次提交原子性，
-> 但不能合并多个进程各自持有的旧内存 snapshot。多 agent 共享时优先共用同一个
-> MCP server，或串行执行写命令。
+> **Writer safety**：写入型 CLI / MCP 入口会先获取 `wiki.db.writer.lock`
+> writer lease；拿不到 lease 时 fail fast。SQLite transaction 仍负责单次提交原子性，
+> lease 负责避免多个进程各自持有旧内存 snapshot 后互相覆盖。多 agent 共享时仍优先
+> 共用同一个 MCP server，或串行执行写命令。
 
 ---
 

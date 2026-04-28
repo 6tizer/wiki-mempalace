@@ -205,3 +205,12 @@
 - Spec changes needed: `--last-id` 文档不能再写成“起点”，应写成 `max(cursor_start_after_id, last_id)` 的 floor，且不能回退 consumer progress。
 - Tests or reviews that caught issues: `cargo test -p wiki-cli cursor -- --nocapture` 覆盖 cursor、fresh consumer、manual floor 三种导出路径。
 - Next plan note: 下一项进入 `Multi-process Write Lock / Lease`，先处理多进程写入互斥，再扩大 reliability test matrix。
+
+## 2026-04-28 / Multi-process Writer Lease
+
+- Scope: 增加 `wiki.db.writer.lock` writer lease，写入型 CLI / MCP 入口在加载 engine 前拿锁；读命令不拿锁。
+- What worked: 文件 `create_new` 能在不引新依赖、不改 DB schema 的情况下提供跨进程 fail-fast；TTL 保留崩溃恢复路径。
+- What caused rework: CLI `main()` 返回 boxed error 时会打印 Rust variant；lease acquire 需要转成 Display 字符串，让 stderr 对操作员可读。
+- Spec changes needed: writer 分类要明确 query/lint/gap 也属于 DB writer，因为它们会记录 query/lint/gap 运行状态或保存 snapshot。
+- Tests or reviews that caught issues: storage tests 覆盖 busy/release/stale/owner-safe drop；CLI tests 覆盖 writer/read-only 分类、busy fail-fast、metrics 被锁时仍可读。
+- Next plan note: 下一项是 `Reliability Test Matrix`，可以直接把 writer lease busy、DB lock/failure injection 和 MCP malformed/oversized 放进回归矩阵。
