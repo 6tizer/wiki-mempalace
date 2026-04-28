@@ -187,3 +187,12 @@
 - Spec changes needed: MCP API reference 要把 projection side effect 写进 Runtime Rules。
 - Tests or reviews that caught issues: focused tests 覆盖 write_page projection 和 projection 失败的 typed `storage_error`。
 - Next plan note: 后续 `Outbox Consumer Cursors` 不应把 Vault projection 和 Mempalace consumption 混在同一协议里。
+
+## 2026-04-28 / Outbox Consumer Cursors Phase 1
+
+- Scope: 新增 storage-level consumer-scoped outbox export API，不改变 CLI 默认导出/ack 行为。
+- What worked: `wiki_outbox_consumer_progress` 已存在；Phase 1 只需要把 cursor 读取和 NDJSON export 包成一个明确 API。
+- What caused rework: roadmap 原文把 schema/API 和 cutover 写在同一项；实现时必须拆开，避免一次 PR 同时改协议和调用方行为。
+- Spec changes needed: outbox docs 要明确 legacy ID export 与 consumer-scoped export 同时存在。
+- Tests or reviews that caught issues: focused storage test 覆盖 consumer A ack 后 consumer B 仍从自己的 cursor 导出。
+- Next plan note: Phase 2 再切 `consume-to-mempalace` / export CLI 默认语义，并保留 `--last-id` manual override。
