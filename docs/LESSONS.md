@@ -26,6 +26,15 @@
 - Agent-facing CLI 默认值不要依赖 cwd；只要语义属于 vault 输出，相对路径应在
   `--wiki-dir` 存在时解析为 vault-relative，并用测试固定。
 
+## 2026-04-28 / PR #76 Row-level Wiki State Storage migration
+
+- Scope: 为 `wiki_state` 增加 row-level mirror，但保留单行 JSON blob 为主读路径。
+- What worked: dual-write 放进现有 snapshot/outbox transaction inner，embedding / alias / Notion index 组合写入自动继承同一回滚边界。
+- What caused rework: edges 没有稳定 id，row-level mirror 必须用 ordinal key + position 保留顺序，不能假造业务 id。
+- Spec changes needed: cutover 仍是下一 PR；本 PR 只提供 fallback row load，不把 rows 设为默认真源。
+- Tests or reviews that caught issues: focused storage tests 固定 dual-write、stale row 清理、row insert failure rollback。
+- Next plan note: 下一 PR 才做 row-level primary read、迁移验证和兼容层清理计划。
+
 ## 2026-04-28 / PR #75 J14 Semantic Fusion Benchmark
 
 - Scope: 给 LongMemEval runner 增加 `--compare-semantic-fusion`，同一 case 同时报告 `query_baseline` 与 `semantic_fusion`。
