@@ -71,6 +71,36 @@ fn suggest_json_is_parseable() {
 }
 
 #[test]
+fn suggest_executor_plan_json_wraps_report_and_plan() {
+    let db = tempfile::NamedTempFile::new().unwrap();
+    let db_path = db.path().to_owned();
+
+    let output = wiki_cli()
+        .arg("--db")
+        .arg(&db_path)
+        .arg("suggest")
+        .arg("--executor-plan")
+        .arg("--json")
+        .output()
+        .unwrap();
+
+    assert!(output.status.success(), "{output:?}");
+    let json: Value = serde_json::from_slice(&output.stdout).unwrap();
+    let report_id = json["strategy_report"]["report_id"].as_str().unwrap();
+    assert!(report_id.ends_with("-m12-suggest"));
+    assert_eq!(
+        json["strategy_report"]["suggestions"],
+        serde_json::json!([])
+    );
+    assert_eq!(
+        json["executor_plan"]["source_report_id"],
+        serde_json::json!(report_id)
+    );
+    assert_eq!(json["executor_plan"]["mode"], "dry_run");
+    assert_eq!(json["executor_plan"]["actions"], serde_json::json!([]));
+}
+
+#[test]
 fn suggest_report_dir_writes_json_and_markdown_siblings() {
     let db = tempfile::NamedTempFile::new().unwrap();
     let db_path = db.path().to_owned();
@@ -115,6 +145,65 @@ fn suggest_report_dir_writes_json_and_markdown_siblings() {
     assert!(markdown.contains(&format!(
         "Sibling JSON `{json_name}` is the source of truth"
     )));
+}
+
+#[test]
+fn suggest_executor_plan_report_dir_writes_plan_siblings() {
+    let db = tempfile::NamedTempFile::new().unwrap();
+    let db_path = db.path().to_owned();
+    let temp_dir = tempfile::tempdir().unwrap();
+    let report_dir = temp_dir.path().join("suggestions");
+
+    wiki_cli()
+        .arg("--db")
+        .arg(&db_path)
+        .arg("suggest")
+        .arg("--executor-plan")
+        .arg("--report-dir")
+        .arg(&report_dir)
+        .assert()
+        .success()
+        .stdout(contains("executor dry-run plan:"))
+        .stdout(contains("executor_plan_json_file="))
+        .stdout(contains("executor_plan_markdown_file="));
+
+    let paths = std::fs::read_dir(&report_dir)
+        .unwrap()
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .collect::<Vec<_>>();
+    let json_files = paths
+        .iter()
+        .filter(|path| path.extension().and_then(|ext| ext.to_str()) == Some("json"))
+        .count();
+    let markdown_files = paths
+        .iter()
+        .filter(|path| path.extension().and_then(|ext| ext.to_str()) == Some("md"))
+        .count();
+    assert_eq!(json_files, 2, "{paths:?}");
+    assert_eq!(markdown_files, 2, "{paths:?}");
+
+    let plan_json = paths
+        .iter()
+        .find(|path| {
+            path.file_stem()
+                .unwrap()
+                .to_string_lossy()
+                .ends_with("executor-plan")
+        })
+        .expect("plan json or markdown file");
+    let plan_id = plan_json.file_stem().unwrap().to_string_lossy();
+    let plan_json_path = report_dir.join(format!("{plan_id}.json"));
+    let plan_markdown_path = report_dir.join(format!("{plan_id}.md"));
+    assert!(plan_json_path.exists(), "{paths:?}");
+    assert!(plan_markdown_path.exists(), "{paths:?}");
+
+    let json: Value =
+        serde_json::from_str(&std::fs::read_to_string(plan_json_path).unwrap()).unwrap();
+    let markdown = std::fs::read_to_string(plan_markdown_path).unwrap();
+    assert_eq!(json["plan_id"], serde_json::json!(plan_id.as_ref()));
+    assert_eq!(json["mode"], "dry_run");
+    assert!(markdown.contains("does not execute writes"));
 }
 
 #[test]

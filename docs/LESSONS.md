@@ -358,3 +358,12 @@
 - Spec changes needed: latest 指针采用 JSON/Markdown 文件，不用 symlink，便于跨平台和 Vault 可见。
 - Tests or reviews that caught issues: CLI integration test 直接跑 `automation run vault-reports`，验证 bundle 内所有文件存在；unit test 覆盖 retention pruning。
 - Next plan note: 下一项进入 `Notion Archived Source Retirement audit/plan`，保持 DB-first，先 dry-run 不改 DB/Vault。
+
+## 2026-04-28 / M12 Executor Dry-Run Planner
+
+- Scope: 在 `wiki-cli suggest` 后增加 opt-in `--executor-plan`，从 `StrategyReport` 派生 typed dry-run action plan，不执行写入。
+- What worked: 把 plan 作为独立模型和 report sibling，而不是改写现有 `StrategyReport`，保持 M12 首版 JSON 合同不漂移。
+- What caused rework: 无。
+- Spec changes needed: `command_preview` 只能做审计展示；下一项 guarded apply 必须使用 `action_kind` + allowlist，不能 shell parse。
+- Tests or reviews that caught issues: 本 PR 增加 core plan 序列化/映射测试，以及 CLI JSON envelope/report-dir sibling 测试。
+- Next plan note: 最后一项进入 M12 executor guarded apply：dry-run-first、allowlist、explicit apply flag。
