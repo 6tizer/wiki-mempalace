@@ -43,7 +43,7 @@
 | Contradiction Scan Scaling | 💤 未开始 | 审计延后项：优化 `naive_contradiction_pairs` O(n²) 路径，加入 stale 预过滤、scope 分桶、可选 embedding 预筛或 bounded candidates |
 | Reliability Test Matrix | ✅ 已合入 PR #65 | 审计延后项：已补 DB batch rollback failure injection、大 snapshot smoke、MCP malformed parse、LLM malformed JSON extraction；writer lease busy / MCP oversized 已在相邻测试覆盖 |
 | Automation Integrity Check | ✅ 已合入 PR #58 | PR #58 已把 `PRAGMA integrity_check` 纳入 `automation health` 输出；scheduled report 保留策略仍属于 `Scheduled Vault Reports` |
-| Dependency Audit Automation | 💤 未开始 | 审计建议：定期运行 `cargo audit` 或等价供应链检查，并把结果接入报告/CI 低频 job |
+| Dependency Audit Automation | ✅ 已合入 PR #66 | 审计建议：已新增 scheduled/manual `cargo audit` workflow，上传 JSON/stderr artifact；quick CI 只做 wrapper 语法检查 |
 | Time Library Unification | 💤 未开始 | 审计低优先项：评估 `chrono` vs `time` 双时间库，长期优先统一到 `time`；若保留 mempalace 独立性，文档化边界 |
 | Scheduled Vault Reports | 💤 未开始 | 待 PRD；把 `vault-audit`、`metrics`、`dashboard`、`automation health`、`suggest` 等报告接入定时生成和保留策略 |
 | C16A Atomic snapshot + outbox | ✅ 已合入 | PR #25 已 merge；新增 `save_snapshot_and_append_outbox` 单事务持久化路径；CLI/MCP/backfill 写路径已切到原子提交 |
@@ -81,7 +81,7 @@ scale-up 混做。
 
 1. Multi-process Write Guardrails：PR #64 已用 repository-adjacent writer lease 强制单 writer。
 2. Reliability Test Matrix：PR #65 已补核心回归矩阵；后续可在独立慢速 lane 扩展 fuzz/perf。
-3. Dependency Audit Automation：低频供应链检查，不拖慢 quick CI。
+3. Dependency Audit Automation：PR #66 已新增 scheduled/manual `cargo audit` lane，不拖慢 quick CI。
 
 ### P5：Embedding / Retrieval 线（同一方向，按阶段实现）
 
@@ -130,7 +130,7 @@ PR #58 完成 hardening 小补丁后，剩余 12 个未完成/部分完成项按
 | 8 | Contradiction Scan Scaling | `Contradiction Scan Scaling` | 优化 contradiction O(n²) 路径，独立做性能/语义回归。 |
 | 9 | Multi-process Write Lock / Lease | `Multi-process Write Guardrails` | 已由 PR #64 完成：`wiki.db.writer.lock` writer lease + 写入口 fail-fast。 |
 | 10 | Reliability Test Matrix | `Reliability Test Matrix` | 已由 PR #65 完成核心 quick 矩阵；慢速 fuzz/perf 可后续独立扩展。 |
-| 11 | Dependency Audit Automation | `Dependency Audit Automation` | 增加低频供应链检查，不拖慢 quick CI。 |
+| 11 | Dependency Audit Automation | `Dependency Audit Automation` | 已由 PR #66 完成 scheduled/manual `cargo audit` lane；quick CI 不安装或运行 audit。 |
 | 12 | Scheduled Vault Reports | `Scheduled Vault Reports` | 定时生成 vault-audit/metrics/dashboard/health/suggest 报告；可包含 automation health 历史保留。 |
 | 13 | Notion Archived Source Retirement audit/plan | `Notion Archived Source Retirement` | 先只做 archived source audit/plan，确保 DB-first 退役模型正确。 |
 | 14 | Notion Archived Source Retirement apply | `Notion Archived Source Retirement` | 再做 apply/production docs，避免手删 Markdown。 |

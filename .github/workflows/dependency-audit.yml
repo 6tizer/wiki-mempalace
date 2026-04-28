@@ -1,0 +1,42 @@
+name: Dependency Audit
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 3 * * 1"
+
+permissions:
+  contents: read
+
+jobs:
+  cargo-audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install cargo-audit
+        run: |
+          if ! cargo audit --version >/dev/null 2>&1; then
+            cargo install cargo-audit --locked
+          fi
+          cargo audit --version
+
+      - name: Run cargo audit
+        run: scripts/dependency-audit.sh
+
+      - name: Upload dependency audit artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dependency-audit-${{ github.run_id }}
+          path: artifacts/dependency-audit/
+          if-no-files-found: warn
+          retention-days: 30

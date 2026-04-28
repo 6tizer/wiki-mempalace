@@ -31,6 +31,7 @@ jobs:
       - name: Shell script syntax check
         run: |
           bash -n scripts/backup.sh
+          bash -n scripts/dependency-audit.sh
           bash -n scripts/e2e.sh
           bash -n scripts/recovery-drill.sh
 
