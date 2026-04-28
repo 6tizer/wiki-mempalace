@@ -17,7 +17,7 @@ cargo run -p wiki-cli -- \
 - Input cap: each request line is limited to 10 MiB before JSON parsing.
 - Scope default: wiki write tools use server `--viewer-scope` when `scope` is omitted.
 - Writer safety: run only one long-lived writer MCP server per `wiki.db`; multiple writers can overwrite each other via stale in-memory snapshots.
-- Vault projection: MCP write tools persist DB/outbox state; automatic projection after MCP writes is not yet implemented.
+- Vault projection: MCP write tools persist DB/outbox state. When the server is started with both `--wiki-dir` and `--sync-wiki`, write tools also refresh `pages/`, `index.md`, and `log.md` through `write_projection`.
 
 ## Wiki Tools
 
@@ -27,7 +27,7 @@ cargo run -p wiki-cli -- \
 | `wiki_ingest` | `uri`, `body` | `scope`, `tags` | yes | Redacts sensitive content, writes source, persists outbox. |
 | `wiki_file_claim` | `text` | `scope`, `tier`, `tags` | yes | Creates claim. Default tier is command implementation default. |
 | `wiki_supersede_claim` | `old_claim_id`, `new_text` | `scope`, `tier` | yes | Marks old claim stale and files replacement. |
-| `wiki_query` | `query` | `rrf_k`, `per_stream_limit`, `write_page` | optional | Writes a page only when `write_page=true`. |
+| `wiki_query` | `query` | `rrf_k`, `per_stream_limit`, `write_page` | yes | Records query state; also writes a page when `write_page=true`. |
 | `wiki_promote_claim` | `claim_id` | none | yes | Promotes claim if schema thresholds allow. |
 | `wiki_crystallize` | `question` | `findings`, `files`, `lessons`, `entry_type` | yes | Creates a crystallized wiki page and candidate claims. |
 | `wiki_lint` | none | none | yes | Runs lint and records lint event. |

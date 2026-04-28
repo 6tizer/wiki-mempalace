@@ -2741,7 +2741,11 @@ fn run_with_engine(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                 once,
                 &cli.llm_config,
                 cli.vectors,
-                wiki_root.as_deref(),
+                if sync_wiki {
+                    wiki_root.as_deref()
+                } else {
+                    None
+                },
                 cli.palace
                     .as_ref()
                     .map(|p| p.to_string_lossy().into_owned())

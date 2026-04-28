@@ -24,7 +24,7 @@
 | B5 Orphan Governance | ✅ 已合入并已跑生产 apply | PR #28 / PR #30 已 merge；`vault-audit` timestamped 报告、LLM plan、中文报告、白名单 apply 已实现；生产 vault 已真实跑过 |
 | DB/Vault/Palace Consistency Governance | ✅ 已合入并已跑生产 apply | PR #32 已 merge；已真实 apply 到 `/Users/mac-mini/Documents/wiki`，最终 plan 可执行动作 0，Vault 无新 pages 文件，Mempalace 缺失 page drawer 0 |
 | CR-01 Code Review Fixes | ✅ 已合入 | PR #34 已 merge；修复快照序列化确定性、SourceIngested unresolved 语义、flush_outbox drain 精度、save_snapshot 事务、notion_uuid 锚定提取、url_index 重复 URL、benchmark hits 真实存储；4 项延后 follow-up 已登记 roadmap |
-| MCP Vault Sync | 💤 未开始 | CR-01 延后项：`wiki-cli/src/mcp.rs` `_wiki_dir` 实际 projection 集成，写操作后自动触发 `write_projection`；需独立 PRD 和接口设计 |
+| MCP Vault Sync | ✅ 已实现，待 PR #TBD 合入 | CR-01 延后项：MCP 写操作在 `--sync-wiki` 启用时自动触发 `write_projection`；projection 失败返回 typed `storage_error` |
 | Outbox Consumer Cursors | 💤 未开始 | CR-01 延后项：outbox 消费者游标 / at-exactly-once 语义；`export_outbox_ndjson_from_id` 添加 consumer-scoped cursor 表，防止重复派发；需独立 outbox-v2 PRD |
 | Embedding Tx Atomicity | 💤 未开始 | CR-01 延后项：`upsert_embedding` 纳入 snapshot+outbox 同一 SQLite transaction；需存储层改造 PRD |
 | Benchmark Reproducibility | 💤 未开始 | CR-01 延后项：`rust-mempalace benchmark --mode random` 添加 `--seed` 参数并存入 `benchmark_runs`，使跨次 recall 可比；需独立配置 PRD |

@@ -7,7 +7,7 @@ use wiki_core::{
     normalize_and_validate_tag_groups, parse_memory_tier, ClaimId, DomainSchema, EntryType,
     MemoryTier, QueryContext, Scope, SessionCrystallizationInput, WikiPage,
 };
-use wiki_kernel::{initial_status_for, LlmWikiEngine, NoopWikiHook};
+use wiki_kernel::{initial_status_for, write_projection, LlmWikiEngine, NoopWikiHook};
 use wiki_storage::SqliteRepository;
 
 use crate::{parse_scope, parse_tier};
@@ -387,7 +387,7 @@ fn call_tool(
     viewer: &Scope,
     llm_config_path: &std::path::Path,
     vectors: bool,
-    _wiki_dir: Option<&std::path::Path>,
+    wiki_dir: Option<&std::path::Path>,
     palace_path: Option<&str>,
 ) -> Result<Value, McpToolError> {
     let name = params.get("name").and_then(Value::as_str).unwrap_or("");
@@ -420,7 +420,7 @@ fn call_tool(
             let sid = eng
                 .ingest_raw_with_tags(uri.to_string(), body, scope, "mcp", &tags)
                 .map_err(McpToolError::engine)?;
-            save_and_flush(eng, repo).map_err(McpToolError::storage)?;
+            save_flush_and_project(eng, repo, wiki_dir)?;
             if vectors {
                 embed_source(repo, llm_config_path, &sid.0.to_string(), body)
                     .map_err(McpToolError::llm)?;
@@ -439,7 +439,7 @@ fn call_tool(
             let cid = eng
                 .file_claim_with_tags(text.to_string(), scope, tier, "mcp", &tags)
                 .map_err(McpToolError::engine)?;
-            save_and_flush(eng, repo).map_err(McpToolError::storage)?;
+            save_flush_and_project(eng, repo, wiki_dir)?;
             Ok(json!({"claim_id": cid.0.to_string()}))
         }
         "wiki_supersede_claim" => {
@@ -456,7 +456,7 @@ fn call_tool(
             let new_id = eng
                 .supersede(old, new_text.to_string(), scope, tier, "mcp")
                 .map_err(McpToolError::engine)?;
-            save_and_flush(eng, repo).map_err(McpToolError::storage)?;
+            save_flush_and_project(eng, repo, wiki_dir)?;
             Ok(json!({"new_claim_id": new_id.0.to_string()}))
         }
         "wiki_query" => {
@@ -485,7 +485,7 @@ fn call_tool(
                 let page = WikiPage::new(title, md, viewer.clone());
                 eng.store.pages.insert(page.id, page);
             }
-            save_and_flush(eng, repo).map_err(McpToolError::storage)?;
+            save_flush_and_project(eng, repo, wiki_dir)?;
             Ok(json!({
                 "results": ranked.iter().take(20).map(|(id, score)| json!({
                     "doc_id": id,
@@ -499,7 +499,7 @@ fn call_tool(
                 ClaimId(uuid::Uuid::parse_str(cid_str).map_err(McpToolError::invalid_params)?);
             eng.promote_if_qualified(cid, "mcp", viewer)
                 .map_err(McpToolError::engine)?;
-            save_and_flush(eng, repo).map_err(McpToolError::storage)?;
+            save_flush_and_project(eng, repo, wiki_dir)?;
             let claim = eng.store.claims.get(&cid);
             Ok(json!({
                 "claim_id": cid_str,
@@ -566,7 +566,7 @@ fn call_tool(
                     page.status_entered_at = Some(OffsetDateTime::now_utc());
                 }
             }
-            save_and_flush(eng, repo).map_err(McpToolError::storage)?;
+            save_flush_and_project(eng, repo, wiki_dir)?;
             Ok(json!({
                 "page_id": draft.page.id.0.to_string(),
                 "page_title": draft.page.title,
@@ -575,7 +575,7 @@ fn call_tool(
         }
         "wiki_lint" => {
             let findings = eng.run_basic_lint("mcp", Some(viewer));
-            save_and_flush(eng, repo).map_err(McpToolError::storage)?;
+            save_flush_and_project(eng, repo, wiki_dir)?;
             Ok(json!({
                 "findings": findings.iter().map(|f| json!({
                     "severity": format!("{:?}", f.severity),
@@ -650,7 +650,7 @@ fn call_tool(
                     promoted += 1;
                 }
             }
-            save_and_flush(eng, repo).map_err(McpToolError::storage)?;
+            save_flush_and_project(eng, repo, wiki_dir)?;
             Ok(json!({
                 "decay_applied": true,
                 "lint_findings": findings.len(),
@@ -772,7 +772,7 @@ fn call_tool(
                 summary_page_id = Some(page.id.0.to_string());
                 eng.store.pages.insert(page.id, page);
             }
-            save_and_flush(eng, repo).map_err(McpToolError::storage)?;
+            save_flush_and_project(eng, repo, wiki_dir)?;
             Ok(json!({
                 "source_id": sid.0.to_string(),
                 "claims_filed": plan.claims.len(),
@@ -959,6 +959,18 @@ fn save_and_flush(
     Ok(())
 }
 
+fn save_flush_and_project(
+    eng: &mut LlmWikiEngine<NoopWikiHook>,
+    repo: &SqliteRepository,
+    wiki_dir: Option<&std::path::Path>,
+) -> Result<(), McpToolError> {
+    save_and_flush(eng, repo).map_err(McpToolError::storage)?;
+    if let Some(root) = wiki_dir {
+        write_projection(root, &eng.store, &eng.audits).map_err(McpToolError::storage)?;
+    }
+    Ok(())
+}
+
 fn embed_source(
     repo: &SqliteRepository,
     llm_config_path: &std::path::Path,
@@ -1125,6 +1137,82 @@ mod tests {
         assert_eq!(
             resp.pointer("/error/data/kind").and_then(Value::as_str),
             Some("tool_not_found")
+        );
+    }
+
+    #[test]
+    fn mcp_write_projects_vault_when_wiki_dir_is_enabled() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let wiki_dir = tempfile::tempdir().expect("wiki dir");
+        let repo = SqliteRepository::open(tmp.path().join("wiki.db")).expect("repo");
+        let schema = DomainSchema::permissive_default();
+        let mut eng = LlmWikiEngine::load_from_repo(schema, &repo, NoopWikiHook).expect("engine");
+        let viewer = Scope::Shared {
+            team_id: "wiki".into(),
+        };
+
+        let resp = handle_request(
+            "tools/call",
+            json!({
+                "name": "wiki_query",
+                "arguments": {
+                    "query": "projection smoke",
+                    "write_page": true
+                }
+            }),
+            json!(1),
+            &mut eng,
+            &repo,
+            &viewer,
+            std::path::Path::new("llm-config.toml"),
+            false,
+            Some(wiki_dir.path()),
+            None,
+        );
+
+        assert!(resp.get("error").is_none(), "{resp}");
+        assert!(wiki_dir.path().join("index.md").exists());
+        assert!(wiki_dir.path().join("log.md").exists());
+        let page_dir = wiki_dir.path().join("pages/_unspecified");
+        let page_count = std::fs::read_dir(page_dir)
+            .expect("projection page dir")
+            .count();
+        assert_eq!(page_count, 1);
+    }
+
+    #[test]
+    fn mcp_projection_failure_returns_storage_error_kind() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let wiki_root_file = tmp.path().join("not-a-dir");
+        std::fs::write(&wiki_root_file, "not a directory").expect("sentinel file");
+        let repo = SqliteRepository::open(tmp.path().join("wiki.db")).expect("repo");
+        let schema = DomainSchema::permissive_default();
+        let mut eng = LlmWikiEngine::load_from_repo(schema, &repo, NoopWikiHook).expect("engine");
+        let viewer = Scope::Shared {
+            team_id: "wiki".into(),
+        };
+
+        let resp = handle_request(
+            "tools/call",
+            json!({
+                "name": "wiki_file_claim",
+                "arguments": {
+                    "text": "projection failure still reports typed storage error"
+                }
+            }),
+            json!(1),
+            &mut eng,
+            &repo,
+            &viewer,
+            std::path::Path::new("llm-config.toml"),
+            false,
+            Some(&wiki_root_file),
+            None,
+        );
+
+        assert_eq!(
+            resp.pointer("/error/data/kind").and_then(Value::as_str),
+            Some("storage_error")
         );
     }
 
