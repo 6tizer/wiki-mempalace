@@ -19,6 +19,20 @@ pub struct StorageSnapshot {
     pub audits: Vec<AuditRecord>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WikiStateRowCollectionCount {
+    pub collection: String,
+    pub row_count: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WikiStateRowVerification {
+    pub blob_present: bool,
+    pub row_count: i64,
+    pub collection_counts: Vec<WikiStateRowCollectionCount>,
+    pub matches_blob: Option<bool>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AutomationRunStatus {
     Running,
@@ -605,6 +619,29 @@ CREATE INDEX IF NOT EXISTS wiki_canonical_alias_page_idx
             .conn
             .query_row("PRAGMA integrity_check;", [], |row| row.get(0))?;
         Ok(integrity)
+    }
+
+    pub fn verify_row_state_matches_blob(&self) -> Result<WikiStateRowVerification, StorageError> {
+        let row_count = self.state_row_count()?;
+        let collection_counts = self.state_row_collection_counts()?;
+        let blob_snapshot = self.load_snapshot_blob()?;
+        let matches_blob = if row_count > 0 {
+            match blob_snapshot.as_ref() {
+                Some(blob) => {
+                    let row_snapshot = self.load_snapshot_from_rows()?;
+                    Some(serde_json::to_value(row_snapshot)? == serde_json::to_value(blob)?)
+                }
+                None => None,
+            }
+        } else {
+            None
+        };
+        Ok(WikiStateRowVerification {
+            blob_present: blob_snapshot.is_some(),
+            row_count,
+            collection_counts,
+            matches_blob,
+        })
     }
 
     pub fn get_outbox_consumer_progress(
@@ -1240,6 +1277,47 @@ CREATE INDEX IF NOT EXISTS wiki_canonical_alias_page_idx
         Ok(newly_acked as usize)
     }
 
+    fn state_row_count(&self) -> Result<i64, StorageError> {
+        Ok(self
+            .conn
+            .query_row("SELECT COUNT(*) FROM wiki_state_row", [], |row| row.get(0))?)
+    }
+
+    fn state_row_collection_counts(
+        &self,
+    ) -> Result<Vec<WikiStateRowCollectionCount>, StorageError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT collection, COUNT(*)
+             FROM wiki_state_row
+             GROUP BY collection
+             ORDER BY collection ASC",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok(WikiStateRowCollectionCount {
+                collection: row.get(0)?,
+                row_count: row.get(1)?,
+            })
+        })?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row?);
+        }
+        Ok(out)
+    }
+
+    fn load_snapshot_blob(&self) -> Result<Option<StorageSnapshot>, StorageError> {
+        let row = self
+            .conn
+            .query_row("SELECT payload_json FROM wiki_state WHERE id=1", [], |r| {
+                r.get::<_, String>(0)
+            });
+        match row {
+            Ok(payload) => Ok(Some(serde_json::from_str(&payload)?)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(StorageError::Db(e)),
+        }
+    }
+
     fn write_snapshot_rows(&self, snapshot: &StorageSnapshot) -> Result<(), StorageError> {
         self.conn.execute("DELETE FROM wiki_state_row", [])?;
         self.insert_snapshot_rows(
@@ -1615,16 +1693,10 @@ fn decode_canonical_alias_row(
 
 impl WikiRepository for SqliteRepository {
     fn load_snapshot(&self) -> Result<StorageSnapshot, StorageError> {
-        let row = self
-            .conn
-            .query_row("SELECT payload_json FROM wiki_state WHERE id=1", [], |r| {
-                r.get::<_, String>(0)
-            });
-        match row {
-            Ok(payload) => Ok(serde_json::from_str(&payload)?),
-            Err(rusqlite::Error::QueryReturnedNoRows) => self.load_snapshot_from_rows(),
-            Err(e) => Err(StorageError::Db(e)),
+        if self.state_row_count()? > 0 {
+            return self.load_snapshot_from_rows();
         }
+        Ok(self.load_snapshot_blob()?.unwrap_or_default())
     }
 
     fn save_snapshot(&self, snapshot: &StorageSnapshot) -> Result<(), StorageError> {
@@ -2663,6 +2735,111 @@ mod tests {
             .unwrap();
         assert_eq!(row_count, 1);
         assert_eq!(repo.export_outbox_ndjson().unwrap().lines().count(), 0);
+    }
+
+    #[test]
+    fn row_level_state_is_primary_when_rows_exist() {
+        let dir = tempdir().unwrap();
+        let db = dir.path().join("wiki.db");
+        let repo = SqliteRepository::open(&db).unwrap();
+        let scope = Scope::Private {
+            agent_id: "row-state".into(),
+        };
+        let row_snapshot = StorageSnapshot {
+            claims: vec![Claim::new(
+                "row-primary",
+                scope.clone(),
+                wiki_core::MemoryTier::Semantic,
+            )],
+            ..StorageSnapshot::default()
+        };
+        repo.save_snapshot(&row_snapshot).unwrap();
+        let stale_blob = StorageSnapshot {
+            claims: vec![Claim::new(
+                "stale-blob",
+                scope,
+                wiki_core::MemoryTier::Semantic,
+            )],
+            ..StorageSnapshot::default()
+        };
+        let payload = serde_json::to_string(&stale_blob).unwrap();
+        repo.conn
+            .execute(
+                "UPDATE wiki_state SET payload_json = ?1 WHERE id = 1",
+                [payload],
+            )
+            .unwrap();
+
+        let loaded = repo.load_snapshot().unwrap();
+        let verification = repo.verify_row_state_matches_blob().unwrap();
+
+        assert_eq!(loaded.claims.len(), 1);
+        assert_eq!(loaded.claims[0].text, "row-primary");
+        assert_eq!(verification.matches_blob, Some(false));
+    }
+
+    #[test]
+    fn row_level_state_falls_back_to_blob_when_rows_absent() {
+        let dir = tempdir().unwrap();
+        let db = dir.path().join("wiki.db");
+        let repo = SqliteRepository::open(&db).unwrap();
+        let scope = Scope::Private {
+            agent_id: "row-state".into(),
+        };
+        let snapshot = StorageSnapshot {
+            claims: vec![Claim::new(
+                "blob-fallback",
+                scope,
+                wiki_core::MemoryTier::Semantic,
+            )],
+            ..StorageSnapshot::default()
+        };
+        repo.save_snapshot(&snapshot).unwrap();
+        repo.conn.execute("DELETE FROM wiki_state_row", []).unwrap();
+
+        let loaded = repo.load_snapshot().unwrap();
+        let verification = repo.verify_row_state_matches_blob().unwrap();
+
+        assert_eq!(loaded.claims.len(), 1);
+        assert_eq!(loaded.claims[0].text, "blob-fallback");
+        assert!(verification.blob_present);
+        assert_eq!(verification.row_count, 0);
+        assert_eq!(verification.matches_blob, None);
+    }
+
+    #[test]
+    fn row_level_state_verification_reports_matching_rows_and_blob() {
+        let dir = tempdir().unwrap();
+        let db = dir.path().join("wiki.db");
+        let repo = SqliteRepository::open(&db).unwrap();
+        let scope = Scope::Private {
+            agent_id: "row-state".into(),
+        };
+        let snapshot = StorageSnapshot {
+            sources: vec![RawArtifact::new("file:///verify.md", "body", scope.clone())],
+            claims: vec![Claim::new("verify", scope, wiki_core::MemoryTier::Semantic)],
+            ..StorageSnapshot::default()
+        };
+        repo.save_snapshot(&snapshot).unwrap();
+
+        let verification = repo.verify_row_state_matches_blob().unwrap();
+
+        assert!(verification.blob_present);
+        assert_eq!(verification.row_count, 2);
+        assert_eq!(verification.matches_blob, Some(true));
+        assert_eq!(
+            verification.collection_counts,
+            vec![
+                WikiStateRowCollectionCount {
+                    collection: STATE_ROW_CLAIMS.into(),
+                    row_count: 1,
+                },
+                WikiStateRowCollectionCount {
+                    collection: STATE_ROW_SOURCES.into(),
+                    row_count: 1,
+                },
+            ]
+        );
     }
 
     #[test]
