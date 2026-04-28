@@ -2,7 +2,7 @@
 
 ## Status
 
-Complete in PR #72. GitHub quick passed; merge pending.
+Merged in PR #72.
 
 ## Scope
 
@@ -13,8 +13,8 @@ PR #72 locks the C16B feature-gate shape without adding a native ANN extension.
 - Preferred implementation target remains `sqlite-vec`.
 - Default builds keep exact `wiki_embedding` full scan.
 - New Cargo feature: `ann-embed`.
-- With `ann-embed` enabled today, `EmbeddingSearchBackend::AnnFeatureFallback` is reported and the exact full scan still runs.
-- Real ANN DDL/loading/search is deferred to the next implementation PR.
+- With `ann-embed` enabled in PR #72, `EmbeddingSearchBackend::AnnFeatureFallback` is reported and the exact full scan still runs.
+- Real bounded search is deferred to PR #73.
 
 ## Changed
 

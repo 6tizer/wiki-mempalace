@@ -34,7 +34,7 @@
 - [compiler-canonicalization-v2/](compiler-canonicalization-v2/) — Pre-write compiler canonical resolver with bounded DB candidates, persisted aliases, small LLM fallback, and temp-vault regression. Merged PR #47.
 - [compiler-deferred-resolution-agent/](compiler-deferred-resolution-agent/) — Machine-only post-write resolver/fixer for compiler `deferred_resolutions`; DB -> Vault -> Mempalace -> lint/audit apply order. Merged PR #54; production apply smoke completed.
 - [persist-snapshot-outbox/](persist-snapshot-outbox/) — C16a: `wiki_state` + outbox append in one SQLite transaction; replaces split `save_to_repo` / `flush_outbox` autocommit for crash-safety. Merged PR #25. PRD: [storage-embeddings-followup.md](../prd/storage-embeddings-followup.md).
-- [embedding-ann-index/](embedding-ann-index/) — C16b: bounded-work vector search for `wiki_embedding` (optional extension / ANN; fallback to full scan). PRD: [storage-embeddings-followup.md](../prd/storage-embeddings-followup.md)。
+- [embedding-ann-index/](embedding-ann-index/) — C16b: bounded-work vector search for `wiki_embedding` (`ann-embed` locality-bucket path; fallback to full scan). PRD: [storage-embeddings-followup.md](../prd/storage-embeddings-followup.md)。
 - [audit-report-hardening/](audit-report-hardening/) — Notion 全方位代码审计报告的可落地安全/可靠性修复：MCP 输入上限、LLM plan 校验、脱敏扩展、outbox batch 事务、FTS token quoting。已合入 PR #58。
 - [mcp-typed-errors/](mcp-typed-errors/) — MCP JSON-RPC typed error mapping：稳定 `error.code` 与 `error.data.kind`，供后续 MCP Vault Sync / 客户端诊断复用。已合入 PR #60。
 - [mcp-vault-sync/](mcp-vault-sync/) — MCP write tools 在 `--sync-wiki` 启用时自动刷新 Vault projection。已合入 PR #61。

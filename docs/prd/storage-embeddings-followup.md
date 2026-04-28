@@ -21,8 +21,7 @@
 - `wiki-storage` + `wiki-kernel` + `wiki-cli` call sites that currently pair
   `save_to_repo` with `flush_outbox_to_repo*`.
 - `SqliteRepository` embedding read path (`search_embeddings_cosine` and
-  any future callers), optional SQLite extension (e.g. `sqlite-vec` / VSS) behind
-  a feature flag.
+  any future callers), with bounded feature-gated search and full-scan fallback.
 - **Out of scope for this PRD**: `rust-mempalace` FTS/sparse pipelines unless
   the chosen ANN design naturally shares a pattern (track as a separate
   sub-task in `embedding-ann-index` spec if needed).
@@ -59,4 +58,6 @@
   source/claim writes commit snapshot + outbox + `wiki_embedding` rows as one
   SQLite transaction.
 - **C16B spike complete** — PR #72 adds the `ann-embed` feature gate and exact
-  fallback dispatch first. Real ANN implementation remains the next PR.
+  fallback dispatch first.
+- **C16B implementation complete** — PR #73 adds local locality-bucket bounded
+  search, same-transaction index maintenance, rebuild, and full-scan fallback.

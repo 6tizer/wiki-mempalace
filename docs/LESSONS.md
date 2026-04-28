@@ -26,6 +26,15 @@
 - Agent-facing CLI 默认值不要依赖 cwd；只要语义属于 vault 输出，相对路径应在
   `--wiki-dir` 存在时解析为 vault-relative，并用测试固定。
 
+## 2026-04-28 / PR #73 Embedding ANN Implementation
+
+- Scope: 在 `ann-embed` 后实现本地 locality-bucket shadow index、bounded candidate search、same-transaction index maintenance、rebuild 和 full-scan fallback。
+- What worked: 先保留 public `search_embeddings_cosine` 合同，内部只换 backend；默认 build 继续 exact full scan，feature build 才走 bounded candidate path。
+- What caused rework: feature 模式下旧 ranking 测试发现候选不足会少返回结果；修成候选不足时 warning + fallback full scan，保持兼容。
+- Spec changes needed: `sqlite-vec` 降为未来可选替换；当前完成路径是 DB-local shadow index，避免 native extension 发布问题。
+- Tests or reviews that caught issues: `cargo test -p wiki-storage embedding_` 与 `cargo test -p wiki-storage --features ann-embed embedding_` 覆盖 default、feature、fallback、rebuild、delete cleanup。
+- Next plan note: 下一项进入 `Contradiction Scan Scaling`，用 stale 预过滤、scope 分桶和 bounded candidates 降低 O(n²)。
+
 ## 2026-04-28 / PR #72 Embedding ANN Spike
 
 - Scope: 为 C16B 增加 `ann-embed` feature gate、backend dispatch 和 CI smoke；默认仍走 exact full scan。
