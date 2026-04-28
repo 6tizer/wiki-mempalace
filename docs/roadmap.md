@@ -37,7 +37,7 @@
 | Compiler Deferred Resolution Agent | ✅ 已合入并已跑生产 apply | PR #54 已 merge；`compiler-resolve-deferred` 机器-only 后置治理已实现并用于真实 production reports；apply 顺序为 DB -> Vault -> Mempalace -> lint/audit；最新复查 deferred dry-run 为 aliases=0 / creates=0 / changed=0，低置信 `keep_deferred` 保留不污染 active graph |
 | Audit Report Hardening | ✅ 已合入 PR #58 | 按 Notion 全方位代码审计报告修复可落地项：MCP 10MiB 输入上限、LLM plan bounds、脱敏扩展、outbox batch transaction、FTS token quoting；剩余审计项已拆成独立 roadmap 条目 |
 | Row-level Wiki State Storage | ✅ PR #76/#77 | 审计延后项：已增加 `wiki_state_row` row-level mirror、snapshot 双写、row-primary 读路径、blob fallback 和验证/恢复说明；blob 兼容层保留到生产验证后再移除 |
-| CLI Command Modularization | 🔄 部分完成 PR #78 | 审计延后项：PR #78 先抽 `schema-validate`、`llm-smoke`、outbox export/ack 到 `commands/`；phase 2 再拆 dispatcher/shared config |
+| CLI Command Modularization | ✅ PR #78/#79 | 审计延后项：PR #78 先抽 `schema-validate`、`llm-smoke`、outbox export/ack 到 `commands/`；PR #79 拆 no-engine dispatcher/shared runtime setup 并补 CLI smoke |
 | MCP Typed Errors | ✅ 已合入 PR #60 | 审计延后项：`wiki-cli/src/mcp.rs` 已收敛为 typed `McpToolError` / JSON-RPC error mapping，输出稳定 `error.data.kind` |
 | MCP API Reference | ✅ 已合入 PR #58 | PR #58 新增 `docs/mcp-api-reference.md`，覆盖统一 MCP Server 工具参数、scope 默认值、写入副作用、输入上限和错误形状 |
 | Multi-process Write Guardrails | ✅ 已合入 PR #64 | PR #58 已补 writer safety 警告；PR #64 已增加 `wiki.db.writer.lock` writer lease，写入型 CLI/MCP 入口拿不到 lease 时 fail fast |
@@ -99,7 +99,7 @@ scale-up 混做。
 ### P6：DX / Maintainability
 
 1. CLI Command Modularization phase 1：PR #78 已拆低风险命令域，减少 `main.rs` 体积。
-2. CLI Command Modularization phase 2：再拆 dispatcher/shared config，并补命令 smoke。
+2. CLI Command Modularization phase 2：PR #79 已拆 no-engine dispatcher/shared runtime setup，并补命令 smoke。
 3. MCP Typed Errors：PR #60 已完成 typed JSON-RPC error mapping。
 4. Time Library Unification：评估统一时间库和 crate 独立性边界。
 
@@ -145,7 +145,7 @@ scale-up 混做。
 | 17 | Row-level Wiki State Storage migration/dual-write | `Row-level Wiki State Storage` | ✅ PR #76 | 加行级表与迁移路径，保留快照兼容。 |
 | 18 | Row-level Wiki State Storage cutover/cleanup | `Row-level Wiki State Storage` | ✅ PR #77 | 主路径切到行级 state，保留验证和恢复说明。 |
 | 19 | CLI Command Modularization phase 1 | `CLI Command Modularization` | ✅ PR #78 | 先拆低风险命令域，不改 CLI 行为。 |
-| 20 | CLI Command Modularization phase 2 | `CLI Command Modularization` | 💤 未开始 | 再拆 dispatcher/shared config，补 smoke。 |
+| 20 | CLI Command Modularization phase 2 | `CLI Command Modularization` | ✅ PR #79 | 再拆 dispatcher/shared config，补 smoke。 |
 | 21 | Time Library Unification | `Time Library Unification` | 💤 未开始 | 统一或文档化 `chrono` / `time` 边界。 |
 | 22 | M12 executor dry-run planner | `M12 Executor` | 💤 未开始 | 只产出 action plan，不执行写入。 |
 | 23 | M12 executor guarded apply | `M12 Executor` | 💤 未开始 | allowlist + dry-run-first + explicit apply flag。 |

@@ -35,6 +35,15 @@
 - Tests or reviews that caught issues: outbox cursor focused test 和 schema_validate integration tests 固定搬迁后行为。
 - Next plan note: 下一 PR 拆 dispatcher/shared config，并补命令级 smoke。
 
+## 2026-04-28 / PR #79 CLI Command Modularization phase 2
+
+- Scope: 拆 no-engine dispatcher 和 shared runtime setup，保留 clap enum 与 engine-backed command match。
+- What worked: 先搬早期分支和 repo/schema/engine setup，避免一次性移动所有业务命令。
+- What caused rework: `cargo test -p wiki-cli --lib ...` 不适用于 binary-only crate；integration 文件要用 `--test <name>`，不能只把文件名当 filter。
+- Spec changes needed: 后续若继续瘦身 `main.rs`，应按命令域逐个搬 business handler，不再混入 clap 行为修改。
+- Tests or reviews that caught issues: clippy/compile warning 提示 destructuring 可用 shorthand，CLI smoke 固定 global arg 位置。
+- Next plan note: 下一项是 Time Library Unification。
+
 ## 2026-04-28 / PR #77 Row-level Wiki State Storage cutover
 
 - Scope: `load_snapshot` 切为 rows-present 时 row-primary，rows 为空时 blob fallback。
