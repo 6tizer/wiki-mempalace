@@ -8,7 +8,7 @@ use wiki_core::{
     MemoryTier, QueryContext, Scope, SessionCrystallizationInput, WikiPage,
 };
 use wiki_kernel::{initial_status_for, write_projection, LlmWikiEngine, NoopWikiHook};
-use wiki_storage::SqliteRepository;
+use wiki_storage::{EmbeddingWrite, SqliteRepository};
 
 use crate::{parse_scope, parse_tier};
 
@@ -428,11 +428,15 @@ fn call_tool(
             let sid = eng
                 .ingest_raw_with_tags(uri.to_string(), body, scope, "mcp", &tags)
                 .map_err(McpToolError::engine)?;
-            save_flush_and_project(eng, repo, wiki_dir)?;
-            if vectors {
-                embed_source(repo, llm_config_path, &sid.0.to_string(), body)
-                    .map_err(McpToolError::llm)?;
-            }
+            let embeddings = if vectors {
+                vec![
+                    build_source_embedding(llm_config_path, &sid.0.to_string(), body)
+                        .map_err(McpToolError::llm)?,
+                ]
+            } else {
+                Vec::new()
+            };
+            save_flush_embeddings_and_project(eng, repo, wiki_dir, embeddings)?;
             Ok(json!({"source_id": sid.0.to_string()}))
         }
         "wiki_file_claim" => {
@@ -447,7 +451,15 @@ fn call_tool(
             let cid = eng
                 .file_claim_with_tags(text.to_string(), scope, tier, "mcp", &tags)
                 .map_err(McpToolError::engine)?;
-            save_flush_and_project(eng, repo, wiki_dir)?;
+            let embeddings = if vectors {
+                vec![
+                    build_text_embedding(llm_config_path, format!("claim:{}", cid.0), text)
+                        .map_err(McpToolError::llm)?,
+                ]
+            } else {
+                Vec::new()
+            };
+            save_flush_embeddings_and_project(eng, repo, wiki_dir, embeddings)?;
             Ok(json!({"claim_id": cid.0.to_string()}))
         }
         "wiki_supersede_claim" => {
@@ -464,7 +476,15 @@ fn call_tool(
             let new_id = eng
                 .supersede(old, new_text.to_string(), scope, tier, "mcp")
                 .map_err(McpToolError::engine)?;
-            save_flush_and_project(eng, repo, wiki_dir)?;
+            let embeddings = if vectors {
+                vec![
+                    build_text_embedding(llm_config_path, format!("claim:{}", new_id.0), new_text)
+                        .map_err(McpToolError::llm)?,
+                ]
+            } else {
+                Vec::new()
+            };
+            save_flush_embeddings_and_project(eng, repo, wiki_dir, embeddings)?;
             Ok(json!({"new_claim_id": new_id.0.to_string()}))
         }
         "wiki_query" => {
@@ -737,6 +757,17 @@ fn call_tool(
                     plan.tags.iter().map(String::as_str),
                 )
                 .map_err(McpToolError::engine)?;
+            let app = if vectors {
+                Some(crate::llm::load_app_config(llm_config_path).map_err(McpToolError::llm)?)
+            } else {
+                None
+            };
+            let mut embeddings = Vec::new();
+            if let Some(app) = &app {
+                let short: String = body.chars().take(16000).collect();
+                let v = crate::llm::embed_first(app, &short).map_err(McpToolError::llm)?;
+                embeddings.push(EmbeddingWrite::new(format!("source:{}", sid.0), v));
+            }
             for c in &plan.claims {
                 let tier = parse_memory_tier(&c.tier).map_err(McpToolError::invalid_params)?;
                 let cid = eng
@@ -750,18 +781,9 @@ fn call_tool(
                     .map_err(McpToolError::engine)?;
                 eng.attach_sources(cid, &[sid])
                     .map_err(McpToolError::engine)?;
-                if vectors {
-                    // Best-effort vector write; log errors instead of silently swallowing.
-                    if let Ok(app) = crate::llm::load_app_config(llm_config_path) {
-                        if let Ok(v) = crate::llm::embed_first(&app, &c.text) {
-                            if let Err(e) = repo.upsert_embedding(&format!("claim:{}", cid.0), &v) {
-                                eprintln!(
-                                    "warning: embedding upsert failed for claim {}: {e}",
-                                    cid.0
-                                );
-                            }
-                        }
-                    }
+                if let Some(app) = &app {
+                    let v = crate::llm::embed_first(app, &c.text).map_err(McpToolError::llm)?;
+                    embeddings.push(EmbeddingWrite::new(format!("claim:{}", cid.0), v));
                 }
             }
             // 生成 summary 页面：与 vault-standards / ingest-llm 一致（Summary + 五段正文）
@@ -780,7 +802,7 @@ fn call_tool(
                 summary_page_id = Some(page.id.0.to_string());
                 eng.store.pages.insert(page.id, page);
             }
-            save_flush_and_project(eng, repo, wiki_dir)?;
+            save_flush_embeddings_and_project(eng, repo, wiki_dir, embeddings)?;
             Ok(json!({
                 "source_id": sid.0.to_string(),
                 "claims_filed": plan.claims.len(),
@@ -979,17 +1001,44 @@ fn save_flush_and_project(
     Ok(())
 }
 
-fn embed_source(
+fn save_flush_embeddings_and_project(
+    eng: &mut LlmWikiEngine<NoopWikiHook>,
     repo: &SqliteRepository,
+    wiki_dir: Option<&std::path::Path>,
+    embeddings: Vec<EmbeddingWrite>,
+) -> Result<(), McpToolError> {
+    if embeddings.is_empty() {
+        return save_flush_and_project(eng, repo, wiki_dir);
+    }
+    let snapshot = eng.store.to_snapshot(&eng.audits);
+    repo.save_snapshot_and_append_outbox_with_embeddings(&snapshot, &eng.outbox, &embeddings)
+        .map_err(McpToolError::storage)?;
+    eng.outbox.clear();
+    if let Some(root) = wiki_dir {
+        write_projection(root, &eng.store, &eng.audits).map_err(McpToolError::storage)?;
+    }
+    Ok(())
+}
+
+fn build_source_embedding(
     llm_config_path: &std::path::Path,
     source_id: &str,
     body: &str,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> Result<EmbeddingWrite, Box<dyn std::error::Error>> {
     let app = crate::llm::load_app_config(llm_config_path)?;
     let short: String = body.chars().take(16000).collect();
     let vec = crate::llm::embed_first(&app, &short)?;
-    repo.upsert_embedding(&format!("source:{source_id}"), &vec)?;
-    Ok(())
+    Ok(EmbeddingWrite::new(format!("source:{source_id}"), vec))
+}
+
+fn build_text_embedding(
+    llm_config_path: &std::path::Path,
+    doc_id: impl Into<String>,
+    text: &str,
+) -> Result<EmbeddingWrite, Box<dyn std::error::Error>> {
+    let app = crate::llm::load_app_config(llm_config_path)?;
+    let vec = crate::llm::embed_first(&app, text)?;
+    Ok(EmbeddingWrite::new(doc_id, vec))
 }
 
 #[cfg(test)]

@@ -26,6 +26,15 @@
 - Agent-facing CLI 默认值不要依赖 cwd；只要语义属于 vault 输出，相对路径应在
   `--wiki-dir` 存在时解析为 vault-relative，并用测试固定。
 
+## 2026-04-28 / PR #71 Embedding Tx Atomicity
+
+- Scope: 新增 snapshot + outbox + embedding rows 单事务提交路径，并把 CLI/MCP/compiler 的 vector 写入口切过去。
+- What worked: 先把 embedding 写入包装成 `EmbeddingWrite`，调用方只负责在 commit 前生成向量，storage 负责事务边界。
+- What caused rework: MCP 旧逻辑是 best-effort embedding，会静默吞掉失败；为了保证 atomicity，vectors 开启时必须把失败升格为写入失败。
+- Spec changes needed: ANN index 仍独立；本 PR 只修 `wiki_embedding` blob 行与 snapshot/outbox 的事务一致性。
+- Tests or reviews that caught issues: storage 触发器强制 embedding insert 失败，验证旧 snapshot 保留、outbox 不落半截、embedding 不落孤儿行。
+- Next plan note: 下一项进入 `C16B Embedding ANN spike / feature gate`，先锁技术路径和 feature gate，不默认引入 native extension。
+
 ## 2026-04-28 / PR #70 Benchmark Reproducibility
 
 - Scope: 给 `rust-mempalace bench --mode random` 增加 `--seed`，并把 seed 写入 `benchmark_runs`、CLI 输出和 benchmark report。

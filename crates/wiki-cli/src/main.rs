@@ -26,8 +26,8 @@ use wiki_mempalace_bridge::{
 };
 use wiki_storage::{
     canonical_notion_page_id, AutomationJobFailureSummary, AutomationRunRecord,
-    AutomationRunStatus, OutboxConsumerProgress, OutboxStats, SqliteRepository, SqliteWriterLease,
-    WikiRepository,
+    AutomationRunStatus, EmbeddingWrite, OutboxConsumerProgress, OutboxStats, SqliteRepository,
+    SqliteWriterLease, WikiRepository,
 };
 
 mod banner;
@@ -2295,12 +2295,17 @@ fn run_with_engine(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                 "cli",
                 plan.tags.iter().map(String::as_str),
             )?;
-            eng.save_to_repo_and_flush_outbox_with_policy(&repo, 128, 3)?;
             if cli.vectors {
                 let app = llm::load_app_config(&cli.llm_config)?;
                 let body_short = truncate_chars(&body, 16000);
                 let vec = llm::embed_first(&app, &body_short)?;
-                repo.upsert_embedding(&format!("source:{}", sid.0), &vec)?;
+                save_to_repo_and_flush_outbox_with_embeddings(
+                    &mut eng,
+                    &repo,
+                    vec![EmbeddingWrite::new(format!("source:{}", sid.0), vec)],
+                )?;
+            } else {
+                eng.save_to_repo_and_flush_outbox_with_policy(&repo, 128, 3)?;
             }
             for c in &plan.claims {
                 let tier = parse_memory_tier(&c.tier).unwrap_or(MemoryTier::Semantic);
@@ -2312,11 +2317,16 @@ fn run_with_engine(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                     c.tags.iter().map(String::as_str),
                 )?;
                 eng.attach_sources(cid, &[sid])?;
-                eng.save_to_repo_and_flush_outbox_with_policy(&repo, 128, 3)?;
                 if cli.vectors {
                     let app = llm::load_app_config(&cli.llm_config)?;
                     let vec = llm::embed_first(&app, &c.text)?;
-                    repo.upsert_embedding(&format_claim_doc_id(cid), &vec)?;
+                    save_to_repo_and_flush_outbox_with_embeddings(
+                        &mut eng,
+                        &repo,
+                        vec![EmbeddingWrite::new(format_claim_doc_id(cid), vec)],
+                    )?;
+                } else {
+                    eng.save_to_repo_and_flush_outbox_with_policy(&repo, 128, 3)?;
                 }
             }
             for ed in &plan.entities {
@@ -2386,12 +2396,17 @@ fn run_with_engine(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             tags,
         } => {
             let sid = eng.ingest_raw_with_tags(uri, &body, parse_scope(&scope), "cli", &tags)?;
-            eng.save_to_repo_and_flush_outbox_with_policy(&repo, 128, 3)?;
             if cli.vectors {
                 let app = llm::load_app_config(&cli.llm_config)?;
                 let body_short = truncate_chars(&body, 16000);
                 let vec = llm::embed_first(&app, &body_short)?;
-                repo.upsert_embedding(&format!("source:{}", sid.0), &vec)?;
+                save_to_repo_and_flush_outbox_with_embeddings(
+                    &mut eng,
+                    &repo,
+                    vec![EmbeddingWrite::new(format!("source:{}", sid.0), vec)],
+                )?;
+            } else {
+                eng.save_to_repo_and_flush_outbox_with_policy(&repo, 128, 3)?;
             }
             maybe_sync_projection(sync_wiki, wiki_root.as_deref(), &eng)?;
             println!("ingested source={}", sid.0);
@@ -2404,12 +2419,17 @@ fn run_with_engine(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         } => {
             let tier = parse_tier(&tier)?;
             let cid = eng.file_claim_with_tags(text, parse_scope(&scope), tier, "cli", &tags)?;
-            eng.save_to_repo_and_flush_outbox_with_policy(&repo, 128, 3)?;
             if cli.vectors {
                 let app = llm::load_app_config(&cli.llm_config)?;
                 let t = eng.store.claims[&cid].text.clone();
                 let vec = llm::embed_first(&app, &t)?;
-                repo.upsert_embedding(&format_claim_doc_id(cid), &vec)?;
+                save_to_repo_and_flush_outbox_with_embeddings(
+                    &mut eng,
+                    &repo,
+                    vec![EmbeddingWrite::new(format_claim_doc_id(cid), vec)],
+                )?;
+            } else {
+                eng.save_to_repo_and_flush_outbox_with_policy(&repo, 128, 3)?;
             }
             maybe_sync_projection(sync_wiki, wiki_root.as_deref(), &eng)?;
             println!("claim_id={}", cid.0);
@@ -2423,12 +2443,17 @@ fn run_with_engine(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             let old = wiki_core::ClaimId(uuid::Uuid::parse_str(&old_claim_id)?);
             let tier = parse_tier(&tier)?;
             let new_id = eng.supersede(old, new_text, parse_scope(&scope), tier, "cli")?;
-            eng.save_to_repo_and_flush_outbox_with_policy(&repo, 128, 3)?;
             if cli.vectors {
                 let app = llm::load_app_config(&cli.llm_config)?;
                 let t = eng.store.claims[&new_id].text.clone();
                 let vec = llm::embed_first(&app, &t)?;
-                repo.upsert_embedding(&format_claim_doc_id(new_id), &vec)?;
+                save_to_repo_and_flush_outbox_with_embeddings(
+                    &mut eng,
+                    &repo,
+                    vec![EmbeddingWrite::new(format_claim_doc_id(new_id), vec)],
+                )?;
+            } else {
+                eng.save_to_repo_and_flush_outbox_with_policy(&repo, 128, 3)?;
             }
             maybe_sync_projection(sync_wiki, wiki_root.as_deref(), &eng)?;
             println!("new_claim_id={}", new_id.0);
@@ -4953,6 +4978,18 @@ fn maybe_sync_projection(
         );
     }
     Ok(())
+}
+
+fn save_to_repo_and_flush_outbox_with_embeddings(
+    eng: &mut LlmWikiEngine<NoopWikiHook>,
+    repo: &SqliteRepository,
+    embeddings: Vec<EmbeddingWrite>,
+) -> Result<usize, Box<dyn std::error::Error>> {
+    let snapshot = eng.store.to_snapshot(&eng.audits);
+    let inserted =
+        repo.save_snapshot_and_append_outbox_with_embeddings(&snapshot, &eng.outbox, &embeddings)?;
+    eng.outbox.clear();
+    Ok(inserted)
 }
 
 fn run_lint_job(
