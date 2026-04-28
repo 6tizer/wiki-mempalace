@@ -44,6 +44,15 @@
 - Tests or reviews that caught issues: clippy/compile warning 提示 destructuring 可用 shorthand，CLI smoke 固定 global arg 位置。
 - Next plan note: 下一项是 Time Library Unification。
 
+## 2026-04-28 / PR #80 Time Library Unification
+
+- Scope: 移除剩余 direct `chrono`，统一到 `time::OffsetDateTime` 当前时间 RFC3339 格式化。
+- What worked: 先用 `rg` 确认 `chrono` 只用于 `Utc::now().to_rfc3339()`，因此可直接替换，不需要保留 mempalace 边界。
+- What caused rework: `time::format` 返回 `Result`，写入路径和默认时间分支都应走可传播 helper，避免为默认值闭包引入 panic wrapper。
+- Spec changes needed: boundary decision 写清楚：不保留 `chrono` 类型边界，因为没有外露 chrono API。
+- Tests or reviews that caught issues: live bridge feature 测试确保 optional dependency 从 `chrono` 切到 `time` 后仍能编译。
+- Next plan note: 下一项是 M12 executor dry-run planner。
+
 ## 2026-04-28 / PR #77 Row-level Wiki State Storage cutover
 
 - Scope: `load_snapshot` 切为 rows-present 时 row-primary，rows 为空时 blob fallback。

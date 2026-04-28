@@ -1,7 +1,6 @@
 use crate::classifier::{classify, default_rules, load_rules, KNOWN_HALLS};
 use crate::db;
 use anyhow::{Context, Result};
-use chrono::Utc;
 use rand::rngs::StdRng;
 use rand::seq::SliceRandom;
 use rand::SeedableRng;
@@ -12,6 +11,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
+use time::{format_description::well_known::Rfc3339, OffsetDateTime};
 use walkdir::WalkDir;
 
 pub struct Palace {
@@ -191,7 +191,7 @@ pub fn mine_path(
         if exists {
             continue;
         }
-        let now = Utc::now().to_rfc3339();
+        let now = now_rfc3339()?;
         conn.execute(
             "INSERT INTO drawers(wing, hall, room, source_path, content, content_hash, bank_id, created_at) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
             params![wing, hall, room, source_path, content_trimmed, content_hash, bank, now],
@@ -249,7 +249,7 @@ pub fn mine_path_convos(
             if exists {
                 continue;
             }
-            let now = Utc::now().to_rfc3339();
+            let now = now_rfc3339()?;
             conn.execute(
                 "INSERT INTO drawers(wing, hall, room, source_path, content, content_hash, bank_id, created_at) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
                 params![wing, hall, room, source_path, chunk.trim(), content_hash, bank, now],
@@ -518,7 +518,7 @@ pub fn kg_add(
     valid_from: Option<&str>,
     source_drawer_id: Option<i64>,
 ) -> Result<()> {
-    let now = Utc::now().to_rfc3339();
+    let now = now_rfc3339()?;
     conn.execute(
         "INSERT INTO kg_facts(subject, predicate, object, valid_from, valid_to, source_drawer_id, created_at) VALUES (?1, ?2, ?3, ?4, NULL, ?5, ?6)",
         params![subject, predicate, object, valid_from.unwrap_or(&now), source_drawer_id, now],
@@ -602,9 +602,10 @@ pub fn extract_to_kg(conn: &Connection, cfg: &LlmConfig, text: &str) -> Result<u
 }
 
 pub fn kg_query(conn: &Connection, subject: &str, as_of: Option<&str>) -> Result<Vec<KgFact>> {
-    let as_of_ts = as_of
-        .map(|s| s.to_string())
-        .unwrap_or_else(|| Utc::now().to_rfc3339());
+    let as_of_ts = match as_of {
+        Some(value) => value.to_string(),
+        None => now_rfc3339()?,
+    };
     let mut stmt = conn.prepare(
         r#"
         SELECT id, subject, predicate, object, valid_from, valid_to, source_drawer_id
@@ -638,9 +639,10 @@ pub fn kg_invalidate(
     object: &str,
     ended: Option<&str>,
 ) -> Result<usize> {
-    let ended_at = ended
-        .map(|s| s.to_string())
-        .unwrap_or_else(|| Utc::now().to_rfc3339());
+    let ended_at = match ended {
+        Some(value) => value.to_string(),
+        None => now_rfc3339()?,
+    };
     let changed = conn.execute(
         "UPDATE kg_facts SET valid_to = ?1 WHERE subject = ?2 AND predicate = ?3 AND object = ?4 AND valid_to IS NULL",
         params![ended_at, subject, predicate, object],
@@ -909,7 +911,7 @@ pub fn benchmark_run(
             out.throughput_per_sec,
             out.hits as i64,
             seed_db,
-            Utc::now().to_rfc3339()
+            now_rfc3339()?
         ],
     )?;
     Ok(out)
@@ -987,13 +989,13 @@ pub fn save_benchmark_report(result: &BenchmarkResult, report_path: &Path) -> Re
             top_k: result.k,
             latency_ms: result.latency_ms,
             throughput_per_sec: result.throughput_per_sec,
-            generated_at: Utc::now().to_rfc3339(),
+            generated_at: now_rfc3339()?,
         };
         fs::write(report_path, serde_json::to_string_pretty(&payload)?)?;
     } else {
         let body = format!(
             "# Benchmark Report\n\n- generated_at: {}\n- mode: {}\n- seed: {}\n- samples: {}\n- hits: {}\n- recall@{}: {:.2}%\n- latency_ms: {}\n- throughput_per_sec: {:.2}\n",
-            Utc::now().to_rfc3339(),
+            now_rfc3339()?,
             result.mode,
             result
                 .seed
@@ -1009,6 +1011,10 @@ pub fn save_benchmark_report(result: &BenchmarkResult, report_path: &Path) -> Re
         fs::write(report_path, body)?;
     }
     Ok(())
+}
+
+fn now_rfc3339() -> Result<String> {
+    Ok(OffsetDateTime::now_utc().format(&Rfc3339)?)
 }
 
 pub fn wake_up(

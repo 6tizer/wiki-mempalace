@@ -16,6 +16,7 @@
 
 ## Completed PRDs Still Useful As Reference
 
+- [time-library-unification.md](time-library-unification.md) — PR #80：remove remaining `chrono` usage and standardize workspace timestamps on `time`.
 - [cli-command-modularization.md](cli-command-modularization.md) — PR #78/#79：staged `wiki-cli` command handler extraction, no-engine dispatch/runtime setup, and CLI smoke coverage without clap behavior drift.
 - [row-level-wiki-state.md](row-level-wiki-state.md) — PR #76/#77：row-level `wiki_state` migration/dual-write, row-primary read, blob fallback, and verification API.
 - [semantic-fusion-benchmark.md](semantic-fusion-benchmark.md) — PR #75：J14 LongMemEval side-by-side query baseline vs semantic-fusion benchmark lane.

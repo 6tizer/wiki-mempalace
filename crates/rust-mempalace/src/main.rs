@@ -11,6 +11,7 @@ use rust_mempalace::service::{
 };
 use rust_mempalace::{db, mcp};
 use serde_json::json;
+use time::{format_description::well_known::Rfc3339, OffsetDateTime};
 
 fn main() {
     if let Err(e) = run() {
@@ -166,7 +167,7 @@ fn run() -> Result<()> {
         } => {
             palace.init(None)?;
             let conn = palace.open()?;
-            let now = chrono::Utc::now().to_rfc3339();
+            let now = now_rfc3339()?;
             db::insert_tunnel(&conn, &from_wing, &from_room, &to_wing, &to_room, &now)?;
             print_out(
                 cli.output,
@@ -457,6 +458,10 @@ fn run() -> Result<()> {
         },
     }
     Ok(())
+}
+
+fn now_rfc3339() -> Result<String> {
+    Ok(OffsetDateTime::now_utc().format(&Rfc3339)?)
 }
 
 fn print_out(format: OutputFormat, json_value: serde_json::Value, text_value: &str) {

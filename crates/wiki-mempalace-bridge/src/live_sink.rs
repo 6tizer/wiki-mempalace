@@ -1,9 +1,9 @@
 use crate::{MempalaceError, MempalaceWikiSink};
-use chrono::Utc;
 use rusqlite::{params, Connection, OptionalExtension};
 use rust_mempalace::{db, service};
 use sha2::{Digest, Sha256};
 use std::sync::Mutex;
+use time::{format_description::well_known::Rfc3339, OffsetDateTime};
 use wiki_core::{Claim, ClaimId, EntryType, Scope, SourceId, WikiPage};
 
 pub struct LiveMempalaceSink {
@@ -56,7 +56,7 @@ impl LiveMempalaceSink {
             if exists {
                 return Ok(());
             }
-            let now = Utc::now().to_rfc3339();
+            let now = now_rfc3339()?;
             conn.execute(
                 "INSERT INTO drawers(wing, hall, room, source_path, content, content_hash, bank_id, created_at) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
                 params![wing, hall, room, source_path, content, content_hash, self.bank_id, now],
@@ -68,6 +68,12 @@ impl LiveMempalaceSink {
             Ok(())
         })
     }
+}
+
+fn now_rfc3339() -> Result<String, MempalaceError> {
+    OffsetDateTime::now_utc()
+        .format(&Rfc3339)
+        .map_err(|e| MempalaceError::Backend(format!("format timestamp: {e}")))
 }
 
 impl MempalaceWikiSink for LiveMempalaceSink {
