@@ -13,6 +13,7 @@
 - [production-wiki-compiler.md](production-wiki-compiler.md) — Notion-equivalent local compiler operation: raw source -> resolver -> summary + concept/entity pages -> Vault -> outbox -> Mempalace -> query/explain; controlled production scale-up is active.
 - [vault-backfill-and-palace-init.md](vault-backfill-and-palace-init.md) — 历史 vault 回填、`wiki.db` 初始化、`palace.db` 初始化、共享 Agent 运行默认值。
 - [storage-embeddings-followup.md](storage-embeddings-followup.md) — C16 follow-up: single-transaction `wiki_state` + outbox write path; optional ANN/index for `wiki_embedding` search (replaces O(n) scan at scale). Spec: [persist-snapshot-outbox](../specs/persist-snapshot-outbox/requirements.md), [embedding-ann-index](../specs/embedding-ann-index/requirements.md).
+- [notion-archived-source-retirement.md](notion-archived-source-retirement.md) — DB-first Notion archived source retirement. Audit/plan PR active; apply remains a follow-up PR.
 
 ## Completed PRDs Still Useful As Reference
 

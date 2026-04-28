@@ -26,6 +26,15 @@
 - Agent-facing CLI 默认值不要依赖 cwd；只要语义属于 vault 输出，相对路径应在
   `--wiki-dir` 存在时解析为 vault-relative，并用测试固定。
 
+## 2026-04-28 / PR #68 Notion Archived Source Retirement Audit Plan
+
+- Scope: 新增 `notion-archived-retirement plan`，从 `notion_page_index` 拉取 Notion archived/in_trash 状态，生成 DB-first dry-run JSON/Markdown retirement plan。
+- What worked: 先把 apply 明确排除，只做报告，让 Notion API、DB index、source evidence 三者可审计对齐。
+- What caused rework: `wiki-storage` 生产代码新增 UUID 解析后，`uuid` 不能只放 dev-dependencies；依赖边界要随代码路径同步调整。
+- Spec changes needed: Apply PR 必须读取 plan JSON，只处理 `apply_safe=true`，并按 DB -> Vault projection -> Mempalace consumer 顺序执行。
+- Tests or reviews that caught issues: focused tests 覆盖 storage index listing、Notion archive state client、plan report builder；`cargo test --workspace`、`cargo clippy --workspace --all-targets -- -D warnings`、production `--limit 3` smoke 均通过。
+- Next plan note: 下一 PR 做 `Notion Archived Source Retirement apply`，保持 DB-first，不手删 Markdown。
+
 ## 2026-04-25 / PR #16 M12 Strategy Suggestions
 
 - Scope: 新增只读 `wiki-cli suggest`，输出 text/JSON，并在显式 `--report-dir` 时生成同源 JSON/Markdown suggestion report。

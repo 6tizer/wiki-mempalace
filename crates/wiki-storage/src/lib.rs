@@ -84,6 +84,14 @@ pub struct OutboxConsumerCursorExport {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct NotionPageIndexRecord {
+    pub notion_page_id: String,
+    pub db_id: String,
+    pub source_id: SourceId,
+    pub synced_at: OffsetDateTime,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AutomationJobFailureSummary {
     pub job_name: String,
     pub consecutive_failures: usize,
@@ -164,6 +172,8 @@ pub trait WikiRepository {
         entries: &[(String, String, SourceId)],
     ) -> Result<(), StorageError>;
 
+    fn list_notion_page_indexes(&self) -> Result<Vec<NotionPageIndexRecord>, StorageError>;
+
     // --- Compiler canonicalization aliases ---
 
     fn upsert_canonical_alias(&self, mapping: &CanonicalAliasMapping) -> Result<(), StorageError>;
@@ -197,6 +207,8 @@ pub enum StorageError {
     NotFound(String),
     #[error("invalid canonical alias: {0}")]
     InvalidCanonicalAlias(String),
+    #[error("invalid notion page index: {0}")]
+    InvalidNotionPageIndex(String),
     #[error("writer lease busy: {0}")]
     WriterLeaseBusy(String),
     #[error("io: {0}")]
@@ -1332,6 +1344,38 @@ impl WikiRepository for SqliteRepository {
         }
     }
 
+    fn list_notion_page_indexes(&self) -> Result<Vec<NotionPageIndexRecord>, StorageError> {
+        let mut stmt = self.conn.prepare(
+            "SELECT notion_page_id, db_id, source_id, synced_at
+             FROM notion_page_index
+             ORDER BY db_id, notion_page_id",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            let notion_page_id: String = row.get(0)?;
+            let db_id: String = row.get(1)?;
+            let source_id: String = row.get(2)?;
+            let synced_at: String = row.get(3)?;
+            Ok((notion_page_id, db_id, source_id, synced_at))
+        })?;
+
+        let mut records = Vec::new();
+        for row in rows {
+            let (notion_page_id, db_id, source_id, synced_at) = row?;
+            let source_uuid = uuid::Uuid::parse_str(&source_id).map_err(|err| {
+                StorageError::InvalidNotionPageIndex(format!(
+                    "invalid source_id {source_id}: {err}"
+                ))
+            })?;
+            records.push(NotionPageIndexRecord {
+                notion_page_id,
+                db_id,
+                source_id: SourceId(source_uuid),
+                synced_at: parse_time(&synced_at)?,
+            });
+        }
+        Ok(records)
+    }
+
     fn upsert_canonical_alias(&self, mapping: &CanonicalAliasMapping) -> Result<(), StorageError> {
         self.upsert_canonical_alias_inner(mapping)
     }
@@ -2062,6 +2106,40 @@ mod tests {
             })
             .unwrap();
         assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn storage_lists_notion_page_indexes_in_stable_order() {
+        let dir = tempdir().unwrap();
+        let db = dir.path().join("wiki.db");
+        let repo = SqliteRepository::open(&db).unwrap();
+        let source_a = wiki_core::SourceId(uuid::Uuid::new_v4());
+        let source_b = wiki_core::SourceId(uuid::Uuid::new_v4());
+
+        repo.insert_notion_page_index("BBBBBBBB-BBBB-BBBB-BBBB-BBBBBBBBBBBB", "wechat", &source_b)
+            .unwrap();
+        repo.insert_notion_page_index(
+            "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA",
+            "x_bookmark",
+            &source_a,
+        )
+        .unwrap();
+
+        let records = repo.list_notion_page_indexes().unwrap();
+
+        assert_eq!(records.len(), 2);
+        assert_eq!(records[0].db_id, "wechat");
+        assert_eq!(records[0].source_id, source_b);
+        assert_eq!(
+            records[0].notion_page_id,
+            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        );
+        assert_eq!(records[1].db_id, "x_bookmark");
+        assert_eq!(records[1].source_id, source_a);
+        assert_eq!(
+            records[1].notion_page_id,
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        );
     }
 
     fn canonical_alias(
