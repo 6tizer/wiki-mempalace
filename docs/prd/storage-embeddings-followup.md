@@ -58,4 +58,5 @@
 - **Embedding Tx Atomicity complete** — PR #71 merged. Vector-enabled
   source/claim writes commit snapshot + outbox + `wiki_embedding` rows as one
   SQLite transaction.
-- **C16B not started** — `embedding-ann-index` remains a separate follow-up.
+- **C16B spike complete** — PR #72 adds the `ann-embed` feature gate and exact
+  fallback dispatch first. Real ANN implementation remains the next PR.

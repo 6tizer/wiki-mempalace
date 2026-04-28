@@ -26,6 +26,15 @@
 - Agent-facing CLI 默认值不要依赖 cwd；只要语义属于 vault 输出，相对路径应在
   `--wiki-dir` 存在时解析为 vault-relative，并用测试固定。
 
+## 2026-04-28 / PR #72 Embedding ANN Spike
+
+- Scope: 为 C16B 增加 `ann-embed` feature gate、backend dispatch 和 CI smoke；默认仍走 exact full scan。
+- What worked: 先落无 native 依赖的 gate，让后续 ANN 实现只填 backend，不再同时争论构建/发布边界。
+- What caused rework: 不应在 spike PR 直接引入 sqlite native extension；否则 quick CI 和本机环境会被平台依赖拖住。
+- Spec changes needed: `embedding-ann-index` 设计明确 `sqlite-vec` 是优先目标，但真实 DDL/load/search 留给 implementation PR。
+- Tests or reviews that caught issues: feature-gate smoke 必须在 `--features ann-embed` 下编译并回落 full scan。
+- Next plan note: 下一项进入 `C16B Embedding ANN implementation`，只在 `ann-embed` gate 后面加真实 bounded search。
+
 ## 2026-04-28 / PR #71 Embedding Tx Atomicity
 
 - Scope: 新增 snapshot + outbox + embedding rows 单事务提交路径，并把 CLI/MCP/compiler 的 vector 写入口切过去。

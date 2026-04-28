@@ -48,7 +48,7 @@
 | Time Library Unification | 💤 未开始 | 审计低优先项：评估 `chrono` vs `time` 双时间库，长期优先统一到 `time`；若保留 mempalace 独立性，文档化边界 |
 | Scheduled Vault Reports | ✅ 已合入 PR #67 | 已新增 automation `vault-reports` job：timestamped bundle、`latest.json/latest.md` 指针、`WIKI_SCHEDULED_REPORT_KEEP` 保留策略 |
 | C16A Atomic snapshot + outbox | ✅ 已合入 | PR #25 已 merge；新增 `save_snapshot_and_append_outbox` 单事务持久化路径；CLI/MCP/backfill 写路径已切到原子提交 |
-| C16B Embedding ANN index | 💤 未开始 | 仍保留在 [embedding-ann-index](specs/embedding-ann-index/)；可单独规划，不和存储一致性混在一个 PR |
+| C16B Embedding ANN index | 🔄 Spike PR #72 complete | `ann-embed` feature gate / fallback 已完成；real ANN implementation remains next |
 | M12 Executor | 💤 未开始 | 在现有 `suggest` 策略层后增加 dry-run planner 与 guarded apply；默认不执行写入，需 allowlist + explicit apply |
 
 ## 当前下一阶段
@@ -138,7 +138,7 @@ scale-up 混做。
 | 10 | Notion Archived Source Retirement apply | `Notion Archived Source Retirement` | ✅ PR #69 | DB-first apply，避免手删 Markdown。 |
 | 11 | Benchmark Reproducibility | `Benchmark Reproducibility` | ✅ PR #70 | `--mode random` 加 `--seed` 并记录到 `benchmark_runs`。 |
 | 12 | Embedding Tx Atomicity | `Embedding Tx Atomicity` | ✅ PR #71 | embedding 写入纳入 snapshot/outbox 同事务。 |
-| 13 | C16B Embedding ANN spike / feature gate | `C16B Embedding ANN index` | 💤 未开始 | 先确定 ANN 技术路径、fallback 和 CI story。 |
+| 13 | C16B Embedding ANN spike / feature gate | `C16B Embedding ANN index` | ✅ PR #72 | 先确定 ANN 技术路径、fallback 和 CI story。 |
 | 14 | C16B Embedding ANN implementation | `C16B Embedding ANN index` | 💤 未开始 | bounded vector search、fallback full scan、ranking 回归。 |
 | 15 | Contradiction Scan Scaling | `Contradiction Scan Scaling` | 💤 未开始 | 降低 `naive_contradiction_pairs` O(n²) 爆炸风险。 |
 | 16 | J14 Semantic Fusion Benchmark | `J14 Semantic Fusion Benchmark` | 💤 未开始 | semantic/query fusion 对照评估 lane。 |
