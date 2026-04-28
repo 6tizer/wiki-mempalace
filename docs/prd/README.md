@@ -16,6 +16,7 @@
 
 ## Completed PRDs Still Useful As Reference
 
+- [multi-process-writer-lease.md](multi-process-writer-lease.md) — PR #64：Repository-adjacent writer lease for write CLI/MCP entrypoints.
 - [outbox-consumer-cursors.md](outbox-consumer-cursors.md) — PR #62/#63：Consumer-scoped outbox cursor export API plus CLI/consumer cutover.
 - [mcp-vault-sync.md](mcp-vault-sync.md) — PR #61：MCP write tools trigger Vault projection when `--sync-wiki` is enabled.
 - [mcp-typed-errors.md](mcp-typed-errors.md) — PR #60：MCP JSON-RPC typed error mapping for stable client-side diagnostics.

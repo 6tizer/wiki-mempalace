@@ -25,7 +25,7 @@ use wiki_mempalace_bridge::{
 };
 use wiki_storage::{
     AutomationJobFailureSummary, AutomationRunRecord, AutomationRunStatus, OutboxConsumerProgress,
-    OutboxStats, SqliteRepository, WikiRepository,
+    OutboxStats, SqliteRepository, SqliteWriterLease, WikiRepository,
 };
 
 mod banner;
@@ -50,6 +50,7 @@ use wiki_compiler::preflight_llm_plan_tags;
 use wiki_compiler::{batch_source_tags_for_ingest, BatchIngestContext};
 
 const DEFAULT_MEMPALACE_CONSUMER_TAG: &str = "mempalace";
+const DEFAULT_WRITER_LEASE_TTL_SECS: i64 = 6 * 60 * 60;
 const DEFAULT_DASHBOARD_OUTPUT: &str = "wiki/reports/dashboard.html";
 const VAULT_DASHBOARD_OUTPUT: &str = "reports/dashboard.html";
 const DEFAULT_SUGGEST_REPORT_DIR: &str = "wiki/reports/suggestions";
@@ -1713,6 +1714,102 @@ fn latest_automation_run_or_error(
         })
 }
 
+fn writer_lease_ttl() -> Duration {
+    std::env::var("WIKI_WRITER_LEASE_TTL_SECS")
+        .ok()
+        .and_then(|raw| raw.parse::<i64>().ok())
+        .filter(|seconds| *seconds > 0)
+        .map(Duration::seconds)
+        .unwrap_or_else(|| Duration::seconds(DEFAULT_WRITER_LEASE_TTL_SECS))
+}
+
+fn automation_job_needs_writer_lease(job: AutomationJob) -> bool {
+    matches!(
+        job,
+        AutomationJob::BatchIngest
+            | AutomationJob::Lint
+            | AutomationJob::Maintenance
+            | AutomationJob::ConsumeToMempalace
+            | AutomationJob::NotionSync
+    )
+}
+
+fn cmd_writer_lease_label(cmd: &Cmd) -> &'static str {
+    match cmd {
+        Cmd::Automation {
+            cmd: AutomationCmd::RunDaily { .. },
+        } => "automation-run-daily",
+        Cmd::Automation {
+            cmd: AutomationCmd::Run { job },
+        } => automation_job_name(*job),
+        Cmd::BatchIngest { .. } => "batch-ingest",
+        Cmd::CompilerResolveDeferred { .. } => "compiler-resolve-deferred",
+        Cmd::ConsistencyApply { .. } => "consistency-apply",
+        Cmd::Mcp { .. } => "mcp",
+        Cmd::NotionSync { .. } => "notion-sync",
+        Cmd::NotionSyncIndexBackfill { .. } => "notion-sync-index-backfill",
+        Cmd::VaultBackfill { .. } => "vault-backfill",
+        _ => "wiki-cli",
+    }
+}
+
+fn cmd_needs_writer_lease(cmd: &Cmd) -> bool {
+    match cmd {
+        Cmd::Ingest { .. }
+        | Cmd::FileClaim { .. }
+        | Cmd::SupersedeClaim { .. }
+        | Cmd::Query { .. }
+        | Cmd::Lint
+        | Cmd::Gap { .. }
+        | Cmd::Promote { .. }
+        | Cmd::PromotePage { .. }
+        | Cmd::Crystallize { .. }
+        | Cmd::Qa { .. }
+        | Cmd::Synthesis { .. }
+        | Cmd::AckOutbox { .. }
+        | Cmd::ConsumeToMempalace { .. }
+        | Cmd::PalaceInit { .. }
+        | Cmd::Maintenance
+        | Cmd::Mcp { .. } => true,
+        Cmd::IngestLlm { dry_run, .. } => !dry_run,
+        Cmd::Fix { dry_run, write, .. } => *write && !dry_run,
+        Cmd::VaultBackfill { apply, .. } => *apply,
+        Cmd::ConsistencyApply { apply, .. } => *apply,
+        Cmd::BatchIngest { dry_run, .. } => !dry_run,
+        Cmd::CompilerResolveDeferred { apply, .. } => *apply,
+        Cmd::Automation {
+            cmd: AutomationCmd::RunDaily { dry_run },
+        } => !dry_run,
+        Cmd::Automation {
+            cmd: AutomationCmd::Run { job },
+        } => automation_job_needs_writer_lease(*job),
+        Cmd::NotionSync { dry_run, .. } => !dry_run,
+        Cmd::NotionSyncIndexBackfill { apply, .. } => *apply,
+        Cmd::NotionSourceVaultSync { apply, .. } => *apply,
+        Cmd::Automation { .. }
+        | Cmd::ExportOutboxNdjson
+        | Cmd::ExportOutboxNdjsonFrom { .. }
+        | Cmd::Explain { .. }
+        | Cmd::VaultAudit { .. }
+        | Cmd::OrphanGovernance { .. }
+        | Cmd::ConsistencyAudit
+        | Cmd::ConsistencyPlan { .. }
+        | Cmd::Metrics { .. }
+        | Cmd::Dashboard { .. }
+        | Cmd::Suggest { .. }
+        | Cmd::LlmSmoke { .. }
+        | Cmd::SchemaValidate { .. } => false,
+    }
+}
+
+fn acquire_cli_writer_lease(
+    db_path: &std::path::Path,
+    label: &str,
+) -> Result<SqliteWriterLease, Box<dyn std::error::Error>> {
+    SqliteWriterLease::acquire(db_path, format!("wiki-cli:{label}"), writer_lease_ttl())
+        .map_err(|err| -> Box<dyn std::error::Error> { err.to_string().into() })
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = match Cli::try_parse() {
         Ok(v) => v,
@@ -1881,6 +1978,11 @@ fn run_with_engine(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         } else {
             vault_backfill::BackfillMode::DryRun
         };
+        let _writer_lease = if *apply {
+            Some(acquire_cli_writer_lease(&cli.db, "vault-backfill")?)
+        } else {
+            None
+        };
         let report_dir = report_dir.clone().unwrap_or_else(|| vault.join("reports"));
         let report = vault_backfill::backfill_vault(vault_backfill::VaultBackfillOptions {
             vault_path: vault.clone(),
@@ -1914,6 +2016,14 @@ fn run_with_engine(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
     let viewer = parse_scope(&cli.viewer_scope);
     let wiki_root = cli.wiki_dir.clone();
     let sync_wiki = cli.sync_wiki;
+    let _writer_lease = if cmd_needs_writer_lease(&cli.cmd) {
+        Some(acquire_cli_writer_lease(
+            &cli.db,
+            cmd_writer_lease_label(&cli.cmd),
+        )?)
+    } else {
+        None
+    };
     let repo = SqliteRepository::open(&cli.db)?;
     let schema = if let Some(path) = &cli.schema {
         DomainSchema::from_json_path(path)?
@@ -3499,6 +3609,110 @@ mod tests {
         assert!(automation_job_spec(AutomationJob::NotionSync).requires_network);
         assert!(automation_job_spec(AutomationJob::NotionSync).in_daily);
         assert!(automation_notion_refresh_existing());
+    }
+
+    #[test]
+    fn writer_lease_command_classifier_covers_write_and_read_paths() {
+        assert!(cmd_needs_writer_lease(&Cmd::Ingest {
+            uri: "file:///a.md".into(),
+            body: "body".into(),
+            scope: "private:cli".into(),
+            tags: Vec::new(),
+        }));
+        assert!(cmd_needs_writer_lease(&Cmd::Query {
+            query: "q".into(),
+            rrf_k: 60.0,
+            per_stream_limit: 50,
+            write_page: false,
+            page_title: None,
+            entry_type: None,
+            palace_db: None,
+            palace_bank: "wiki".into(),
+        }));
+        assert!(cmd_needs_writer_lease(&Cmd::Lint));
+        assert!(cmd_needs_writer_lease(&Cmd::Fix {
+            dry_run: false,
+            auto_only: false,
+            write: true,
+        }));
+        assert!(!cmd_needs_writer_lease(&Cmd::Fix {
+            dry_run: true,
+            auto_only: false,
+            write: true,
+        }));
+        assert!(cmd_needs_writer_lease(&Cmd::BatchIngest {
+            vault: None,
+            origin: None,
+            source_path: None,
+            scope: None,
+            limit: None,
+            dry_run: false,
+            delay_secs: 0,
+        }));
+        assert!(!cmd_needs_writer_lease(&Cmd::BatchIngest {
+            vault: None,
+            origin: None,
+            source_path: None,
+            scope: None,
+            limit: None,
+            dry_run: true,
+            delay_secs: 0,
+        }));
+        assert!(cmd_needs_writer_lease(&Cmd::Automation {
+            cmd: AutomationCmd::RunDaily { dry_run: false },
+        }));
+        assert!(!cmd_needs_writer_lease(&Cmd::Automation {
+            cmd: AutomationCmd::RunDaily { dry_run: true },
+        }));
+        assert!(cmd_needs_writer_lease(&Cmd::Automation {
+            cmd: AutomationCmd::Run {
+                job: AutomationJob::Lint,
+            },
+        }));
+        assert!(!cmd_needs_writer_lease(&Cmd::Automation {
+            cmd: AutomationCmd::Run {
+                job: AutomationJob::LlmSmoke,
+            },
+        }));
+        assert!(cmd_needs_writer_lease(&Cmd::NotionSync {
+            db_id: NotionDbTarget::All,
+            since: None,
+            limit: None,
+            dry_run: false,
+            request_delay_ms: 350,
+            writeback_notion: false,
+            refresh_existing: false,
+            tag_policy: NotionSyncTagPolicy::TrustedSource,
+            verbose: false,
+        }));
+        assert!(!cmd_needs_writer_lease(&Cmd::NotionSync {
+            db_id: NotionDbTarget::All,
+            since: None,
+            limit: None,
+            dry_run: true,
+            request_delay_ms: 350,
+            writeback_notion: false,
+            refresh_existing: false,
+            tag_policy: NotionSyncTagPolicy::TrustedSource,
+            verbose: false,
+        }));
+        assert!(!cmd_needs_writer_lease(&Cmd::Metrics {
+            consumer_tag: DEFAULT_MEMPALACE_CONSUMER_TAG.into(),
+            low_coverage_threshold: 2,
+            json: false,
+            report: None,
+        }));
+        assert!(!cmd_needs_writer_lease(&Cmd::ExportOutboxNdjsonFrom {
+            consumer_tag: DEFAULT_MEMPALACE_CONSUMER_TAG.into(),
+            last_id: 0,
+        }));
+        assert!(cmd_needs_writer_lease(&Cmd::NotionSourceVaultSync {
+            vault: None,
+            dry_run: false,
+            apply: true,
+            repair_tags: true,
+            refresh_existing: true,
+        }));
     }
 
     #[test]

@@ -1,5 +1,6 @@
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
+use std::io::Write;
 use time::{
     format_description, format_description::well_known::Rfc3339, OffsetDateTime, PrimitiveDateTime,
 };
@@ -196,10 +197,142 @@ pub enum StorageError {
     NotFound(String),
     #[error("invalid canonical alias: {0}")]
     InvalidCanonicalAlias(String),
+    #[error("writer lease busy: {0}")]
+    WriterLeaseBusy(String),
+    #[error("io: {0}")]
+    Io(#[from] std::io::Error),
 }
 
 pub struct SqliteRepository {
     conn: Connection,
+}
+
+#[derive(Debug)]
+pub struct SqliteWriterLease {
+    lock_path: std::path::PathBuf,
+    owner: String,
+}
+
+impl SqliteWriterLease {
+    pub fn acquire(
+        db_path: impl AsRef<std::path::Path>,
+        owner: impl Into<String>,
+        ttl: time::Duration,
+    ) -> Result<Self, StorageError> {
+        let lock_path = sqlite_writer_lease_path(db_path.as_ref());
+        let owner = sanitize_writer_lease_owner(owner.into());
+        let ttl = if ttl.whole_seconds() <= 0 {
+            time::Duration::seconds(1)
+        } else {
+            ttl
+        };
+
+        for attempt in 0..2 {
+            let now = OffsetDateTime::now_utc();
+            let expires_at = now + ttl;
+            match std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&lock_path)
+            {
+                Ok(mut file) => {
+                    let payload = render_writer_lease_payload(&owner, now, expires_at)?;
+                    file.write_all(payload.as_bytes())?;
+                    file.sync_all()?;
+                    return Ok(Self { lock_path, owner });
+                }
+                Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {
+                    let content = std::fs::read_to_string(&lock_path).map_err(|read_err| {
+                        StorageError::WriterLeaseBusy(format!(
+                            "{} exists but cannot be read: {read_err}",
+                            lock_path.display()
+                        ))
+                    })?;
+                    if attempt == 0 && writer_lease_is_expired(&content, now) {
+                        std::fs::remove_file(&lock_path)?;
+                        continue;
+                    }
+                    return Err(StorageError::WriterLeaseBusy(format!(
+                        "{} is held by {}",
+                        lock_path.display(),
+                        describe_writer_lease(&content)
+                    )));
+                }
+                Err(err) => return Err(StorageError::Io(err)),
+            }
+        }
+
+        Err(StorageError::WriterLeaseBusy(format!(
+            "{} could not be acquired after stale cleanup",
+            lock_path.display()
+        )))
+    }
+
+    pub fn lock_path(&self) -> &std::path::Path {
+        &self.lock_path
+    }
+}
+
+impl Drop for SqliteWriterLease {
+    fn drop(&mut self) {
+        let Ok(content) = std::fs::read_to_string(&self.lock_path) else {
+            return;
+        };
+        if writer_lease_field(&content, "owner").as_deref() == Some(self.owner.as_str()) {
+            let _ = std::fs::remove_file(&self.lock_path);
+        }
+    }
+}
+
+pub fn sqlite_writer_lease_path(db_path: &std::path::Path) -> std::path::PathBuf {
+    let mut raw = db_path.as_os_str().to_os_string();
+    raw.push(".writer.lock");
+    std::path::PathBuf::from(raw)
+}
+
+fn sanitize_writer_lease_owner(owner: String) -> String {
+    let sanitized = owner.replace(['\n', '\r'], " ").trim().to_string();
+    if sanitized.is_empty() {
+        "unknown".to_string()
+    } else {
+        sanitized
+    }
+}
+
+fn render_writer_lease_payload(
+    owner: &str,
+    acquired_at: OffsetDateTime,
+    expires_at: OffsetDateTime,
+) -> Result<String, StorageError> {
+    Ok(format!(
+        "owner={owner}\npid={}\nacquired_at={}\nexpires_at={}\n",
+        std::process::id(),
+        encode_time(acquired_at)?,
+        encode_time(expires_at)?,
+    ))
+}
+
+fn writer_lease_field(content: &str, key: &str) -> Option<String> {
+    let prefix = format!("{key}=");
+    content
+        .lines()
+        .find_map(|line| line.strip_prefix(&prefix).map(ToString::to_string))
+}
+
+fn writer_lease_expires_at(content: &str) -> Option<OffsetDateTime> {
+    writer_lease_field(content, "expires_at").and_then(|raw| parse_time(&raw).ok())
+}
+
+fn writer_lease_is_expired(content: &str, now: OffsetDateTime) -> bool {
+    writer_lease_expires_at(content).is_some_and(|expires_at| expires_at <= now)
+}
+
+fn describe_writer_lease(content: &str) -> String {
+    let owner = writer_lease_field(content, "owner").unwrap_or_else(|| "unknown".to_string());
+    let pid = writer_lease_field(content, "pid").unwrap_or_else(|| "unknown".to_string());
+    let expires_at =
+        writer_lease_field(content, "expires_at").unwrap_or_else(|| "unknown".to_string());
+    format!("owner={owner} pid={pid} expires_at={expires_at}")
 }
 
 impl SqliteRepository {
@@ -1298,6 +1431,63 @@ mod tests {
     use super::*;
     use tempfile::tempdir;
     use wiki_core::{Scope, WikiEvent};
+
+    #[test]
+    fn writer_lease_blocks_second_writer_and_releases_on_drop() {
+        let dir = tempdir().unwrap();
+        let db = dir.path().join("wiki.db");
+        let lock_path = sqlite_writer_lease_path(&db);
+
+        let lease = SqliteWriterLease::acquire(&db, "first", time::Duration::minutes(5)).unwrap();
+        assert!(lock_path.exists());
+
+        let err =
+            SqliteWriterLease::acquire(&db, "second", time::Duration::minutes(5)).unwrap_err();
+        assert!(matches!(err, StorageError::WriterLeaseBusy(_)));
+
+        drop(lease);
+        assert!(!lock_path.exists());
+
+        let second = SqliteWriterLease::acquire(&db, "second", time::Duration::minutes(5)).unwrap();
+        assert!(second.lock_path().exists());
+    }
+
+    #[test]
+    fn writer_lease_replaces_expired_lock_file() {
+        let dir = tempdir().unwrap();
+        let db = dir.path().join("wiki.db");
+        let lock_path = sqlite_writer_lease_path(&db);
+        let now = OffsetDateTime::now_utc();
+        let stale = render_writer_lease_payload(
+            "stale",
+            now - time::Duration::minutes(10),
+            now - time::Duration::minutes(1),
+        )
+        .unwrap();
+        std::fs::write(&lock_path, stale).unwrap();
+
+        let lease = SqliteWriterLease::acquire(&db, "fresh", time::Duration::minutes(5)).unwrap();
+        let content = std::fs::read_to_string(lease.lock_path()).unwrap();
+        assert!(content.contains("owner=fresh"));
+    }
+
+    #[test]
+    fn writer_lease_drop_does_not_remove_other_owner() {
+        let dir = tempdir().unwrap();
+        let db = dir.path().join("wiki.db");
+        let lock_path = sqlite_writer_lease_path(&db);
+
+        let lease = SqliteWriterLease::acquire(&db, "first", time::Duration::minutes(5)).unwrap();
+        let now = OffsetDateTime::now_utc();
+        let other =
+            render_writer_lease_payload("second", now, now + time::Duration::minutes(5)).unwrap();
+        std::fs::write(&lock_path, other).unwrap();
+
+        drop(lease);
+        assert!(lock_path.exists());
+        let content = std::fs::read_to_string(&lock_path).unwrap();
+        assert!(content.contains("owner=second"));
+    }
 
     #[test]
     fn outbox_export_from_id_and_ack() {

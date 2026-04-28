@@ -39,7 +39,7 @@
 | CLI Command Modularization | 💤 未开始 | 审计延后项：拆分 `wiki-cli/src/main.rs` 的子命令处理到 `commands/` 模块，降低 main.rs 规模；纯重构，需独立 PRD 和分阶段 review |
 | MCP Typed Errors | ✅ 已合入 PR #60 | 审计延后项：`wiki-cli/src/mcp.rs` 已收敛为 typed `McpToolError` / JSON-RPC error mapping，输出稳定 `error.data.kind` |
 | MCP API Reference | ✅ 已合入 PR #58 | PR #58 新增 `docs/mcp-api-reference.md`，覆盖统一 MCP Server 工具参数、scope 默认值、写入副作用、输入上限和错误形状 |
-| Multi-process Write Guardrails | 💤 部分完成，待 lock/lease | PR #58 已补 README/AGENTS writer safety 警告；后续评估 advisory lock 或 writer lease |
+| Multi-process Write Guardrails | ✅ 已合入 PR #64 | PR #58 已补 writer safety 警告；PR #64 已增加 `wiki.db.writer.lock` writer lease，写入型 CLI/MCP 入口拿不到 lease 时 fail fast |
 | Contradiction Scan Scaling | 💤 未开始 | 审计延后项：优化 `naive_contradiction_pairs` O(n²) 路径，加入 stale 预过滤、scope 分桶、可选 embedding 预筛或 bounded candidates |
 | Reliability Test Matrix | 💤 未开始 | 审计延后项：补并发写入、1w+ claims/pages 大数据量性能回归、MCP malformed/oversized/fuzz、LLM 畸形 JSON、DB lock/failure injection 测试 |
 | Automation Integrity Check | ✅ 已合入 PR #58 | PR #58 已把 `PRAGMA integrity_check` 纳入 `automation health` 输出；scheduled report 保留策略仍属于 `Scheduled Vault Reports` |
@@ -79,7 +79,7 @@ scale-up 混做。
 
 ### P4：Reliability / Hardening
 
-1. Multi-process Write Guardrails：PR #58 已写清限制；后续决定 advisory lock / writer lease。
+1. Multi-process Write Guardrails：PR #64 已用 repository-adjacent writer lease 强制单 writer。
 2. Reliability Test Matrix：补并发、大数据、MCP fuzz、LLM/DB 故障注入。
 3. Dependency Audit Automation：低频供应链检查，不拖慢 quick CI。
 
@@ -128,7 +128,7 @@ PR #58 完成 hardening 小补丁后，剩余 12 个未完成/部分完成项按
 | 6 | Embedding ANN spike / feature gate | `C16B Embedding ANN index` | 先确定 sqlite-vec/ANN 技术、feature gate、CI/release story。 |
 | 7 | Embedding ANN implementation | `C16B Embedding ANN index` | 实现 upsert/search/fallback/re-rank；与 spike 分开 review。 |
 | 8 | Contradiction Scan Scaling | `Contradiction Scan Scaling` | 优化 contradiction O(n²) 路径，独立做性能/语义回归。 |
-| 9 | Multi-process Write Lock / Lease | `Multi-process Write Guardrails` | PR #58 已完成文档警告；后续若需要强制保护，再做 advisory lock / writer lease。 |
+| 9 | Multi-process Write Lock / Lease | `Multi-process Write Guardrails` | 已由 PR #64 完成：`wiki.db.writer.lock` writer lease + 写入口 fail-fast。 |
 | 10 | Reliability Test Matrix | `Reliability Test Matrix` | 补并发、大数据、MCP fuzz、LLM/DB 故障注入测试，为后续迁移兜底。 |
 | 11 | Dependency Audit Automation | `Dependency Audit Automation` | 增加低频供应链检查，不拖慢 quick CI。 |
 | 12 | Scheduled Vault Reports | `Scheduled Vault Reports` | 定时生成 vault-audit/metrics/dashboard/health/suggest 报告；可包含 automation health 历史保留。 |
