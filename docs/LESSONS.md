@@ -214,3 +214,12 @@
 - Spec changes needed: writer 分类要明确 query/lint/gap 也属于 DB writer，因为它们会记录 query/lint/gap 运行状态或保存 snapshot。
 - Tests or reviews that caught issues: storage tests 覆盖 busy/release/stale/owner-safe drop；CLI tests 覆盖 writer/read-only 分类、busy fail-fast、metrics 被锁时仍可读。
 - Next plan note: 下一项是 `Reliability Test Matrix`，可以直接把 writer lease busy、DB lock/failure injection 和 MCP malformed/oversized 放进回归矩阵。
+
+## 2026-04-28 / Reliability Test Matrix
+
+- Scope: 只补测试，不改功能：DB batch rollback failure injection、大 snapshot smoke、MCP malformed JSON、LLM malformed JSON slice。
+- What worked: SQLite trigger 比破坏 DB 文件更稳，能精准模拟 batch 中途失败并验证 rollback。
+- What caused rework: MCP parse error 原先只在 `run_mcp` loop 里手写 JSON，无法直接单测；抽成 `parse_json_rpc_request_line()` 后行为不变但可覆盖。
+- Spec changes needed: quick 矩阵和慢速 fuzz/perf 要拆开；本 PR 只放能进日常 CI 的确定性测试。
+- Tests or reviews that caught issues: focused `cargo test -p wiki-storage reliability` 和 `cargo test -p wiki-cli reliability` 覆盖新增路径；workspace test 验证大 snapshot smoke 没拖垮 quick。
+- Next plan note: 下一项进入 `Dependency Audit Automation`，保持低频 job，不塞进 quick 必跑路径。

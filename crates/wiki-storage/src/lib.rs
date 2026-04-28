@@ -1790,6 +1790,39 @@ mod tests {
     }
 
     #[test]
+    fn reliability_append_outbox_batch_rolls_back_when_later_event_fails() {
+        let dir = tempdir().unwrap();
+        let db = dir.path().join("wiki.db");
+        let repo = SqliteRepository::open(&db).unwrap();
+        repo.conn
+            .execute_batch(
+                "CREATE TRIGGER fail_blocked_outbox_insert
+                 BEFORE INSERT ON wiki_outbox
+                 WHEN NEW.event_json LIKE '%blocked%'
+                 BEGIN
+                   SELECT RAISE(FAIL, 'forced batch failure');
+                 END;",
+            )
+            .unwrap();
+
+        let ok = WikiEvent::QueryServed {
+            query_fingerprint: "ok".into(),
+            top_doc_ids: vec!["doc:ok".into()],
+            at: OffsetDateTime::now_utc(),
+        };
+        let blocked = WikiEvent::QueryServed {
+            query_fingerprint: "blocked".into(),
+            top_doc_ids: vec!["doc:blocked".into()],
+            at: OffsetDateTime::now_utc(),
+        };
+
+        let err = repo.append_outbox_batch(&[ok, blocked]).unwrap_err();
+
+        assert!(format!("{err}").contains("forced batch failure"));
+        assert_eq!(repo.export_outbox_ndjson().unwrap().lines().count(), 0);
+    }
+
+    #[test]
     fn snapshot_rolls_back_when_outbox_insert_fails() {
         let dir = tempdir().unwrap();
         let db = dir.path().join("wiki.db");
@@ -1832,6 +1865,43 @@ mod tests {
         assert_eq!(restored.sources.len(), 1);
         assert_eq!(restored.sources[0].uri, "file:///old.md");
         assert_eq!(repo.export_outbox_ndjson().unwrap().lines().count(), 0);
+    }
+
+    #[test]
+    fn reliability_large_snapshot_roundtrip_smoke() {
+        let dir = tempdir().unwrap();
+        let db = dir.path().join("wiki.db");
+        let repo = SqliteRepository::open(&db).unwrap();
+        let scope = Scope::Private {
+            agent_id: "scale-smoke".into(),
+        };
+        let claims: Vec<_> = (0..10_000)
+            .map(|i| {
+                Claim::new(
+                    format!("large smoke claim {i}"),
+                    scope.clone(),
+                    wiki_core::MemoryTier::Semantic,
+                )
+            })
+            .collect();
+        let pages: Vec<_> = (0..1_000)
+            .map(|i| WikiPage::new(format!("large-smoke-page-{i}"), "body", scope.clone()))
+            .collect();
+        let snapshot = StorageSnapshot {
+            claims,
+            pages,
+            ..StorageSnapshot::default()
+        };
+
+        repo.save_snapshot(&snapshot).unwrap();
+        let loaded = repo.load_snapshot().unwrap();
+
+        assert_eq!(loaded.claims.len(), 10_000);
+        assert_eq!(loaded.pages.len(), 1_000);
+        assert!(loaded
+            .claims
+            .iter()
+            .any(|claim| claim.text == "large smoke claim 9999"));
     }
 
     #[test]

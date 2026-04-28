@@ -353,6 +353,25 @@ mod tests {
 
         assert_eq!(body["response_format"]["type"], "json_object");
     }
+
+    #[test]
+    fn reliability_parse_json_object_slice_extracts_fenced_object() {
+        let raw = "```json\n{\"version\":1,\"claims\":[]}\n```";
+
+        assert_eq!(
+            parse_json_object_slice(raw),
+            "{\"version\":1,\"claims\":[]}"
+        );
+    }
+
+    #[test]
+    fn reliability_parse_json_object_slice_leaves_malformed_text_for_parser_error() {
+        let raw = "model returned no object";
+        let slice = parse_json_object_slice(raw);
+
+        assert_eq!(slice, raw);
+        assert!(serde_json::from_str::<serde_json::Value>(slice).is_err());
+    }
 }
 
 fn do_chat_once(

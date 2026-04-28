@@ -96,6 +96,18 @@ fn required_str<'a>(args: &'a Value, key: &str) -> Result<&'a str, McpToolError>
         .ok_or_else(|| McpToolError::invalid_params(format!("missing {key}")))
 }
 
+fn parse_json_rpc_request_line(line: &str) -> Result<Value, serde_json::Error> {
+    serde_json::from_str(line.trim())
+}
+
+fn json_rpc_parse_error_object(error: impl std::fmt::Display) -> Value {
+    json!({
+        "code": -32700,
+        "message": error.to_string(),
+        "data": {"kind": "parse_error"}
+    })
+}
+
 pub fn run_mcp(
     db_path: &std::path::Path,
     schema: DomainSchema,
@@ -117,7 +129,7 @@ pub fn run_mcp(
         if line.is_empty() {
             break;
         }
-        let req: Value = match serde_json::from_str(line.trim()) {
+        let req: Value = match parse_json_rpc_request_line(&line) {
             Ok(v) => v,
             Err(e) => {
                 writeln!(
@@ -126,11 +138,7 @@ pub fn run_mcp(
                     json!({
                         "jsonrpc":"2.0",
                         "id":Value::Null,
-                        "error":{
-                            "code":-32700,
-                            "message":e.to_string(),
-                            "data":{"kind":"parse_error"}
-                        }
+                        "error": json_rpc_parse_error_object(e)
                     })
                 )?;
                 stdout.flush()?;
@@ -1015,6 +1023,22 @@ mod tests {
         let mut cursor = std::io::Cursor::new(b"abcdef\n".as_slice());
         let err = read_line_limited(&mut cursor, 3).unwrap_err();
         assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+    }
+
+    #[test]
+    fn reliability_mcp_malformed_json_maps_to_parse_error() {
+        let err = parse_json_rpc_request_line("{ not json").unwrap_err();
+        let object = json_rpc_parse_error_object(&err);
+
+        assert_eq!(object.get("code").and_then(Value::as_i64), Some(-32700));
+        assert_eq!(
+            object.pointer("/data/kind").and_then(Value::as_str),
+            Some("parse_error")
+        );
+        assert_eq!(
+            object.get("message").and_then(Value::as_str).unwrap(),
+            err.to_string()
+        );
     }
 
     #[test]
