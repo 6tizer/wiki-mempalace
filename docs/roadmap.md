@@ -49,7 +49,7 @@
 | Scheduled Vault Reports | ✅ 已合入 PR #67 | 已新增 automation `vault-reports` job：timestamped bundle、`latest.json/latest.md` 指针、`WIKI_SCHEDULED_REPORT_KEEP` 保留策略 |
 | C16A Atomic snapshot + outbox | ✅ 已合入 | PR #25 已 merge；新增 `save_snapshot_and_append_outbox` 单事务持久化路径；CLI/MCP/backfill 写路径已切到原子提交 |
 | C16B Embedding ANN index | ✅ PR #72/#73 | `ann-embed` feature gate、locality-bucket bounded search、fallback full scan、ranking 回归已完成 |
-| M12 Executor | 💤 未开始 | 在现有 `suggest` 策略层后增加 dry-run planner 与 guarded apply；默认不执行写入，需 allowlist + explicit apply |
+| M12 Executor | 部分完成 | PR #81 完成 `suggest --executor-plan` dry-run planner；guarded apply 仍待下一项 |
 
 ## 当前下一阶段
 
@@ -105,7 +105,7 @@ scale-up 混做。
 
 ### P7：M12 executor（最后）
 
-1. M12 executor dry-run planner：在 `suggest` 策略层后增加 action plan，只产出计划。
+1. M12 executor dry-run planner：PR #81 已完成 `suggest --executor-plan` action plan，只产出计划。
 2. M12 executor guarded apply：增加 allowlist、dry-run-first、explicit apply flag，只执行低风险可审计动作。
 
 ## 审计剩余项 PR 计划
@@ -147,7 +147,7 @@ scale-up 混做。
 | 19 | CLI Command Modularization phase 1 | `CLI Command Modularization` | ✅ PR #78 | 先拆低风险命令域，不改 CLI 行为。 |
 | 20 | CLI Command Modularization phase 2 | `CLI Command Modularization` | ✅ PR #79 | 再拆 dispatcher/shared config，补 smoke。 |
 | 21 | Time Library Unification | `Time Library Unification` | ✅ PR #80 | 统一或文档化 `chrono` / `time` 边界。 |
-| 22 | M12 executor dry-run planner | `M12 Executor` | 💤 未开始 | 只产出 action plan，不执行写入。 |
+| 22 | M12 executor dry-run planner | `M12 Executor` | ✅ PR #81 | 只产出 action plan，不执行写入。 |
 | 23 | M12 executor guarded apply | `M12 Executor` | 💤 未开始 | allowlist + dry-run-first + explicit apply flag。 |
 
 执行计划见 [automation-issue-batch-3.md](automation-issue-batch-3.md)。开发流程见

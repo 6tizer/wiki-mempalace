@@ -1,17 +1,19 @@
 #![allow(clippy::items_after_test_module, clippy::too_many_arguments)]
 
 use clap::{Parser, Subcommand, ValueEnum};
+use serde::Serialize;
 use std::collections::BTreeMap;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use time::{format_description::well_known::Rfc3339, Duration, OffsetDateTime};
 use walkdir::WalkDir;
 use wiki_core::{
-    document_visible_to_viewer, parse_memory_tier, AuditOperation, AuditRecord, ClaimId,
-    CompositeSearchPorts, Confidence, DomainSchema, Entity, EntityId, EntityKind, EntryStatus,
-    EntryType, FixAction, FixActionType, FixPatch, FusionConfig, GapFinding, GapSeverity,
-    LlmIngestPlanV1, MemoryTier, PageContract, PageId, QueryContext, RelationKind, Scope,
-    SessionCrystallizationInput, SourceId, StrategyExecutionPolicy, StrategyReport,
+    build_strategy_execution_plan, document_visible_to_viewer, parse_memory_tier, AuditOperation,
+    AuditRecord, ClaimId, CompositeSearchPorts, Confidence, DomainSchema, Entity, EntityId,
+    EntityKind, EntryStatus, EntryType, FixAction, FixActionType, FixPatch, FusionConfig,
+    GapFinding, GapSeverity, LlmIngestPlanV1, MemoryTier, PageContract, PageId, QueryContext,
+    RelationKind, Scope, SessionCrystallizationInput, SourceId, StrategyExecutionActionKind,
+    StrategyExecutionDryRunStatus, StrategyExecutionPlan, StrategyExecutionPolicy, StrategyReport,
     StrategySeverity, TypedEdge, WikiEvent, WikiMetricsReport, WikiPage,
 };
 use wiki_kernel::{
@@ -360,6 +362,9 @@ enum Cmd {
         /// Print pretty JSON instead of text.
         #[arg(long, default_value_t = false)]
         json: bool,
+        /// Also derive an executor dry-run action plan from the suggestion report.
+        #[arg(long, default_value_t = false)]
+        executor_plan: bool,
         /// Also write timestamped JSON + Markdown reports to this directory.
         #[arg(long, num_args = 0..=1)]
         report_dir: Option<Option<PathBuf>>,
@@ -1062,6 +1067,22 @@ fn strategy_execution_policy_name(policy: StrategyExecutionPolicy) -> &'static s
     }
 }
 
+fn strategy_execution_action_kind_name(kind: StrategyExecutionActionKind) -> &'static str {
+    match kind {
+        StrategyExecutionActionKind::FixAutoSafe => "fix_auto_safe",
+        StrategyExecutionActionKind::AgentReview => "agent_review",
+        StrategyExecutionActionKind::HumanRequired => "human_required",
+        StrategyExecutionActionKind::Unsupported => "unsupported",
+    }
+}
+
+fn strategy_dry_run_status_name(status: StrategyExecutionDryRunStatus) -> &'static str {
+    match status {
+        StrategyExecutionDryRunStatus::WouldApply => "would_apply",
+        StrategyExecutionDryRunStatus::Blocked => "blocked",
+    }
+}
+
 fn render_strategy_report_text(report: &StrategyReport) -> String {
     let generated_at = report
         .generated_at
@@ -1087,6 +1108,45 @@ fn render_strategy_report_text(report: &StrategyReport) -> String {
         ));
         if let Some(command) = &suggestion.suggested_command {
             out.push_str(&format!("  suggested_command={command}\n"));
+        }
+    }
+    out
+}
+
+fn render_strategy_execution_plan_text(plan: &StrategyExecutionPlan) -> String {
+    let generated_at = plan
+        .generated_at
+        .map(format_automation_time)
+        .unwrap_or_else(|| "unknown".to_string());
+    let viewer_scope = plan.viewer_scope.as_deref().unwrap_or("none");
+    let would_apply = plan
+        .actions
+        .iter()
+        .filter(|action| action.dry_run_status == StrategyExecutionDryRunStatus::WouldApply)
+        .count();
+    let blocked = plan.actions.len().saturating_sub(would_apply);
+    let mut out = format!(
+        "executor dry-run plan: plan_id={} source_report_id={} generated_at={} viewer_scope={} actions={} would_apply={} blocked={}\n",
+        plan.plan_id,
+        plan.source_report_id,
+        generated_at,
+        viewer_scope,
+        plan.actions.len(),
+        would_apply,
+        blocked
+    );
+    for action in &plan.actions {
+        out.push_str(&format!(
+            "- id={} suggestion_id={} code={} action_kind={} dry_run_status={}\n  reason={}\n",
+            action.action_id,
+            action.suggestion_id,
+            action.code,
+            strategy_execution_action_kind_name(action.action_kind),
+            strategy_dry_run_status_name(action.dry_run_status),
+            action.reason
+        ));
+        if let Some(command) = &action.command_preview {
+            out.push_str(&format!("  command_preview={command}\n"));
         }
     }
     out
@@ -1143,6 +1203,102 @@ fn render_strategy_report_markdown(report: &StrategyReport, sibling_json: &str) 
         out.push('\n');
     }
     out
+}
+
+fn render_strategy_execution_plan_markdown(
+    plan: &StrategyExecutionPlan,
+    sibling_json: &str,
+    source_report_json: &str,
+) -> String {
+    let generated_at = plan
+        .generated_at
+        .map(format_automation_time)
+        .unwrap_or_else(|| "unknown".to_string());
+    let viewer_scope = plan.viewer_scope.as_deref().unwrap_or("none");
+    let would_apply = plan
+        .actions
+        .iter()
+        .filter(|action| action.dry_run_status == StrategyExecutionDryRunStatus::WouldApply)
+        .count();
+    let blocked = plan.actions.len().saturating_sub(would_apply);
+    let mut out = format!(
+        concat!(
+            "# M12 Executor Dry-Run Plan\n\n",
+            "- plan_id: {}\n",
+            "- source_report_id: {}\n",
+            "- generated_at: {}\n",
+            "- viewer_scope: {}\n",
+            "- mode: dry_run\n",
+            "- action_count: {}\n",
+            "- would_apply: {}\n",
+            "- blocked: {}\n",
+            "- source_of_truth: {}\n",
+            "- source_report: {}\n\n",
+            "> Sibling JSON `{}` is the source of truth. This plan is derived from `{}` and does not execute writes.\n\n",
+            "## Actions\n\n",
+        ),
+        plan.plan_id,
+        plan.source_report_id,
+        generated_at,
+        viewer_scope,
+        plan.actions.len(),
+        would_apply,
+        blocked,
+        sibling_json,
+        source_report_json,
+        sibling_json,
+        source_report_json
+    );
+    if plan.actions.is_empty() {
+        out.push_str("No actions.\n");
+        return out;
+    }
+    for action in &plan.actions {
+        out.push_str(&format!(
+            concat!(
+                "### {}\n\n",
+                "- suggestion_id: {}\n",
+                "- code: {}\n",
+                "- execution_policy: {}\n",
+                "- action_kind: {}\n",
+                "- dry_run_status: {}\n",
+                "- subject: {}\n",
+                "- reason: {}\n",
+            ),
+            action.action_id,
+            action.suggestion_id,
+            action.code,
+            strategy_execution_policy_name(action.execution_policy),
+            strategy_execution_action_kind_name(action.action_kind),
+            strategy_dry_run_status_name(action.dry_run_status),
+            action.subject.as_deref().unwrap_or("none"),
+            action.reason
+        ));
+        if let Some(command) = &action.command_preview {
+            out.push_str(&format!("- command_preview: `{command}`\n"));
+        }
+        out.push('\n');
+    }
+    out
+}
+
+#[derive(Serialize)]
+struct StrategySuggestJsonOutput<'a> {
+    strategy_report: &'a StrategyReport,
+    executor_plan: &'a StrategyExecutionPlan,
+}
+
+fn serialize_strategy_suggest_json(
+    report: &StrategyReport,
+    plan: Option<&StrategyExecutionPlan>,
+) -> Result<String, serde_json::Error> {
+    match plan {
+        Some(plan) => serde_json::to_string_pretty(&StrategySuggestJsonOutput {
+            strategy_report: report,
+            executor_plan: plan,
+        }),
+        None => serde_json::to_string_pretty(report),
+    }
 }
 
 fn strategy_report_prefix(generated_at: OffsetDateTime) -> String {
@@ -2861,6 +3017,7 @@ fn run_with_engine(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             consumer_tag,
             low_coverage_threshold,
             json,
+            executor_plan,
             report_dir,
         } => {
             let now = OffsetDateTime::now_utc();
@@ -2889,6 +3046,7 @@ fn run_with_engine(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                     report_id,
                 },
             );
+            let plan = executor_plan.then(|| build_strategy_execution_plan(&report));
 
             let report_dir = match report_dir {
                 Some(Some(dir)) => Some(resolve_wiki_relative_path(wiki_root.as_deref(), dir)),
@@ -2907,17 +3065,50 @@ fn run_with_engine(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                     &markdown_path,
                     render_strategy_report_markdown(&report, &json_name),
                 )?;
+                let plan_paths = if let Some(plan) = &plan {
+                    let plan_json_name = format!("{}.json", plan.plan_id);
+                    let plan_markdown_name = format!("{}.md", plan.plan_id);
+                    let plan_json_path = dir.join(&plan_json_name);
+                    let plan_markdown_path = dir.join(&plan_markdown_name);
+                    std::fs::write(&plan_json_path, serde_json::to_string_pretty(plan)?)?;
+                    std::fs::write(
+                        &plan_markdown_path,
+                        render_strategy_execution_plan_markdown(plan, &plan_json_name, &json_name),
+                    )?;
+                    Some((plan_json_path, plan_markdown_path))
+                } else {
+                    None
+                };
                 if json {
-                    println!("{}", serde_json::to_string_pretty(&report)?);
+                    println!(
+                        "{}",
+                        serialize_strategy_suggest_json(&report, plan.as_ref())?
+                    );
                 } else {
                     print!("{}", render_strategy_report_text(&report));
+                    if let Some(plan) = &plan {
+                        print!("{}", render_strategy_execution_plan_text(plan));
+                    }
                     println!("json_report_file={}", json_path.display());
                     println!("markdown_report_file={}", markdown_path.display());
+                    if let Some((plan_json_path, plan_markdown_path)) = plan_paths {
+                        println!("executor_plan_json_file={}", plan_json_path.display());
+                        println!(
+                            "executor_plan_markdown_file={}",
+                            plan_markdown_path.display()
+                        );
+                    }
                 }
             } else if json {
-                println!("{}", serde_json::to_string_pretty(&report)?);
+                println!(
+                    "{}",
+                    serialize_strategy_suggest_json(&report, plan.as_ref())?
+                );
             } else {
                 print!("{}", render_strategy_report_text(&report));
+                if let Some(plan) = &plan {
+                    print!("{}", render_strategy_execution_plan_text(plan));
+                }
             }
         }
         Cmd::LlmSmoke { config, prompt } => {

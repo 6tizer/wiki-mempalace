@@ -54,8 +54,9 @@
 
 ## Deferred Follow-ups
 
-- Internal operator/executor: read `*-m12-suggest.json`, execute allowed
-  non-deletion actions, and write separate execution JSON/Markdown reports.
+- Internal operator/executor:
+  - Dry-run planner: active in `docs/specs/m12-executor-dry-run-planner/`.
+  - Guarded apply remains future scope: allowlist, dry-run-first, explicit apply.
 - Dashboard integration: after M12 lands, optionally show or link the latest
   suggestion report from `wiki-cli dashboard`.
 - Query history schema: consider adding explicit viewer scope or a true query
