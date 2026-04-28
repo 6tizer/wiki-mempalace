@@ -703,26 +703,59 @@ impl<H: WikiHook> LlmWikiEngine<H> {
             None => true,
             Some(v) => document_visible_to_viewer(s, v),
         };
-        let ids: Vec<ClaimId> = self
-            .store
-            .claims
-            .iter()
-            .filter(|(_, c)| visible(&c.scope))
-            .map(|(id, _)| *id)
-            .collect();
-        for i in 0..ids.len() {
-            for j in (i + 1)..ids.len() {
-                let a = &self.store.claims[&ids[i]];
-                let b = &self.store.claims[&ids[j]];
-                if a.stale || b.stale {
-                    continue;
+        let mut by_scope: std::collections::HashMap<Scope, Vec<&Claim>> =
+            std::collections::HashMap::new();
+        for claim in self.store.claims.values() {
+            if !visible(&claim.scope) || claim.stale {
+                continue;
+            }
+            if contradiction_scan_keys(&claim.text).is_empty() {
+                continue;
+            }
+            by_scope.entry(claim.scope.clone()).or_default().push(claim);
+        }
+        let mut scope_buckets: Vec<_> = by_scope.into_iter().collect();
+        scope_buckets.sort_by_key(|(scope, _)| scope_sort_key(scope));
+        for (_, mut claims) in scope_buckets {
+            claims.sort_by_key(|claim| claim.id.0);
+            let keys: Vec<Vec<ContradictionScanKey>> = claims
+                .iter()
+                .map(|claim| contradiction_scan_keys(&claim.text))
+                .collect();
+            let mut index: std::collections::HashMap<ContradictionScanKey, Vec<usize>> =
+                std::collections::HashMap::new();
+            for (idx, claim_keys) in keys.iter().enumerate() {
+                for key in claim_keys {
+                    index.entry(*key).or_default().push(idx);
                 }
-                if contradicts_heuristic(&a.text, &b.text) {
-                    hints.push(ContradictionHint {
-                        a: a.id,
-                        b: b.id,
-                        reason: "heuristic negation / mismatch".into(),
-                    });
+            }
+            for i in 0..claims.len() {
+                let mut candidates = Vec::new();
+                for opposite in contradiction_opposite_keys(&keys[i]) {
+                    if let Some(indices) = index.get(&opposite) {
+                        candidates.extend(indices.iter().copied());
+                    }
+                }
+                candidates.sort_unstable();
+                candidates.dedup();
+                let mut checked = 0usize;
+                for j in candidates {
+                    if j <= i {
+                        continue;
+                    }
+                    if checked >= CONTRADICTION_MAX_CANDIDATES_PER_CLAIM {
+                        break;
+                    }
+                    checked += 1;
+                    let a = claims[i];
+                    let b = claims[j];
+                    if contradicts_heuristic(&a.text, &b.text) {
+                        hints.push(ContradictionHint {
+                            a: a.id,
+                            b: b.id,
+                            reason: "heuristic negation / mismatch".into(),
+                        });
+                    }
                 }
             }
         }
@@ -1034,6 +1067,56 @@ fn parse_claim_doc_id(s: &str) -> Option<ClaimId> {
     Some(ClaimId(u))
 }
 
+const CONTRADICTION_MAX_CANDIDATES_PER_CLAIM: usize = 256;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum ContradictionScanKey {
+    ZhNegation,
+    ZhPositive,
+    EnCannot,
+    EnCan,
+}
+
+fn contradiction_scan_keys(text: &str) -> Vec<ContradictionScanKey> {
+    let lower = text.to_ascii_lowercase();
+    let mut keys = Vec::new();
+    if lower.contains("不是") {
+        keys.push(ContradictionScanKey::ZhNegation);
+    }
+    if lower.contains("是") {
+        keys.push(ContradictionScanKey::ZhPositive);
+    }
+    if lower.contains("cannot") {
+        keys.push(ContradictionScanKey::EnCannot);
+    }
+    if lower.contains("can ") {
+        keys.push(ContradictionScanKey::EnCan);
+    }
+    keys
+}
+
+fn contradiction_opposite_keys(keys: &[ContradictionScanKey]) -> Vec<ContradictionScanKey> {
+    let mut out = Vec::new();
+    for key in keys {
+        match key {
+            ContradictionScanKey::ZhNegation => out.push(ContradictionScanKey::ZhPositive),
+            ContradictionScanKey::ZhPositive => out.push(ContradictionScanKey::ZhNegation),
+            ContradictionScanKey::EnCannot => out.push(ContradictionScanKey::EnCan),
+            ContradictionScanKey::EnCan => out.push(ContradictionScanKey::EnCannot),
+        }
+    }
+    out.sort_by_key(|key| *key as u8);
+    out.dedup();
+    out
+}
+
+fn scope_sort_key(scope: &Scope) -> String {
+    match scope {
+        Scope::Private { agent_id } => format!("private:{agent_id}"),
+        Scope::Shared { team_id } => format!("shared:{team_id}"),
+    }
+}
+
 fn contradicts_heuristic(a: &str, b: &str) -> bool {
     let la = a.to_ascii_lowercase();
     let lb = b.to_ascii_lowercase();
@@ -1225,6 +1308,57 @@ mod tests {
 
         assert!(eng.store.sources[&sid].tags.is_empty());
         assert!(eng.store.claims[&cid].tags.is_empty());
+    }
+
+    #[test]
+    fn contradiction_scan_prefilters_stale_and_scope_buckets() {
+        let mut eng = LlmWikiEngine::new(DomainSchema::permissive_default());
+        let scope_a = private_scope();
+        let scope_b = Scope::Private {
+            agent_id: "a2".into(),
+        };
+        let can = eng.file_claim(
+            "service can write",
+            scope_a.clone(),
+            MemoryTier::Semantic,
+            "tester",
+        );
+        let cannot = eng.file_claim(
+            "service cannot write",
+            scope_a.clone(),
+            MemoryTier::Semantic,
+            "tester",
+        );
+        eng.file_claim(
+            "service cannot write",
+            scope_b,
+            MemoryTier::Semantic,
+            "tester",
+        );
+        let stale = eng.file_claim(
+            "service cannot write",
+            scope_a,
+            MemoryTier::Semantic,
+            "tester",
+        );
+        eng.store.claims.get_mut(&stale).unwrap().stale = true;
+
+        let hints = eng.naive_contradiction_pairs(None);
+
+        assert_eq!(hints.len(), 1);
+        assert!(
+            (hints[0].a == can && hints[0].b == cannot)
+                || (hints[0].a == cannot && hints[0].b == can)
+        );
+    }
+
+    #[test]
+    fn contradiction_scan_keys_skip_unrelated_claims() {
+        assert!(contradiction_scan_keys("plain implementation note").is_empty());
+        assert_eq!(
+            contradiction_opposite_keys(&contradiction_scan_keys("service cannot write")),
+            vec![ContradictionScanKey::EnCan]
+        );
     }
 
     #[test]

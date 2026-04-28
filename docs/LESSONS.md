@@ -26,6 +26,15 @@
 - Agent-facing CLI 默认值不要依赖 cwd；只要语义属于 vault 输出，相对路径应在
   `--wiki-dir` 存在时解析为 vault-relative，并用测试固定。
 
+## 2026-04-28 / PR #74 Contradiction Scan Scaling
+
+- Scope: 把 `naive_contradiction_pairs` 从 visible all-pairs 改为 stale 预过滤、scope 分桶、contradiction signal index 和每 claim 256 候选上限。
+- What worked: 保留 `contradicts_heuristic` 作为最终判断，只改候选生成，避免改变 `ContradictionHint` API。
+- What caused rework: all-pairs 里 stale 是内层才跳过；提前过滤后才能真正减少候选量。
+- Spec changes needed: 明确 cross-scope contradiction 不再配对，符合现有 scope isolation 规则。
+- Tests or reviews that caught issues: focused kernel tests 覆盖 stale/scope 过滤和无信号 claim 跳过。
+- Next plan note: 下一项进入 `J14 Semantic Fusion Benchmark`，作为评估 lane，不让低分阻断 CI。
+
 ## 2026-04-28 / PR #73 Embedding ANN Implementation
 
 - Scope: 在 `ann-embed` 后实现本地 locality-bucket shadow index、bounded candidate search、same-transaction index maintenance、rebuild 和 full-scan fallback。
