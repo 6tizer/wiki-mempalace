@@ -196,3 +196,12 @@
 - Spec changes needed: outbox docs 要明确 legacy ID export 与 consumer-scoped export 同时存在。
 - Tests or reviews that caught issues: focused storage test 覆盖 consumer A ack 后 consumer B 仍从自己的 cursor 导出。
 - Next plan note: Phase 2 再切 `consume-to-mempalace` / export CLI 默认语义，并保留 `--last-id` manual override。
+
+## 2026-04-28 / Outbox Consumer Cursors Phase 2
+
+- Scope: `export-outbox-ndjson-from` 和 `consume-to-mempalace` 切到 consumer cursor 默认语义，`--last-id` 保留为 legacy/manual floor。
+- What worked: 把 cursor export + floor 逻辑收进一个 CLI helper，避免 export 命令和 mempalace consumer 分叉实现。
+- What caused rework: 初版 patch 切掉了 `stats` 变量但 ack 仍引用 `stats.head_id`；helper 返回 `head_id` 后，ack 边界重新收敛到同一份 export metadata。
+- Spec changes needed: `--last-id` 文档不能再写成“起点”，应写成 `max(cursor_start_after_id, last_id)` 的 floor，且不能回退 consumer progress。
+- Tests or reviews that caught issues: `cargo test -p wiki-cli cursor -- --nocapture` 覆盖 cursor、fresh consumer、manual floor 三种导出路径。
+- Next plan note: 下一项进入 `Multi-process Write Lock / Lease`，先处理多进程写入互斥，再扩大 reliability test matrix。

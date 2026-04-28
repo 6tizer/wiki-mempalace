@@ -10,7 +10,7 @@
 - 持久化接口：`wiki_storage::WikiRepository::append_outbox()`。
 - 事件表：`wiki_outbox(id, event_json, processed_at, consumer_tag)`。
 - 消费者进度表：`wiki_outbox_consumer_progress(consumer_tag, acked_up_to_id, acked_at)`。
-- 导出接口：`export_outbox_ndjson()` / `export_outbox_ndjson_from_id(last_id)`；Phase 1 新增 storage API `export_outbox_ndjson_for_consumer(consumer_tag)`。
+- 导出接口：`export_outbox_ndjson()` / `export_outbox_ndjson_from_id(last_id)`；consumer-scoped API `export_outbox_ndjson_for_consumer(consumer_tag)`。
 - CLI 命令：`export-outbox-ndjson`、`export-outbox-ndjson-from`、`ack-outbox`、`consume-to-mempalace`。
 
 ## 写入顺序
@@ -44,11 +44,15 @@
 - 从该 consumer 的 `acked_up_to_id` 之后开始导出。
 - 没有 progress 行时从 `0` 开始。
 - 返回 `consumer_tag`、`start_after_id`、`head_id`、`event_count` 和 `ndjson`。
-- 这是 storage API；CLI 默认切换在后续 cutover PR 中完成。
+- `export-outbox-ndjson-from` 默认使用 `--consumer-tag mempalace` 的 cursor。
+- `--last-id` 是 legacy/manual floor；实际起点是 `max(cursor_start_after_id, last_id)`，不能回退 consumer cursor。
+- 需要原始全量导出时，继续使用 `export-outbox-ndjson`。
 
 ## mempalace 消费
 
 `consume-to-mempalace --palace <db>` 使用 `LiveMempalaceSink` 写真实 `palace.db`。
+默认从 `--consumer-tag mempalace` 的 cursor 后开始消费；`--last-id` 只作为 manual floor，
+不会让已 ack 的 consumer 回退重放。
 live bank 由 `--viewer-scope` 派生：
 
 - `private:cli` -> `cli`

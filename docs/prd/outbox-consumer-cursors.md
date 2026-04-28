@@ -2,7 +2,7 @@
 
 ## Status
 
-Phase 1 schema/API implemented in PR #62. Cutover remains a separate PR.
+Implemented in PR #62/#63.
 
 ## Goal
 
@@ -25,4 +25,5 @@ Phase 1 schema/API implemented in PR #62. Cutover remains a separate PR.
 - A consumer with no progress exports from `0`.
 - After a consumer ack, that consumer exports only later events.
 - A different consumer remains independent and still exports from its own cursor.
-- Existing manual `last_id` export keeps working.
+- Existing manual `last_id` floor keeps working as a legacy/manual override.
+- `consume-to-mempalace` cannot rewind a consumer cursor by passing a lower `--last-id`.

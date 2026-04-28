@@ -228,6 +228,10 @@ enum Cmd {
     },
     ExportOutboxNdjson,
     ExportOutboxNdjsonFrom {
+        /// Consumer cursor to export from. Defaults to mempalace.
+        #[arg(long, default_value = "mempalace")]
+        consumer_tag: String,
+        /// Legacy/manual start floor. The effective start is max(cursor, last_id).
         #[arg(long, default_value_t = 0)]
         last_id: i64,
     },
@@ -2518,8 +2522,12 @@ fn run_with_engine(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         Cmd::ExportOutboxNdjson => {
             print!("{}", repo.export_outbox_ndjson()?);
         }
-        Cmd::ExportOutboxNdjsonFrom { last_id } => {
-            print!("{}", repo.export_outbox_ndjson_from_id(last_id)?);
+        Cmd::ExportOutboxNdjsonFrom {
+            consumer_tag,
+            last_id,
+        } => {
+            let export = export_outbox_ndjson_for_consumer_floor(&repo, &consumer_tag, last_id)?;
+            print!("{}", export.ndjson);
         }
         Cmd::AckOutbox {
             up_to_id,
@@ -3543,24 +3551,49 @@ mod tests {
     }
 
     #[test]
-    fn consume_start_id_prefers_progress_and_respects_last_id_floor() {
-        let progress = OutboxConsumerProgress {
-            consumer_tag: "mempalace".into(),
-            acked_up_to_id: Some(3),
-            acked_at: None,
-            backlog_events: 2,
-        };
-        assert_eq!(effective_consume_start_id(&progress, 0), 3);
-        assert_eq!(effective_consume_start_id(&progress, 5), 5);
+    fn cursor_start_id_respects_last_id_floor() {
+        assert_eq!(effective_cursor_start_id(3, 0), 3);
+        assert_eq!(effective_cursor_start_id(3, 5), 5);
+        assert_eq!(effective_cursor_start_id(0, 0), 0);
+        assert_eq!(effective_cursor_start_id(0, 4), 4);
+    }
 
-        let empty_progress = OutboxConsumerProgress {
-            consumer_tag: "mempalace".into(),
-            acked_up_to_id: None,
-            acked_at: None,
-            backlog_events: 0,
-        };
-        assert_eq!(effective_consume_start_id(&empty_progress, 0), 0);
-        assert_eq!(effective_consume_start_id(&empty_progress, 4), 4);
+    #[test]
+    fn export_outbox_from_uses_consumer_cursor_with_last_id_floor() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("test.db");
+        let repo = SqliteRepository::open(&db_path).unwrap();
+
+        repo.append_outbox(&WikiEvent::QueryServed {
+            query_fingerprint: "first".into(),
+            top_doc_ids: vec!["a".into()],
+            at: OffsetDateTime::now_utc(),
+        })
+        .unwrap();
+        repo.append_outbox(&WikiEvent::QueryServed {
+            query_fingerprint: "second".into(),
+            top_doc_ids: vec!["b".into()],
+            at: OffsetDateTime::now_utc(),
+        })
+        .unwrap();
+        repo.mark_outbox_processed(1, "mempalace").unwrap();
+
+        let mempalace_export =
+            export_outbox_ndjson_for_consumer_floor(&repo, "mempalace", 0).unwrap();
+        assert_eq!(mempalace_export.start_id, 1);
+        assert_eq!(mempalace_export.head_id, 2);
+        assert!(!mempalace_export.ndjson.contains("first"));
+        assert!(mempalace_export.ndjson.contains("second"));
+
+        let fresh_export = export_outbox_ndjson_for_consumer_floor(&repo, "archive", 0).unwrap();
+        assert_eq!(fresh_export.start_id, 0);
+        assert_eq!(fresh_export.ndjson.lines().count(), 2);
+
+        let override_export =
+            export_outbox_ndjson_for_consumer_floor(&repo, "mempalace", 2).unwrap();
+        assert_eq!(override_export.start_id, 2);
+        assert_eq!(override_export.head_id, 2);
+        assert!(override_export.ndjson.is_empty());
     }
 
     #[test]
@@ -4527,10 +4560,34 @@ fn run_maintenance_job(
     Ok(())
 }
 
-fn effective_consume_start_id(progress: &OutboxConsumerProgress, requested_last_id: i64) -> i64 {
-    progress
-        .acked_up_to_id
-        .map_or(requested_last_id, |acked| acked.max(requested_last_id))
+fn effective_cursor_start_id(cursor_start_after_id: i64, requested_last_id: i64) -> i64 {
+    cursor_start_after_id.max(requested_last_id)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ConsumerOutboxNdjson {
+    start_id: i64,
+    head_id: i64,
+    ndjson: String,
+}
+
+fn export_outbox_ndjson_for_consumer_floor(
+    repo: &SqliteRepository,
+    consumer_tag: &str,
+    last_id: i64,
+) -> Result<ConsumerOutboxNdjson, Box<dyn std::error::Error>> {
+    let export = repo.export_outbox_ndjson_for_consumer(consumer_tag)?;
+    let start_id = effective_cursor_start_id(export.start_after_id, last_id);
+    let ndjson = if start_id == export.start_after_id {
+        export.ndjson
+    } else {
+        repo.export_outbox_ndjson_from_id(start_id)?
+    };
+    Ok(ConsumerOutboxNdjson {
+        start_id,
+        head_id: export.head_id,
+        ndjson,
+    })
 }
 
 fn mempalace_bank_from_viewer_scope(viewer_scope: &str) -> String {
@@ -4548,15 +4605,13 @@ fn run_consume_to_mempalace_job(
     palace_path: Option<&std::path::Path>,
     viewer_scope: &str,
 ) -> Result<(OutboxDispatchStats, i64, usize), Box<dyn std::error::Error>> {
-    let progress = repo.get_outbox_consumer_progress(consumer_tag)?;
-    let start_id = effective_consume_start_id(&progress, last_id);
-    let stats = repo.get_outbox_stats()?;
-    if start_id >= stats.head_id {
+    let export = export_outbox_ndjson_for_consumer_floor(repo, consumer_tag, last_id)?;
+    let start_id = export.start_id;
+    if start_id >= export.head_id {
         return Ok((OutboxDispatchStats::default(), start_id, 0));
     }
 
-    let ndjson = repo.export_outbox_ndjson_from_id(start_id)?;
-    if ndjson.is_empty() {
+    if export.ndjson.is_empty() {
         return Ok((OutboxDispatchStats::default(), start_id, 0));
     }
 
@@ -4564,9 +4619,9 @@ fn run_consume_to_mempalace_job(
     let dispatch = if let Some(pp) = palace_path {
         let bank = mempalace_bank_from_viewer_scope(viewer_scope);
         let live = LiveMempalaceSink::open(pp, &bank)?;
-        consume_outbox_ndjson_with_resolver_and_stats(&live, &resolver, &ndjson)?
+        consume_outbox_ndjson_with_resolver_and_stats(&live, &resolver, &export.ndjson)?
     } else {
-        consume_outbox_ndjson_with_resolver_and_stats(&CliMempalaceSink, &resolver, &ndjson)?
+        consume_outbox_ndjson_with_resolver_and_stats(&CliMempalaceSink, &resolver, &export.ndjson)?
     };
     if dispatch.unresolved > 0 {
         return Err(format!(
@@ -4575,7 +4630,7 @@ fn run_consume_to_mempalace_job(
         )
         .into());
     }
-    let acked = repo.mark_outbox_processed(stats.head_id, consumer_tag)?;
+    let acked = repo.mark_outbox_processed(export.head_id, consumer_tag)?;
     Ok((dispatch, start_id, acked))
 }
 
