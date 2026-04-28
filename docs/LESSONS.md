@@ -232,3 +232,12 @@
 - Spec changes needed: audit artifacts 只上传 GitHub Actions artifact；生产 Vault 报告接入留给 `Scheduled Vault Reports`。
 - Tests or reviews that caught issues: `bash -n` 覆盖 wrapper 语法；workspace gate 确认 workflow/docs 改动不影响 Rust crates。
 - Next plan note: 下一项进入 `Scheduled Vault Reports`，把应用层报告做定时生成、latest 指针和保留策略。
+
+## 2026-04-28 / Scheduled Vault Reports
+
+- Scope: 新增 automation `vault-reports` job，产出 timestamped report bundle、latest 指针和保留策略；不改变既有报告格式。
+- What worked: 复用现有 scanner/render 函数，避免把 reporting 逻辑复制成第二套。
+- What caused rework: daily plan 的稳定顺序测试需要同步补 `vault-reports`。
+- Spec changes needed: latest 指针采用 JSON/Markdown 文件，不用 symlink，便于跨平台和 Vault 可见。
+- Tests or reviews that caught issues: CLI integration test 直接跑 `automation run vault-reports`，验证 bundle 内所有文件存在；unit test 覆盖 retention pruning。
+- Next plan note: 下一项进入 `Notion Archived Source Retirement audit/plan`，保持 DB-first，先 dry-run 不改 DB/Vault。
