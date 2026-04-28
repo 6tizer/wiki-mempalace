@@ -7,12 +7,12 @@ use std::path::{Path, PathBuf};
 use time::{format_description::well_known::Rfc3339, Duration, OffsetDateTime};
 use walkdir::WalkDir;
 use wiki_core::{
-    document_visible_to_viewer, parse_memory_tier, ClaimId, CompositeSearchPorts, Confidence,
-    DomainSchema, Entity, EntityId, EntityKind, EntryStatus, EntryType, FixAction, FixActionType,
-    FixPatch, FusionConfig, GapFinding, GapSeverity, LlmIngestPlanV1, MemoryTier, PageContract,
-    PageId, QueryContext, RelationKind, Scope, SessionCrystallizationInput, SourceId,
-    StrategyExecutionPolicy, StrategyReport, StrategySeverity, TypedEdge, WikiEvent,
-    WikiMetricsReport, WikiPage,
+    document_visible_to_viewer, parse_memory_tier, AuditOperation, AuditRecord, ClaimId,
+    CompositeSearchPorts, Confidence, DomainSchema, Entity, EntityId, EntityKind, EntryStatus,
+    EntryType, FixAction, FixActionType, FixPatch, FusionConfig, GapFinding, GapSeverity,
+    LlmIngestPlanV1, MemoryTier, PageContract, PageId, QueryContext, RelationKind, Scope,
+    SessionCrystallizationInput, SourceId, StrategyExecutionPolicy, StrategyReport,
+    StrategySeverity, TypedEdge, WikiEvent, WikiMetricsReport, WikiPage,
 };
 use wiki_kernel::{
     collect_wiki_metrics, finalize_consumed_page, format_claim_doc_id, initial_status_for,
@@ -594,6 +594,18 @@ enum NotionArchivedRetirementCmd {
         /// Milliseconds between Notion API requests (minimum 100)
         #[arg(long, default_value_t = 350)]
         request_delay_ms: u64,
+    },
+    /// Apply safe retirement actions from a generated plan. Defaults to dry-run.
+    Apply {
+        /// Path to notion-archived-retirement-plan-<timestamp>.json.
+        #[arg(long)]
+        plan: PathBuf,
+        /// Mutate DB and matching Vault source files. Without this flag, dry-run only.
+        #[arg(long, default_value_t = false)]
+        apply: bool,
+        /// Report directory. Defaults to <wiki-dir>/reports when --wiki-dir is set.
+        #[arg(long)]
+        report_dir: Option<PathBuf>,
     },
 }
 
@@ -1955,6 +1967,7 @@ fn cmd_writer_lease_label(cmd: &Cmd) -> &'static str {
         Cmd::CompilerResolveDeferred { .. } => "compiler-resolve-deferred",
         Cmd::ConsistencyApply { .. } => "consistency-apply",
         Cmd::Mcp { .. } => "mcp",
+        Cmd::NotionArchivedRetirement { .. } => "notion-archived-retirement",
         Cmd::NotionSync { .. } => "notion-sync",
         Cmd::NotionSyncIndexBackfill { .. } => "notion-sync-index-backfill",
         Cmd::VaultBackfill { .. } => "vault-backfill",
@@ -1995,8 +2008,13 @@ fn cmd_needs_writer_lease(cmd: &Cmd) -> bool {
         Cmd::NotionSync { dry_run, .. } => !dry_run,
         Cmd::NotionSyncIndexBackfill { apply, .. } => *apply,
         Cmd::NotionSourceVaultSync { apply, .. } => *apply,
+        Cmd::NotionArchivedRetirement {
+            command: NotionArchivedRetirementCmd::Apply { apply, .. },
+        } => *apply,
         Cmd::Automation { .. }
-        | Cmd::NotionArchivedRetirement { .. }
+        | Cmd::NotionArchivedRetirement {
+            command: NotionArchivedRetirementCmd::Plan { .. },
+        }
         | Cmd::ExportOutboxNdjson
         | Cmd::ExportOutboxNdjsonFrom { .. }
         | Cmd::Explain { .. }
@@ -3455,6 +3473,106 @@ fn run_with_engine(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                 println!("json_report_file={}", files.json_path.display());
                 println!("markdown_report_file={}", files.markdown_path.display());
             }
+            NotionArchivedRetirementCmd::Apply {
+                plan,
+                apply,
+                report_dir,
+            } => {
+                if apply && wiki_root.is_none() {
+                    return Err(
+                        "--wiki-dir is required with notion-archived-retirement apply --apply"
+                            .into(),
+                    );
+                }
+                let plan_path = resolve_wiki_relative_path(wiki_root.as_deref(), plan);
+                let plan_report =
+                    notion_archived_retirement::read_notion_archived_retirement_report(&plan_path)?;
+                if plan_report.version != 1 || plan_report.mode != "dry_run" {
+                    return Err(format!(
+                        "unsupported notion archived retirement plan: version={} mode={}",
+                        plan_report.version, plan_report.mode
+                    )
+                    .into());
+                }
+                let sources: Vec<_> = eng.store.sources.values().cloned().collect();
+                let mut apply_plan =
+                    notion_archived_retirement::build_notion_archived_retirement_apply_plan(
+                        &plan_report,
+                        &sources,
+                        apply,
+                        OffsetDateTime::now_utc(),
+                    );
+                let vault_files = if let Some(root) = wiki_root.as_deref() {
+                    notion_archived_retirement::collect_retired_source_files(
+                        root,
+                        &apply_plan.source_ids,
+                        &apply_plan.notion_page_ids,
+                    )?
+                } else {
+                    Vec::new()
+                };
+                apply_plan.report.vault_files_planned = vault_files.len();
+                apply_plan.report.vault_files = vault_files
+                    .iter()
+                    .map(|path| path.display().to_string())
+                    .collect();
+
+                if apply {
+                    for source_id in &apply_plan.source_ids {
+                        eng.store.sources.remove(source_id);
+                        eng.audits.push(AuditRecord::new(
+                            AuditOperation::RetireSource,
+                            "notion-archived-retirement",
+                            format!("retired notion source {}", source_id.0),
+                        ));
+                    }
+                    let snapshot = eng.store.to_snapshot(&eng.audits);
+                    let deleted_index_rows = repo.save_snapshot_and_delete_notion_page_indexes(
+                        &snapshot,
+                        &apply_plan.notion_page_ids,
+                    )?;
+                    let deleted_vault_files =
+                        notion_archived_retirement::delete_retired_source_files(&vault_files)?;
+                    apply_plan.report.sources_removed = apply_plan.source_ids.len();
+                    apply_plan.report.index_rows_deleted = deleted_index_rows;
+                    apply_plan.report.vault_files_deleted = deleted_vault_files;
+                    apply_plan.report.applied_source_ids = apply_plan
+                        .source_ids
+                        .iter()
+                        .map(|source_id| source_id.0.to_string())
+                        .collect();
+                    apply_plan.report.applied_notion_page_ids = apply_plan.notion_page_ids.clone();
+                }
+
+                let report_dir = report_dir
+                    .map(|path| resolve_wiki_relative_path(wiki_root.as_deref(), path))
+                    .unwrap_or_else(|| {
+                        wiki_root
+                            .as_deref()
+                            .map(|root| root.join("reports"))
+                            .unwrap_or_else(|| PathBuf::from("reports"))
+                    });
+                let files =
+                    notion_archived_retirement::write_notion_archived_retirement_apply_report(
+                        &apply_plan.report,
+                        &report_dir,
+                    )?;
+                println!(
+                    "notion_archived_retirement_apply mode={} actions_seen={} safe_candidates={} unsafe_candidates={} stale_candidates={} sources_planned={} sources_removed={} index_rows_deleted={} vault_files_planned={} vault_files_deleted={}",
+                    apply_plan.report.mode,
+                    apply_plan.report.actions_seen,
+                    apply_plan.report.safe_candidates,
+                    apply_plan.report.unsafe_candidates,
+                    apply_plan.report.stale_candidates,
+                    apply_plan.report.sources_planned,
+                    apply_plan.report.sources_removed,
+                    apply_plan.report.index_rows_deleted,
+                    apply_plan.report.vault_files_planned,
+                    apply_plan.report.vault_files_deleted,
+                );
+                println!("json_report_file={}", files.json_path.display());
+                println!("markdown_report_file={}", files.markdown_path.display());
+            }
         },
     }
     Ok(())
@@ -3993,6 +4111,20 @@ mod tests {
                 report_dir: None,
                 limit: None,
                 request_delay_ms: 350,
+            },
+        },));
+        assert!(!cmd_needs_writer_lease(&Cmd::NotionArchivedRetirement {
+            command: NotionArchivedRetirementCmd::Apply {
+                plan: PathBuf::from("plan.json"),
+                apply: false,
+                report_dir: None,
+            },
+        },));
+        assert!(cmd_needs_writer_lease(&Cmd::NotionArchivedRetirement {
+            command: NotionArchivedRetirementCmd::Apply {
+                plan: PathBuf::from("plan.json"),
+                apply: true,
+                report_dir: None,
             },
         },));
         assert!(cmd_needs_writer_lease(&Cmd::NotionSourceVaultSync {

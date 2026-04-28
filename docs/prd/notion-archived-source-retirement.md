@@ -22,8 +22,8 @@ When a Notion page that backs a local `notion://` source is archived or moved to
 ### PR 2: apply
 
 - Apply only unambiguous, `apply_safe=true` retirement actions.
-- Mutate the DB origin first.
-- Refresh Vault through projection and Mempalace through consumer paths.
+- Mutate the DB origin first by removing the source and matching `notion_page_index` row in one SQLite transaction.
+- Remove matching Vault source Markdown only by validated frontmatter identity.
 - Keep manual-review cases out of apply.
 
 ## Non-Goals
@@ -31,7 +31,7 @@ When a Notion page that backs a local `notion://` source is archived or moved to
 - No manual Markdown deletion.
 - No Notion write-back.
 - No broad source deletion without DB evidence.
-- No retirement apply in the audit/plan PR.
+- No compiled page deletion.
 
 ## Acceptance
 

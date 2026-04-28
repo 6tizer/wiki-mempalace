@@ -29,7 +29,7 @@
 | Outbox Consumer Cursors | ✅ 已合入 PR #62/#63 | CR-01 延后项：consumer-scoped export API 已补；`export-outbox-ndjson-from` / `consume-to-mempalace` 已切到 consumer cursor 默认语义，`--last-id` 保留为 legacy/manual floor |
 | Embedding Tx Atomicity | 💤 未开始 | CR-01 延后项：`upsert_embedding` 纳入 snapshot+outbox 同一 SQLite transaction；需存储层改造 PRD |
 | Benchmark Reproducibility | 💤 未开始 | CR-01 延后项：`rust-mempalace benchmark --mode random` 添加 `--seed` 参数并存入 `benchmark_runs`，使跨次 recall 可比；需独立配置 PRD |
-| Notion Archived Source Retirement | 🟡 部分完成 | PR #68 已完成 audit/plan：读取 `notion_page_index`、拉 Notion archived/in_trash 状态、输出 dry-run JSON/Markdown plan；apply 仍待后续 PR |
+| Notion Archived Source Retirement | ✅ 已合入 PR #68/#69 | PR #68 完成 audit/plan；PR #69 完成 guarded apply：只处理 `apply_safe=true`，DB source + `notion_page_index` 同事务退役，再按 frontmatter 身份删除 Vault source 文件 |
 | Notion Incremental Sync | ✅ 已合入 | PR #36 / PR #38 / PR #42；`wiki-cli notion-sync`、automation `notion-sync` daily job 已实现；增量游标 `notion_sync_cursors`/`notion_page_index`；速率限制 350ms + 429 重试；`--refresh-existing` 刷新已有 source body/tags；`--writeback-notion` 接口完整默认关闭；PRD: `docs/prd/notion-incremental-sync.md` |
 | Notion Source Vault Projection | ✅ 已合入并已跑生产 apply | PR #42 已 merge；`notion-sync` 已支持 Notion block 正文抓取、`--refresh-existing`、Obsidian-safe tag projection 和 automation 默认刷新；生产 refresh 覆盖 X 782 / WeChat 485 个窗口内页面，刷新 161 个已有 source，最终 `notion-source-vault-sync --dry-run --refresh-existing --repair-tags` 为 planned=0 / tags_rewritten=0；176 个 DB-backed Notion source 已投影到 `sources/x` / `sources/wechat` |
 | Production Wiki Compiler | ✅ 已合入并已跑完 scale-up 闭环 | PR #44/#46/#47/#54/#56 已 merge；compiler 已支持 raw source -> resolver -> summary + concept/entity pages -> Vault projection -> Mempalace -> lint/audit；2026-04-28 全量小批量生产执行完成，remaining uncompiled = 0 |
@@ -65,7 +65,7 @@
 ### P1：Source 生命周期治理（同一批规划，分 PR 实现）
 
 1. Notion Archived Source Retirement audit/plan：PR #68 已完成 dry-run plan，不改 DB/Vault/Palace。
-2. Notion Archived Source Retirement apply：下一 PR 执行 DB-first 退役，再由 Vault projection / Mempalace consumer 更新派生层。
+2. Notion Archived Source Retirement apply：PR #69 已完成 guarded apply，DB-first 退役，再清理匹配的 Vault source 文件。
 3. MCP Vault Sync：PR #61 已完成 MCP 写操作后自动触发 Vault projection。
 
 ### P2：报告自动化（低风险独立批次）
@@ -135,7 +135,7 @@ scale-up 混做。
 | 7 | Dependency Audit Automation | `Dependency Audit Automation` | ✅ PR #66 | scheduled/manual `cargo audit`，不拖慢 quick。 |
 | 8 | Scheduled Vault Reports | `Scheduled Vault Reports` | ✅ PR #67 | 定时报告 bundle、latest 指针、保留策略。 |
 | 9 | Notion Archived Source Retirement audit/plan | `Notion Archived Source Retirement` | ✅ PR #68 | 先做 Notion archived dry-run plan，不改 DB/Vault。 |
-| 10 | Notion Archived Source Retirement apply | `Notion Archived Source Retirement` | 💤 未开始 | 再做 DB-first apply，避免手删 Markdown。 |
+| 10 | Notion Archived Source Retirement apply | `Notion Archived Source Retirement` | ✅ PR #69 | DB-first apply，避免手删 Markdown。 |
 | 11 | Benchmark Reproducibility | `Benchmark Reproducibility` | 💤 未开始 | `--mode random` 加 `--seed` 并记录到 `benchmark_runs`。 |
 | 12 | Embedding Tx Atomicity | `Embedding Tx Atomicity` | 💤 未开始 | embedding 写入纳入 snapshot/outbox 同事务。 |
 | 13 | C16B Embedding ANN spike / feature gate | `C16B Embedding ANN index` | 💤 未开始 | 先确定 ANN 技术路径、fallback 和 CI story。 |

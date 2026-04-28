@@ -15,6 +15,7 @@ pub enum AuditOperation {
     RunQuery,
     CrystallizeSession,
     RedactSensitive,
+    RetireSource,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

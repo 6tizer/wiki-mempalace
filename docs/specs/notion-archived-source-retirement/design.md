@@ -2,11 +2,34 @@
 
 ## Command
 
+Plan:
+
 ```bash
 cargo run -p wiki-cli -- \
   --db /Users/mac-mini/Documents/wiki/.wiki/wiki.db \
   --wiki-dir /Users/mac-mini/Documents/wiki \
   notion-archived-retirement plan
+```
+
+Apply dry-run:
+
+```bash
+cargo run -p wiki-cli -- \
+  --db /Users/mac-mini/Documents/wiki/.wiki/wiki.db \
+  --wiki-dir /Users/mac-mini/Documents/wiki \
+  notion-archived-retirement apply \
+  --plan /Users/mac-mini/Documents/wiki/reports/notion-archived-retirement-plan-<timestamp>.json
+```
+
+Apply:
+
+```bash
+cargo run -p wiki-cli -- \
+  --db /Users/mac-mini/Documents/wiki/.wiki/wiki.db \
+  --wiki-dir /Users/mac-mini/Documents/wiki \
+  notion-archived-retirement apply \
+  --plan /Users/mac-mini/Documents/wiki/reports/notion-archived-retirement-plan-<timestamp>.json \
+  --apply
 ```
 
 Options:
@@ -49,4 +72,19 @@ Candidate fields:
 
 ## Apply Boundary
 
-This PR does not implement apply. The next PR should read the JSON plan, filter `apply_safe=true`, mutate `wiki.db` first, then run Vault projection and Mempalace consumer validation.
+Apply reads the JSON plan and filters to `apply_safe=true`.
+
+Validation before mutation:
+
+- `action_type` must be `retire_notion_source`.
+- `source_id` must still exist in `wiki_state.sources`.
+- `source_uri`, `db_id`, and canonical Notion page ID must still match the plan.
+
+Mutation order:
+
+1. Remove the source from `wiki_state.sources`.
+2. Delete the matching `notion_page_index` row in the same SQLite transaction.
+3. Delete matching Vault `sources/**.md` files only when their frontmatter `source_id` or `notion_uuid` matches the applied source.
+4. Write timestamped apply JSON/Markdown reports.
+
+Compiled wiki pages are not deleted by source retirement. If compiled knowledge needs pruning, that must be a separate plan with page-level evidence.

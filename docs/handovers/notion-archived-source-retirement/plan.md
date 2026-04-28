@@ -6,7 +6,7 @@
 
 ## Status
 
-Audit/plan implementation merged in PR #68 on 2026-04-28.
+Audit/plan implementation merged in PR #68 on 2026-04-28. Apply implementation merged in PR #69 on 2026-04-28.
 
 ## Completed
 
@@ -14,7 +14,12 @@ Audit/plan implementation merged in PR #68 on 2026-04-28.
 - Added Notion page archive state retrieval.
 - Added `notion-archived-retirement plan`.
 - Added timestamped JSON/Markdown dry-run reports.
-- Kept apply out of scope.
+- Added guarded apply:
+  - dry-run by default;
+  - `--apply` required for mutation;
+  - validates source identity before mutation;
+  - removes DB source and `notion_page_index` in one transaction;
+  - deletes only matching Vault source Markdown by frontmatter identity.
 
 ## Command
 
@@ -32,10 +37,4 @@ Reports write to `<wiki-dir>/reports/` by default.
 
 ## Next PR
 
-Implement guarded apply from the generated JSON plan:
-
-- only `apply_safe=true`;
-- DB-first mutation;
-- Vault projection after DB change;
-- Mempalace consumer/validation after projection;
-- manual-review rows remain untouched.
+Next roadmap item after PR #69 is `Benchmark Reproducibility`.

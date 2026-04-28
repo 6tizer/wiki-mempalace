@@ -715,6 +715,36 @@ CREATE INDEX IF NOT EXISTS wiki_canonical_alias_page_idx
         }
     }
 
+    pub fn save_snapshot_and_delete_notion_page_indexes(
+        &self,
+        snapshot: &StorageSnapshot,
+        notion_page_ids: &[String],
+    ) -> Result<usize, StorageError> {
+        self.conn.execute_batch("BEGIN IMMEDIATE")?;
+        let result = (|| {
+            self.save_snapshot_and_append_outbox_inner(snapshot, &[])?;
+            let mut deleted = 0;
+            for notion_page_id in notion_page_ids {
+                let notion_page_id = canonical_notion_page_id(notion_page_id);
+                deleted += self.conn.execute(
+                    "DELETE FROM notion_page_index WHERE notion_page_id = ?1",
+                    params![notion_page_id],
+                )?;
+            }
+            Ok(deleted)
+        })();
+        match result {
+            Ok(n) => {
+                self.conn.execute_batch("COMMIT")?;
+                Ok(n)
+            }
+            Err(error) => {
+                let _ = self.conn.execute_batch("ROLLBACK");
+                Err(error)
+            }
+        }
+    }
+
     fn start_automation_run_at(
         &self,
         job_name: &str,
@@ -1802,6 +1832,43 @@ mod tests {
         assert_eq!(mempalace.backlog_events, 0);
         assert_eq!(archive.acked_up_to_id, Some(3));
         assert_eq!(archive.backlog_events, 1);
+    }
+
+    #[test]
+    fn snapshot_and_notion_index_deletes_commit_together() {
+        let dir = tempdir().unwrap();
+        let db = dir.path().join("wiki.db");
+        let repo = SqliteRepository::open(&db).unwrap();
+        let scope = Scope::Private {
+            agent_id: "cli".into(),
+        };
+        let source = RawArtifact::new(
+            "notion://wechat/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "alpha",
+            scope,
+        );
+        let source_id = source.id;
+        let mut snapshot = StorageSnapshot {
+            sources: vec![source],
+            ..StorageSnapshot::default()
+        };
+        repo.save_snapshot(&snapshot).unwrap();
+        repo.insert_notion_page_index("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", "wechat", &source_id)
+            .unwrap();
+
+        snapshot.sources.clear();
+        let deleted = repo
+            .save_snapshot_and_delete_notion_page_indexes(
+                &snapshot,
+                &["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string()],
+            )
+            .unwrap();
+
+        assert_eq!(deleted, 1);
+        assert!(repo.load_snapshot().unwrap().sources.is_empty());
+        assert!(!repo
+            .notion_page_exists("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+            .unwrap());
     }
 
     #[test]
