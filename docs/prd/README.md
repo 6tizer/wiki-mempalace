@@ -10,13 +10,13 @@
 
 ## Active PRDs
 
-- [outbox-consumer-cursors.md](outbox-consumer-cursors.md) — Consumer-scoped outbox cursor export and follow-up CLI cutover.
 - [production-wiki-compiler.md](production-wiki-compiler.md) — Notion-equivalent local compiler operation: raw source -> resolver -> summary + concept/entity pages -> Vault -> outbox -> Mempalace -> query/explain; controlled production scale-up is active.
 - [vault-backfill-and-palace-init.md](vault-backfill-and-palace-init.md) — 历史 vault 回填、`wiki.db` 初始化、`palace.db` 初始化、共享 Agent 运行默认值。
 - [storage-embeddings-followup.md](storage-embeddings-followup.md) — C16 follow-up: single-transaction `wiki_state` + outbox write path; optional ANN/index for `wiki_embedding` search (replaces O(n) scan at scale). Spec: [persist-snapshot-outbox](../specs/persist-snapshot-outbox/requirements.md), [embedding-ann-index](../specs/embedding-ann-index/requirements.md).
 
 ## Completed PRDs Still Useful As Reference
 
+- [outbox-consumer-cursors.md](outbox-consumer-cursors.md) — PR #62/#63：Consumer-scoped outbox cursor export API plus CLI/consumer cutover.
 - [mcp-vault-sync.md](mcp-vault-sync.md) — PR #61：MCP write tools trigger Vault projection when `--sync-wiki` is enabled.
 - [mcp-typed-errors.md](mcp-typed-errors.md) — PR #60：MCP JSON-RPC typed error mapping for stable client-side diagnostics.
 - [batch-3.md](batch-3.md) — P2 maturity：metrics、dashboard、strategy、tag governance、LongMemEval automation。

@@ -13,8 +13,14 @@ The method:
 
 ## Phase 2: Cutover
 
-The next PR will wire CLI and consumers to this API. Legacy `--last-id` stays as an explicit manual override until all callers are migrated.
+`export-outbox-ndjson-from` and `consume-to-mempalace` call the consumer-scoped export helper. Legacy `--last-id` stays as an explicit manual floor:
+
+```text
+effective_start_id = max(cursor_start_after_id, last_id)
+```
+
+This preserves manual skip-forward workflows without allowing callers to rewind an already acked consumer.
 
 ## Compatibility
 
-The existing `export_outbox_ndjson()` and `export_outbox_ndjson_from_id(last_id)` APIs stay unchanged in Phase 1.
+The existing `export_outbox_ndjson()` and `export_outbox_ndjson_from_id(last_id)` APIs stay unchanged for raw/manual exports.
