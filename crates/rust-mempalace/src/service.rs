@@ -1064,10 +1064,10 @@ fn build_fts_query(query: &str) -> String {
     let tokens: Vec<String> = query
         .split(|c: char| !c.is_ascii_alphanumeric())
         .filter(|s| !s.is_empty())
-        .map(|s| s.to_ascii_lowercase())
+        .map(|s| format!("\"{}\"", s.to_ascii_lowercase()))
         .collect();
     if tokens.is_empty() {
-        "memory".to_string()
+        "\"memory\"".to_string()
     } else {
         tokens.join(" ")
     }
@@ -1286,4 +1286,18 @@ pub fn split_mega_file(
         fs::write(out_path, chunk.join("\n"))?;
     }
     Ok(written)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fts_query_quotes_user_tokens() {
+        assert_eq!(
+            build_fts_query("hello OR world"),
+            "\"hello\" \"or\" \"world\""
+        );
+        assert_eq!(build_fts_query("!!!"), "\"memory\"");
+    }
 }

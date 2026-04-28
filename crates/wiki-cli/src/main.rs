@@ -666,6 +666,7 @@ struct AutomationHealthIssue {
 struct AutomationHealthReport {
     level: AutomationHealthLevel,
     issues: Vec<AutomationHealthIssue>,
+    db_integrity: String,
     outbox: OutboxStats,
     progress: OutboxConsumerProgress,
     failures: Vec<AutomationJobFailureSummary>,
@@ -1242,10 +1243,22 @@ fn collect_automation_health_report(
         level = max_health_level(level, backlog_level);
     }
 
+    let db_integrity = repo.integrity_check()?;
+    if db_integrity != "ok" {
+        issues.push(AutomationHealthIssue {
+            level: AutomationHealthLevel::Red,
+            target: "wiki.db".to_string(),
+            code: "db-integrity",
+            detail: format!("integrity_check={db_integrity}"),
+        });
+        level = AutomationHealthLevel::Red;
+    }
+
     let failures = repo.list_automation_job_failure_summaries()?;
     Ok(AutomationHealthReport {
         level,
         issues,
+        db_integrity,
         outbox,
         progress,
         failures,
@@ -1286,6 +1299,7 @@ fn render_automation_health_report(report: &AutomationHealthReport, consumer_tag
         "outbox: {}\n",
         format_outbox_stats(&report.outbox)
     ));
+    out.push_str(&format!("db_integrity: {}\n", report.db_integrity));
     out.push_str(&format!(
         "consumer {consumer_tag}: {}\n",
         format_outbox_consumer_progress(&report.progress)
@@ -1924,6 +1938,8 @@ fn run_with_engine(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             let slice = llm::parse_json_object_slice(&reply);
             let plan: LlmIngestPlanV1 = serde_json::from_str(slice)
                 .map_err(|e| format!("ingest-llm JSON parse error: {e}; raw={reply}"))?;
+            plan.validate_bounds()
+                .map_err(|e| format!("ingest-llm plan validation error: {e}"))?;
             if dry_run {
                 println!("{}", serde_json::to_string_pretty(&plan)?);
                 return Ok(());
@@ -3619,6 +3635,7 @@ mod tests {
                 total_events: 10,
                 unprocessed_events: 4,
             },
+            db_integrity: "ok".into(),
             progress: OutboxConsumerProgress {
                 consumer_tag: "mempalace".into(),
                 acked_up_to_id: Some(6),

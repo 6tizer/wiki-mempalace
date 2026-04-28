@@ -254,6 +254,7 @@ mod tests {
                 total_events: 67,
                 unprocessed_events: 71,
             },
+            db_integrity: "ok".to_string(),
             progress: OutboxConsumerProgress {
                 consumer_tag: "mempalace".to_string(),
                 acked_up_to_id: Some(73),

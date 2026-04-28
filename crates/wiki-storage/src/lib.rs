@@ -106,6 +106,12 @@ pub trait WikiRepository {
     fn load_snapshot(&self) -> Result<StorageSnapshot, StorageError>;
     fn save_snapshot(&self, snapshot: &StorageSnapshot) -> Result<(), StorageError>;
     fn append_outbox(&self, event: &WikiEvent) -> Result<(), StorageError>;
+    fn append_outbox_batch(&self, events: &[WikiEvent]) -> Result<usize, StorageError> {
+        for event in events {
+            self.append_outbox(event)?;
+        }
+        Ok(events.len())
+    }
     fn save_snapshot_and_append_outbox(
         &self,
         snapshot: &StorageSnapshot,
@@ -383,6 +389,13 @@ CREATE INDEX IF NOT EXISTS wiki_canonical_alias_page_idx
             total_events,
             unprocessed_events,
         })
+    }
+
+    pub fn integrity_check(&self) -> Result<String, StorageError> {
+        let integrity: String = self
+            .conn
+            .query_row("PRAGMA integrity_check;", [], |row| row.get(0))?;
+        Ok(integrity)
     }
 
     pub fn get_outbox_consumer_progress(
@@ -989,6 +1002,27 @@ impl WikiRepository for SqliteRepository {
             params![payload],
         )?;
         Ok(())
+    }
+
+    fn append_outbox_batch(&self, events: &[WikiEvent]) -> Result<usize, StorageError> {
+        self.conn.execute_batch("BEGIN IMMEDIATE")?;
+        let result = (|| {
+            for event in events {
+                let payload = serde_json::to_string(event)?;
+                self.conn.execute(
+                    "INSERT INTO wiki_outbox(event_json) VALUES(?1)",
+                    params![payload],
+                )?;
+            }
+            Ok(events.len())
+        })();
+        match result {
+            Ok(_) => self.conn.execute_batch("COMMIT")?,
+            Err(_) => {
+                let _ = self.conn.execute_batch("ROLLBACK");
+            }
+        }
+        result
     }
 
     fn save_snapshot_and_append_outbox(

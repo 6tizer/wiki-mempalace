@@ -31,6 +31,9 @@ Outbox、Consumer；不需要 web server，不依赖 palace DB。
 - consumer backlog：
   - `yellow`：`backlog_events >= 25`
   - `red`：`backlog_events >= 100`
+- DB integrity：
+  - `green`：`PRAGMA integrity_check` 返回 `ok`
+  - `red`：`PRAGMA integrity_check` 返回任何非 `ok` 结果或命令入口无法打开 DB
 
 ## 输出与退出码
 
@@ -50,6 +53,8 @@ Outbox、Consumer；不需要 web server，不依赖 palace DB。
   - 先看 `automation last-failures` 的错误摘要，再看对应 job 的输入和最近改动
 - `consumer-backlog`：
   - 检查 `consume-to-mempalace` 是否长期未运行，或 outbox 生产速度是否异常升高
+- `db-integrity`：
+  - 停止写入同一 `wiki.db`，先备份当前 DB，再按 [recovery-runbook.md](recovery-runbook.md) 恢复或重建
 
 ## 当前边界
 

@@ -12,6 +12,8 @@ use wiki_storage::SqliteRepository;
 
 use crate::{parse_scope, parse_tier};
 
+const MAX_MCP_LINE_BYTES: usize = 10 * 1024 * 1024;
+
 pub fn run_mcp(
     db_path: &std::path::Path,
     schema: DomainSchema,
@@ -29,12 +31,8 @@ pub fn run_mcp(
     let stdin = io::stdin();
     let mut stdout = io::stdout();
     let mut handle = stdin.lock();
-    let mut line = String::new();
-
-    loop {
-        line.clear();
-        let n = handle.read_line(&mut line)?;
-        if n == 0 {
+    while let Some(line) = read_line_limited(&mut handle, MAX_MCP_LINE_BYTES)? {
+        if line.is_empty() {
             break;
         }
         let req: Value = match serde_json::from_str(line.trim()) {
@@ -653,6 +651,8 @@ fn call_tool(
             let slice = crate::llm::parse_json_object_slice(&reply);
             let plan: wiki_core::LlmIngestPlanV1 =
                 serde_json::from_str(slice).map_err(|e| format!("JSON parse error: {e}"))?;
+            plan.validate_bounds()
+                .map_err(|e| format!("ingest plan validation error: {e}"))?;
             if dry_run {
                 return Ok(json!({"plan": serde_json::to_value(&plan).unwrap_or(Value::Null)}));
             }
@@ -739,6 +739,46 @@ fn tags_arg_from_value(args: &Value, key: &str) -> Result<Vec<String>, String> {
                 .ok_or_else(|| format!("{key}[{idx}] must be a string"))
         })
         .collect()
+}
+
+fn read_line_limited<R: BufRead>(reader: &mut R, max_bytes: usize) -> io::Result<Option<String>> {
+    let mut buf = Vec::new();
+    loop {
+        let available = reader.fill_buf()?;
+        if available.is_empty() {
+            if buf.is_empty() {
+                return Ok(None);
+            }
+            return String::from_utf8(buf)
+                .map(Some)
+                .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e));
+        }
+        if let Some(pos) = available.iter().position(|b| *b == b'\n') {
+            if buf.len() + pos + 1 > max_bytes {
+                reader.consume(pos + 1);
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!("MCP request line exceeds {max_bytes} bytes"),
+                ));
+            }
+            buf.extend_from_slice(&available[..=pos]);
+            reader.consume(pos + 1);
+            return String::from_utf8(buf)
+                .map(Some)
+                .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e));
+        }
+        if buf.len() + available.len() > max_bytes {
+            let consume = max_bytes.saturating_sub(buf.len()).min(available.len());
+            reader.consume(consume);
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("MCP request line exceeds {max_bytes} bytes"),
+            ));
+        }
+        let len = available.len();
+        buf.extend_from_slice(available);
+        reader.consume(len);
+    }
 }
 
 fn resolve_write_scope(args: &Value, viewer: &Scope) -> Scope {
@@ -904,6 +944,13 @@ mod tests {
         for k in ["uri", "body", "scope", "dry_run"] {
             assert!(props.get(k).is_some(), "{k} 仍应存在");
         }
+    }
+
+    #[test]
+    fn read_line_limited_rejects_oversized_line() {
+        let mut cursor = std::io::Cursor::new(b"abcdef\n".as_slice());
+        let err = read_line_limited(&mut cursor, 3).unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
     }
 
     #[test]

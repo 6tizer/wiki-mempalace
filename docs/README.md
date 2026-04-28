@@ -6,6 +6,7 @@
 
 - [architecture.md](architecture.md) — crate 拓扑、ingest/query/outbox/MCP 业务流。
 - [mempalace-linkage.md](mempalace-linkage.md) — wiki 与 rust-mempalace 的 bridge 契约。
+- [mcp-api-reference.md](mcp-api-reference.md) — 统一 MCP Server 工具参数、scope 默认值和写入副作用。
 - [outbox-and-consumers.md](outbox-and-consumers.md) — outbox 表、per-consumer progress、ack 语义。
 - [outbox-event-matrix.md](outbox-event-matrix.md) — `WikiEvent` 生产者、消费者和测试覆盖。
 - [vault-standards.md](vault-standards.md) — vault 目录、命名、frontmatter、正文骨架唯一标准。

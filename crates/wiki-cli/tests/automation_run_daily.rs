@@ -510,6 +510,7 @@ fn automation_health_relative_summary_file_uses_wiki_dir() {
 
     let summary_body = std::fs::read_to_string(&summary_path).unwrap();
     assert!(summary_body.contains("automation health: status=green"));
+    assert!(summary_body.contains("db_integrity: ok"));
     assert!(
         !temp_dir
             .path()
@@ -517,6 +518,23 @@ fn automation_health_relative_summary_file_uses_wiki_dir() {
             .exists(),
         "relative automation health summary must be vault-relative when --wiki-dir is set"
     );
+}
+
+#[test]
+fn automation_health_reports_db_integrity() {
+    let db = tempfile::NamedTempFile::new().unwrap();
+    let db_path = db.path().to_owned();
+    let _repo = SqliteRepository::open(&db_path).unwrap();
+
+    wiki_cli()
+        .arg("--db")
+        .arg(&db_path)
+        .arg("automation")
+        .arg("health")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("automation health: status=green"))
+        .stdout(predicate::str::contains("db_integrity: ok"));
 }
 
 #[test]
