@@ -35,6 +35,15 @@
 - Tests or reviews that caught issues: focused tests 覆盖 storage index listing、Notion archive state client、plan report builder；`cargo test --workspace`、`cargo clippy --workspace --all-targets -- -D warnings`、production `--limit 3` smoke 均通过。
 - Next plan note: 下一 PR 做 `Notion Archived Source Retirement apply`，保持 DB-first，不手删 Markdown。
 
+## 2026-04-28 / PR #69 Notion Archived Source Retirement Apply
+
+- Scope: 新增 `notion-archived-retirement apply --plan <PATH>`，默认 dry-run；`--apply` 时只处理 `apply_safe=true`，先退役 DB source 和 `notion_page_index`，再删除匹配 Vault source 文件。
+- What worked: apply 前重新校验 `source_id`、`source_uri`、`db_id`、Notion page ID，避免旧 plan 误删当前 source。
+- What caused rework: Source 文件不是 `write_projection` 管理，apply 需要单独按 frontmatter 身份清理 `sources/**.md`，不能只依赖 page projection。
+- Spec changes needed: Source retirement 不删除 compiled pages；若要清理已编译知识页，必须另起 page-level plan。
+- Tests or reviews that caught issues: CLI integration test 覆盖 dry-run 不变更、`--apply` 退役 DB/index/Vault；storage test 覆盖 snapshot + Notion index delete 同事务。
+- Next plan note: 下一项进入 `Benchmark Reproducibility`，先给 random benchmark 加 seed，再做 embedding/ANN 线。
+
 ## 2026-04-25 / PR #16 M12 Strategy Suggestions
 
 - Scope: 新增只读 `wiki-cli suggest`，输出 text/JSON，并在显式 `--report-dir` 时生成同源 JSON/Markdown suggestion report。

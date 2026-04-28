@@ -1,6 +1,8 @@
 use assert_cmd::Command;
 use predicates::str::contains;
 use std::path::Path;
+use wiki_core::{RawArtifact, Scope, SourceId};
+use wiki_storage::{SqliteRepository, StorageSnapshot, WikiRepository};
 
 fn wiki_cmd() -> Command {
     Command::cargo_bin("wiki-cli").unwrap()
@@ -98,6 +100,34 @@ fn orphan_plan_body(vault: &Path, audit_path: &Path) -> String {
     .to_string()
 }
 
+fn notion_retirement_plan_body(source: &RawArtifact) -> String {
+    serde_json::json!({
+        "version": 1,
+        "generated_at": "2026-04-28T00:00:00Z",
+        "mode": "dry_run",
+        "total_indexed_pages": 1,
+        "archived_candidates": 1,
+        "active_pages": 0,
+        "missing_sources": 0,
+        "fetch_errors": [],
+        "candidates": [{
+            "action_type": "retire_notion_source",
+            "db_id": "wechat",
+            "notion_page_id": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "notion_api_page_id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+            "source_id": source.id.0.to_string(),
+            "source_uri": source.uri,
+            "title": "Archived Source",
+            "archived": true,
+            "in_trash": false,
+            "synced_at": "2026-04-28T00:00:00Z",
+            "reason": "test",
+            "apply_safe": true
+        }]
+    })
+    .to_string()
+}
+
 #[test]
 fn vault_audit_cli_writes_reports_under_vault_reports() {
     let temp = tempfile::tempdir().unwrap();
@@ -186,6 +216,121 @@ fn orphan_governance_apply_cli_defaults_to_dry_run() {
 
     let after = std::fs::read_to_string(vault.join("sources/source-a.md")).unwrap();
     assert_eq!(before, after);
+}
+
+#[test]
+fn notion_archived_retirement_apply_defaults_to_dry_run_and_apply_retires_source() {
+    let temp = tempfile::tempdir().unwrap();
+    let vault = temp.path().join("vault");
+    let db = temp.path().join("wiki.db");
+    let repo = SqliteRepository::open(&db).unwrap();
+    let source_id =
+        SourceId(uuid::Uuid::parse_str("11111111-1111-1111-1111-111111111111").unwrap());
+    let mut source = RawArtifact::new(
+        "notion://wechat/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "# Archived Source\nbody",
+        Scope::Shared {
+            team_id: "wiki".into(),
+        },
+    );
+    source.id = source_id;
+    repo.save_snapshot(&StorageSnapshot {
+        sources: vec![source.clone()],
+        ..StorageSnapshot::default()
+    })
+    .unwrap();
+    repo.insert_notion_page_index("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", "wechat", &source_id)
+        .unwrap();
+
+    let source_path = vault.join("sources/wechat/archived.md");
+    write_file(
+        &source_path,
+        &format!(
+            "---\nsource_id: \"{}\"\nnotion_uuid: \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"\n---\n\nbody\n",
+            source_id.0
+        ),
+    );
+    let plan_path = vault.join("reports/notion-archived-retirement-plan-test.json");
+    write_file(&plan_path, &notion_retirement_plan_body(&source));
+
+    wiki_cmd()
+        .arg("--db")
+        .arg(&db)
+        .arg("--wiki-dir")
+        .arg(&vault)
+        .arg("notion-archived-retirement")
+        .arg("apply")
+        .arg("--plan")
+        .arg(&plan_path)
+        .assert()
+        .success()
+        .stdout(contains("mode=dry_run"))
+        .stdout(contains("sources_planned=1"))
+        .stdout(contains("sources_removed=0"));
+    assert_eq!(repo.load_snapshot().unwrap().sources.len(), 1);
+    assert!(source_path.exists());
+
+    wiki_cmd()
+        .arg("--db")
+        .arg(&db)
+        .arg("--wiki-dir")
+        .arg(&vault)
+        .arg("notion-archived-retirement")
+        .arg("apply")
+        .arg("--plan")
+        .arg(&plan_path)
+        .arg("--apply")
+        .assert()
+        .success()
+        .stdout(contains("mode=apply"))
+        .stdout(contains("sources_removed=1"))
+        .stdout(contains("index_rows_deleted=1"))
+        .stdout(contains("vault_files_deleted=1"));
+
+    let repo = SqliteRepository::open(&db).unwrap();
+    assert!(repo.load_snapshot().unwrap().sources.is_empty());
+    assert!(!repo
+        .notion_page_exists("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+        .unwrap());
+    assert!(!source_path.exists());
+}
+
+#[test]
+fn notion_archived_retirement_apply_rejects_non_plan_report() {
+    let temp = tempfile::tempdir().unwrap();
+    let vault = temp.path().join("vault");
+    let db = temp.path().join("wiki.db");
+    let plan_path = vault.join("reports/notion-archived-retirement-apply-test.json");
+    write_file(
+        &plan_path,
+        &serde_json::json!({
+            "version": 1,
+            "generated_at": "2026-04-28T00:00:00Z",
+            "mode": "apply",
+            "total_indexed_pages": 0,
+            "archived_candidates": 0,
+            "active_pages": 0,
+            "missing_sources": 0,
+            "fetch_errors": [],
+            "candidates": []
+        })
+        .to_string(),
+    );
+
+    wiki_cmd()
+        .arg("--db")
+        .arg(&db)
+        .arg("--wiki-dir")
+        .arg(&vault)
+        .arg("notion-archived-retirement")
+        .arg("apply")
+        .arg("--plan")
+        .arg(&plan_path)
+        .assert()
+        .failure()
+        .stderr(contains(
+            "unsupported notion archived retirement plan: version=1 mode=apply",
+        ));
 }
 
 #[test]
