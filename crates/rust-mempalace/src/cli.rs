@@ -108,6 +108,9 @@ pub enum Commands {
         top_k: usize,
         #[arg(long, value_enum, default_value_t = BenchMode::Random)]
         mode: BenchMode,
+        /// Deterministic seed for `--mode random`.
+        #[arg(long)]
+        seed: Option<u64>,
         #[arg(long)]
         report: Option<PathBuf>,
     },
@@ -172,7 +175,7 @@ pub enum Commands {
     },
 }
 
-#[derive(Copy, Clone, Debug, ValueEnum)]
+#[derive(Copy, Clone, Debug, ValueEnum, Eq, PartialEq)]
 pub enum BenchMode {
     Random,
     Fixed,

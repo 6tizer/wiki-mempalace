@@ -1,6 +1,6 @@
 mod cli;
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use clap::Parser;
 use cli::{BenchMode, Cli, Commands, McpTransport, MineMode, OutputFormat};
 use rust_mempalace::service::{
@@ -247,21 +247,30 @@ fn run() -> Result<()> {
             samples,
             top_k,
             mode,
+            seed,
             report,
         } => {
+            if seed.is_some() && mode != BenchMode::Random {
+                bail!("--seed is only valid with --mode random");
+            }
             palace.init(None)?;
             let conn = palace.open()?;
             let mode_s = match mode {
                 BenchMode::Random => "random",
                 BenchMode::Fixed => "fixed",
             };
-            let b = benchmark_run(&conn, samples, top_k, mode_s)?;
+            let b = benchmark_run(&conn, samples, top_k, mode_s, seed)?;
+            let seed_line = b
+                .seed
+                .map(|seed| format!("\nseed    : {seed}"))
+                .unwrap_or_default();
             print_out(
                 cli.output,
-                json!({"mode": b.mode, "samples": b.total, "hits": b.hits, "recall_at_k": b.recall, "k": b.k, "latency_ms": b.latency_ms, "throughput_per_sec": b.throughput_per_sec}),
+                json!({"mode": b.mode, "seed": b.seed, "samples": b.total, "hits": b.hits, "recall_at_k": b.recall, "k": b.k, "latency_ms": b.latency_ms, "throughput_per_sec": b.throughput_per_sec}),
                 &format!(
-                    "mode    : {}\nsamples : {}\nhits    : {}\nrecall@{}: {:.2}%\nlatency : {} ms\nthroughput: {:.2}/s",
+                    "mode    : {}{}\nsamples : {}\nhits    : {}\nrecall@{}: {:.2}%\nlatency : {} ms\nthroughput: {:.2}/s",
                     b.mode,
+                    seed_line,
                     b.total,
                     b.hits,
                     b.k,
