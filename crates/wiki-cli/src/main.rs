@@ -1,6 +1,7 @@
 #![allow(clippy::items_after_test_module, clippy::too_many_arguments)]
 
 use clap::{Parser, Subcommand, ValueEnum};
+use std::collections::BTreeMap;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use time::{format_description::well_known::Rfc3339, Duration, OffsetDateTime};
@@ -24,8 +25,9 @@ use wiki_mempalace_bridge::{
     MempalaceSearchPorts, MempalaceWikiSink, OutboxDispatchStats, OutboxResolver,
 };
 use wiki_storage::{
-    AutomationJobFailureSummary, AutomationRunRecord, AutomationRunStatus, OutboxConsumerProgress,
-    OutboxStats, SqliteRepository, SqliteWriterLease, WikiRepository,
+    canonical_notion_page_id, AutomationJobFailureSummary, AutomationRunRecord,
+    AutomationRunStatus, OutboxConsumerProgress, OutboxStats, SqliteRepository, SqliteWriterLease,
+    WikiRepository,
 };
 
 mod banner;
@@ -34,6 +36,7 @@ mod consistency;
 mod dashboard;
 mod llm;
 mod mcp;
+mod notion_archived_retirement;
 mod notion_client;
 mod notion_index_backfill;
 mod notion_source_projection;
@@ -485,6 +488,11 @@ enum Cmd {
         #[arg(long, default_value_t = false)]
         refresh_existing: bool,
     },
+    /// Audit archived Notion pages and write a DB-first retirement plan. Dry-run only.
+    NotionArchivedRetirement {
+        #[command(subcommand)]
+        command: NotionArchivedRetirementCmd,
+    },
 }
 
 #[derive(Subcommand)]
@@ -571,6 +579,22 @@ enum NotionSyncTagPolicy {
     TrustedSource,
     #[value(name = "bootstrap")]
     Bootstrap,
+}
+
+#[derive(Subcommand)]
+enum NotionArchivedRetirementCmd {
+    /// Pull Notion archived state and write a dry-run retirement plan.
+    Plan {
+        /// Report directory. Defaults to <wiki-dir>/reports when --wiki-dir is set.
+        #[arg(long)]
+        report_dir: Option<PathBuf>,
+        /// Max indexed Notion pages to inspect.
+        #[arg(long)]
+        limit: Option<usize>,
+        /// Milliseconds between Notion API requests (minimum 100)
+        #[arg(long, default_value_t = 350)]
+        request_delay_ms: u64,
+    },
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, ValueEnum)]
@@ -1972,6 +1996,7 @@ fn cmd_needs_writer_lease(cmd: &Cmd) -> bool {
         Cmd::NotionSyncIndexBackfill { apply, .. } => *apply,
         Cmd::NotionSourceVaultSync { apply, .. } => *apply,
         Cmd::Automation { .. }
+        | Cmd::NotionArchivedRetirement { .. }
         | Cmd::ExportOutboxNdjson
         | Cmd::ExportOutboxNdjsonFrom { .. }
         | Cmd::Explain { .. }
@@ -3368,6 +3393,69 @@ fn run_with_engine(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                 println!("{report}");
             }
         }
+        Cmd::NotionArchivedRetirement { command } => match command {
+            NotionArchivedRetirementCmd::Plan {
+                report_dir,
+                limit,
+                request_delay_ms,
+            } => {
+                let mut indexes = repo.list_notion_page_indexes()?;
+                if let Some(limit) = limit {
+                    indexes.truncate(limit);
+                }
+
+                let mut client =
+                    notion_client::NotionApiClient::from_env_with_delay(request_delay_ms)?;
+                let mut states = BTreeMap::new();
+                let mut fetch_errors = Vec::new();
+                for record in &indexes {
+                    match client.retrieve_page_archive_state(&record.notion_page_id) {
+                        Ok(state) => {
+                            states.insert(canonical_notion_page_id(&state.id), state);
+                        }
+                        Err(err) => fetch_errors.push(
+                            notion_archived_retirement::NotionArchivedRetirementFetchError {
+                                db_id: record.db_id.clone(),
+                                notion_page_id: record.notion_page_id.clone(),
+                                source_id: record.source_id.0.to_string(),
+                                error: err.to_string(),
+                            },
+                        ),
+                    }
+                }
+
+                let sources: Vec<_> = eng.store.sources.values().cloned().collect();
+                let report = notion_archived_retirement::build_notion_archived_retirement_report(
+                    &indexes,
+                    &sources,
+                    &states,
+                    fetch_errors,
+                    OffsetDateTime::now_utc(),
+                );
+                let report_dir = report_dir
+                    .map(|path| resolve_wiki_relative_path(wiki_root.as_deref(), path))
+                    .unwrap_or_else(|| {
+                        wiki_root
+                            .as_deref()
+                            .map(|root| root.join("reports"))
+                            .unwrap_or_else(|| PathBuf::from("reports"))
+                    });
+                let files = notion_archived_retirement::write_notion_archived_retirement_report(
+                    &report,
+                    &report_dir,
+                )?;
+                println!(
+                    "notion_archived_retirement_plan indexed={} archived_candidates={} active_pages={} missing_sources={} fetch_errors={}",
+                    report.total_indexed_pages,
+                    report.archived_candidates,
+                    report.active_pages,
+                    report.missing_sources,
+                    report.fetch_errors.len()
+                );
+                println!("json_report_file={}", files.json_path.display());
+                println!("markdown_report_file={}", files.markdown_path.display());
+            }
+        },
     }
     Ok(())
 }
@@ -3900,6 +3988,13 @@ mod tests {
             consumer_tag: DEFAULT_MEMPALACE_CONSUMER_TAG.into(),
             last_id: 0,
         }));
+        assert!(!cmd_needs_writer_lease(&Cmd::NotionArchivedRetirement {
+            command: NotionArchivedRetirementCmd::Plan {
+                report_dir: None,
+                limit: None,
+                request_delay_ms: 350,
+            },
+        },));
         assert!(cmd_needs_writer_lease(&Cmd::NotionSourceVaultSync {
             vault: None,
             dry_run: false,

@@ -44,6 +44,13 @@ pub struct NotionPage {
     pub content: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NotionPageArchiveState {
+    pub id: String,
+    pub archived: bool,
+    pub in_trash: bool,
+}
+
 pub struct NotionApiClient {
     token: String,
     client: Client,
@@ -230,6 +237,15 @@ impl NotionApiClient {
         Ok(blocks.join("\n\n"))
     }
 
+    pub fn retrieve_page_archive_state(
+        &mut self,
+        page_id: &str,
+    ) -> Result<NotionPageArchiveState, NotionClientError> {
+        let url = format!("{}/pages/{}", self.base_url, page_id);
+        let response_json = self.get_with_retry(&url)?;
+        parse_page_archive_state(&response_json)
+    }
+
     fn rate_limit_sleep(&mut self) {
         if let Some(last) = self.last_request_at {
             let elapsed = last.elapsed();
@@ -327,6 +343,20 @@ fn parse_notion_page(raw: serde_json::Value) -> Option<NotionPage> {
         note,
         status,
         content: String::new(),
+    })
+}
+
+fn parse_page_archive_state(
+    raw: &serde_json::Value,
+) -> Result<NotionPageArchiveState, NotionClientError> {
+    let id = raw["id"]
+        .as_str()
+        .ok_or_else(|| NotionClientError::Api("page response missing id".to_string()))?
+        .to_string();
+    Ok(NotionPageArchiveState {
+        id,
+        archived: raw["archived"].as_bool().unwrap_or(false),
+        in_trash: raw["in_trash"].as_bool().unwrap_or(false),
     })
 }
 
@@ -625,6 +655,40 @@ mod tests {
             .unwrap();
 
         assert_eq!(result.len(), 3);
+    }
+
+    #[test]
+    fn notion_client_retrieves_page_archive_state() {
+        let mut server = Server::new();
+        let _m = server
+            .mock("GET", "/pages/page-archived")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(
+                serde_json::json!({
+                    "id": "page-archived",
+                    "archived": true,
+                    "in_trash": false
+                })
+                .to_string(),
+            )
+            .create();
+
+        unsafe { std::env::set_var("NOTION_TOKEN", "test-token") };
+        let mut client = NotionApiClient::from_env_with_delay(0)
+            .unwrap()
+            .with_base_url(server.url());
+
+        let state = client.retrieve_page_archive_state("page-archived").unwrap();
+
+        assert_eq!(
+            state,
+            NotionPageArchiveState {
+                id: "page-archived".to_string(),
+                archived: true,
+                in_trash: false,
+            }
+        );
     }
 
     #[test]

@@ -20,6 +20,7 @@
 | M12 策略层增强 | ✅ 已合入 | PR #16 已 merge；`wiki-cli suggest` 已实现；支持文本、`--json`、`--report-dir [PATH]`；timestamped JSON 为真源、Markdown 为同源人读视图；默认只读，不执行 supersede/crystallize/fix 写入 |
 | Schema T2 tag governance | ✅ 已合入 | PR #13 已 merge；`Claim/Source/LlmClaimDraft` tags、tag normalize/validate、deprecated_tags 拦截、max_new_tags_per_ingest 限流、CLI/MCP/batch ingest tags 已实现 |
 | J13 LongMemEval auto benchmark | ✅ 已合入 | PR #19 已 merge；`rust-mempalace` 本地检索基线 runner、fetch/cache script、nightly/weekly workflow、30 天 artifact、fixture tests、review handoff 已实现；不进 PR 必跑 CI |
+| J14 Semantic Fusion Benchmark | 💤 未开始 | 在 J13 基础上增加 semantic/query fusion 对照 benchmark；评估 lane，不因低分阻断 CI，broken run 才 fail |
 | Vault Backfill + Palace Init | ✅ 已合入并已跑生产初始化 | PR #23 已 merge；`vault-audit`、`vault-backfill`、`palace-init`、MCP `shared:wiki` runtime defaults 已实现；2026-04-25 已对 `/Users/mac-mini/Documents/wiki` 完成生产 backfill + palace init |
 | B5 Orphan Governance | ✅ 已合入并已跑生产 apply | PR #28 / PR #30 已 merge；`vault-audit` timestamped 报告、LLM plan、中文报告、白名单 apply 已实现；生产 vault 已真实跑过 |
 | DB/Vault/Palace Consistency Governance | ✅ 已合入并已跑生产 apply | PR #32 已 merge；已真实 apply 到 `/Users/mac-mini/Documents/wiki`，最终 plan 可执行动作 0，Vault 无新 pages 文件，Mempalace 缺失 page drawer 0 |
@@ -28,7 +29,7 @@
 | Outbox Consumer Cursors | ✅ 已合入 PR #62/#63 | CR-01 延后项：consumer-scoped export API 已补；`export-outbox-ndjson-from` / `consume-to-mempalace` 已切到 consumer cursor 默认语义，`--last-id` 保留为 legacy/manual floor |
 | Embedding Tx Atomicity | 💤 未开始 | CR-01 延后项：`upsert_embedding` 纳入 snapshot+outbox 同一 SQLite transaction；需存储层改造 PRD |
 | Benchmark Reproducibility | 💤 未开始 | CR-01 延后项：`rust-mempalace benchmark --mode random` 添加 `--seed` 参数并存入 `benchmark_runs`，使跨次 recall 可比；需独立配置 PRD |
-| Notion Archived Source Retirement | 💤 未开始 | 待 PRD/spec；Notion 已归档 source 应同步退役到本地 DB/Vault。已知样本：`sources/wechat/微信公众号文章链接汇总.md`，Notion `is_archived=true`，本地仍在 `wiki.db.sources` 和 Vault 中 |
+| Notion Archived Source Retirement | 🟡 部分完成 | PR #68 已完成 audit/plan：读取 `notion_page_index`、拉 Notion archived/in_trash 状态、输出 dry-run JSON/Markdown plan；apply 仍待后续 PR |
 | Notion Incremental Sync | ✅ 已合入 | PR #36 / PR #38 / PR #42；`wiki-cli notion-sync`、automation `notion-sync` daily job 已实现；增量游标 `notion_sync_cursors`/`notion_page_index`；速率限制 350ms + 429 重试；`--refresh-existing` 刷新已有 source body/tags；`--writeback-notion` 接口完整默认关闭；PRD: `docs/prd/notion-incremental-sync.md` |
 | Notion Source Vault Projection | ✅ 已合入并已跑生产 apply | PR #42 已 merge；`notion-sync` 已支持 Notion block 正文抓取、`--refresh-existing`、Obsidian-safe tag projection 和 automation 默认刷新；生产 refresh 覆盖 X 782 / WeChat 485 个窗口内页面，刷新 161 个已有 source，最终 `notion-source-vault-sync --dry-run --refresh-existing --repair-tags` 为 planned=0 / tags_rewritten=0；176 个 DB-backed Notion source 已投影到 `sources/x` / `sources/wechat` |
 | Production Wiki Compiler | ✅ 已合入并已跑完 scale-up 闭环 | PR #44/#46/#47/#54/#56 已 merge；compiler 已支持 raw source -> resolver -> summary + concept/entity pages -> Vault projection -> Mempalace -> lint/audit；2026-04-28 全量小批量生产执行完成，remaining uncompiled = 0 |
@@ -48,6 +49,7 @@
 | Scheduled Vault Reports | ✅ 已合入 PR #67 | 已新增 automation `vault-reports` job：timestamped bundle、`latest.json/latest.md` 指针、`WIKI_SCHEDULED_REPORT_KEEP` 保留策略 |
 | C16A Atomic snapshot + outbox | ✅ 已合入 | PR #25 已 merge；新增 `save_snapshot_and_append_outbox` 单事务持久化路径；CLI/MCP/backfill 写路径已切到原子提交 |
 | C16B Embedding ANN index | 💤 未开始 | 仍保留在 [embedding-ann-index](specs/embedding-ann-index/)；可单独规划，不和存储一致性混在一个 PR |
+| M12 Executor | 💤 未开始 | 在现有 `suggest` 策略层后增加 dry-run planner 与 guarded apply；默认不执行写入，需 allowlist + explicit apply |
 
 ## 当前下一阶段
 
@@ -62,8 +64,9 @@
 
 ### P1：Source 生命周期治理（同一批规划，分 PR 实现）
 
-1. Notion Archived Source Retirement：同步 Notion archived 状态，生成退役 plan，通过 DB 原点更新 + Vault 投影清理处理，不手工删除 Markdown。
-2. MCP Vault Sync：MCP 写操作后自动触发 Vault projection；和 archived retirement 同属 DB -> Vault 生命周期治理，但建议独立 PR。
+1. Notion Archived Source Retirement audit/plan：PR #68 已完成 dry-run plan，不改 DB/Vault/Palace。
+2. Notion Archived Source Retirement apply：下一 PR 执行 DB-first 退役，再由 Vault projection / Mempalace consumer 更新派生层。
+3. MCP Vault Sync：PR #61 已完成 MCP 写操作后自动触发 Vault projection。
 
 ### P2：报告自动化（低风险独立批次）
 
@@ -85,22 +88,25 @@ scale-up 混做。
 
 ### P5：Embedding / Retrieval 线（同一方向，按阶段实现）
 
-1. Embedding Tx Atomicity：先把 embedding 写入纳入 snapshot/outbox 事务。
-2. C16B Embedding ANN index：再做 bounded-work vector search。
-3. Contradiction Scan Scaling：优化 contradiction O(n²) 路径。
-4. Row-level Wiki State Storage：解决 `wiki_state` blob 全量序列化瓶颈；该项影响存储 schema 和迁移，不能塞进 hardening PR。
-5. J14 Semantic Fusion Benchmark：等 J13 报告证明语义不匹配是主因后再启动。
-6. Benchmark Reproducibility：`--mode random` 加 `--seed`，可作为本线前置小 PR 或同批第一步。
+1. Benchmark Reproducibility：`rust-mempalace benchmark --mode random` 增加 `--seed`，并写入 `benchmark_runs`。
+2. Embedding Tx Atomicity：把 embedding 写入纳入 snapshot/outbox 同一事务边界。
+3. C16B Embedding ANN spike / feature gate：先确定技术路径、fallback 和 CI story。
+4. C16B Embedding ANN implementation：实现 bounded vector search、fallback full scan、ranking 回归测试。
+5. Contradiction Scan Scaling：优化 contradiction O(n²) 路径。
+6. J14 Semantic Fusion Benchmark：在 J13 基础上增加 semantic/query fusion 对照 benchmark。
+7. Row-level Wiki State Storage：分 migration/dual-write 与 cutover/cleanup 两 PR 做。
 
 ### P6：DX / Maintainability
 
-1. CLI Command Modularization：拆 `main.rs`，按命令域分模块。
-2. MCP Typed Errors：先定义错误类型，再统一 JSON-RPC error mapping。
-3. Time Library Unification：评估统一时间库和 crate 独立性边界。
+1. CLI Command Modularization phase 1：先拆低风险命令域，减少 `main.rs` 体积。
+2. CLI Command Modularization phase 2：再拆 dispatcher/shared config，并补命令 smoke。
+3. MCP Typed Errors：PR #60 已完成 typed JSON-RPC error mapping。
+4. Time Library Unification：评估统一时间库和 crate 独立性边界。
 
 ### P7：M12 executor（最后）
 
-M12 operator/executor 属于自动行动层。等 compiler、source 生命周期、outbox 和报告自动化稳定后再规划，避免自动放大错误。
+1. M12 executor dry-run planner：在 `suggest` 策略层后增加 action plan，只产出计划。
+2. M12 executor guarded apply：增加 allowlist、dry-run-first、explicit apply flag，只执行低风险可审计动作。
 
 ## 审计剩余项 PR 计划
 
@@ -116,31 +122,33 @@ M12 operator/executor 属于自动行动层。等 compiler、source 生命周期
 
 ### PR #58 之后的拆分
 
-PR #58 完成 hardening 小补丁后，剩余 12 个未完成/部分完成项按 17 个 PR 完成。原则：先写入一致性和运行安全，再做性能，再做治理/重构。
+用户确认后的完成顺序固定为 23 个 PR。原则：先安全/写入语义，再 source/reporting，再 retrieval/storage，再 DX，最后 executor。
 
-| 顺序 | PR | 覆盖项 | 原因 |
-| --- | --- | --- | --- |
-| 1 | MCP Typed Errors | `MCP Typed Errors` | 先把 MCP error 边界类型化，后续 MCP Vault Sync / API 文档可复用错误语义。 |
-| 2 | MCP Vault Sync | `MCP Vault Sync` | MCP 写操作后触发 Vault projection；行为边界清晰，但会改变写入副作用，独立 PR。 |
-| 3 | Outbox Consumer Cursors schema/API | `Outbox Consumer Cursors` | 先新增 consumer-scoped cursor 表/API，不改变消费行为。 |
-| 4 | Outbox Consumer Cursors cutover | `Outbox Consumer Cursors` | 再切 consumer/ack 语义，降低协议迁移风险。 |
-| 5 | Embedding Tx Atomicity | `Embedding Tx Atomicity` | 先把 embedding 写入纳入 snapshot/outbox 事务，再谈 ANN。 |
-| 6 | Embedding ANN spike / feature gate | `C16B Embedding ANN index` | 先确定 sqlite-vec/ANN 技术、feature gate、CI/release story。 |
-| 7 | Embedding ANN implementation | `C16B Embedding ANN index` | 实现 upsert/search/fallback/re-rank；与 spike 分开 review。 |
-| 8 | Contradiction Scan Scaling | `Contradiction Scan Scaling` | 优化 contradiction O(n²) 路径，独立做性能/语义回归。 |
-| 9 | Multi-process Write Lock / Lease | `Multi-process Write Guardrails` | 已由 PR #64 完成：`wiki.db.writer.lock` writer lease + 写入口 fail-fast。 |
-| 10 | Reliability Test Matrix | `Reliability Test Matrix` | 已由 PR #65 完成核心 quick 矩阵；慢速 fuzz/perf 可后续独立扩展。 |
-| 11 | Dependency Audit Automation | `Dependency Audit Automation` | 已由 PR #66 完成 scheduled/manual `cargo audit` lane；quick CI 不安装或运行 audit。 |
-| 12 | Scheduled Vault Reports | `Scheduled Vault Reports` | 已由 PR #67 完成 automation `vault-reports`、latest 指针和 retention。 |
-| 13 | Notion Archived Source Retirement audit/plan | `Notion Archived Source Retirement` | 先只做 archived source audit/plan，确保 DB-first 退役模型正确。 |
-| 14 | Notion Archived Source Retirement apply | `Notion Archived Source Retirement` | 再做 apply/production docs，避免手删 Markdown。 |
-| 15 | CLI Command Modularization phase 1 | `CLI Command Modularization` | 先拆低风险命令域，减少 `main.rs` 体积，不改行为。 |
-| 16 | CLI Command Modularization phase 2 | `CLI Command Modularization` | 再拆主 dispatcher / shared config，单独 review。 |
-| 17 | Row-level Wiki State Storage migration/dual-write | `Row-level Wiki State Storage` | 最大存储迁移项；先加行级 schema、迁移、dual-read/write。 |
-| 18 | Row-level Wiki State Storage cutover/cleanup | `Row-level Wiki State Storage` | 再切读写路径并清理兼容层；需完整回滚故事。 |
-| 19 | Time Library Unification | `Time Library Unification` | 低优先依赖统一，最后做，避免影响前面功能/迁移。 |
-
-> 备注：表中仍保留 19 个顺序号以稳定引用；其中 `MCP API Reference` 与 `Automation Integrity Check` 已由 PR #58 完成，后续实际剩余为 17 个 PR。
+| 顺序 | PR | 覆盖项 | 状态 | 原因 |
+| --- | --- | --- | --- | --- |
+| 1 | MCP Typed Errors | `MCP Typed Errors` | ✅ PR #60 | 稳定 MCP error 分类。 |
+| 2 | MCP Vault Sync | `MCP Vault Sync` | ✅ PR #61 | MCP 写操作启用 sync 时刷新 Vault projection。 |
+| 3 | Outbox Consumer Cursors schema/API | `Outbox Consumer Cursors` | ✅ PR #62 | 新增 consumer-scoped cursor API，不改默认行为。 |
+| 4 | Outbox Consumer Cursors cutover | `Outbox Consumer Cursors` | ✅ PR #63 | CLI/consumer 切到 cursor 默认语义，`--last-id` 保留 legacy override。 |
+| 5 | Multi-process Write Lock / Lease | `Multi-process Write Guardrails` | ✅ PR #64 | 单 DB writer lease，拿不到锁 fail fast。 |
+| 6 | Reliability Test Matrix | `Reliability Test Matrix` | ✅ PR #65 | 补并发/失败/坏输入/大数据 smoke 回归。 |
+| 7 | Dependency Audit Automation | `Dependency Audit Automation` | ✅ PR #66 | scheduled/manual `cargo audit`，不拖慢 quick。 |
+| 8 | Scheduled Vault Reports | `Scheduled Vault Reports` | ✅ PR #67 | 定时报告 bundle、latest 指针、保留策略。 |
+| 9 | Notion Archived Source Retirement audit/plan | `Notion Archived Source Retirement` | ✅ PR #68 | 先做 Notion archived dry-run plan，不改 DB/Vault。 |
+| 10 | Notion Archived Source Retirement apply | `Notion Archived Source Retirement` | 💤 未开始 | 再做 DB-first apply，避免手删 Markdown。 |
+| 11 | Benchmark Reproducibility | `Benchmark Reproducibility` | 💤 未开始 | `--mode random` 加 `--seed` 并记录到 `benchmark_runs`。 |
+| 12 | Embedding Tx Atomicity | `Embedding Tx Atomicity` | 💤 未开始 | embedding 写入纳入 snapshot/outbox 同事务。 |
+| 13 | C16B Embedding ANN spike / feature gate | `C16B Embedding ANN index` | 💤 未开始 | 先确定 ANN 技术路径、fallback 和 CI story。 |
+| 14 | C16B Embedding ANN implementation | `C16B Embedding ANN index` | 💤 未开始 | bounded vector search、fallback full scan、ranking 回归。 |
+| 15 | Contradiction Scan Scaling | `Contradiction Scan Scaling` | 💤 未开始 | 降低 `naive_contradiction_pairs` O(n²) 爆炸风险。 |
+| 16 | J14 Semantic Fusion Benchmark | `J14 Semantic Fusion Benchmark` | 💤 未开始 | semantic/query fusion 对照评估 lane。 |
+| 17 | Row-level Wiki State Storage migration/dual-write | `Row-level Wiki State Storage` | 💤 未开始 | 加行级表与迁移路径，保留快照兼容。 |
+| 18 | Row-level Wiki State Storage cutover/cleanup | `Row-level Wiki State Storage` | 💤 未开始 | 主路径切到行级 state，保留验证和恢复说明。 |
+| 19 | CLI Command Modularization phase 1 | `CLI Command Modularization` | 💤 未开始 | 先拆低风险命令域，不改 CLI 行为。 |
+| 20 | CLI Command Modularization phase 2 | `CLI Command Modularization` | 💤 未开始 | 再拆 dispatcher/shared config，补 smoke。 |
+| 21 | Time Library Unification | `Time Library Unification` | 💤 未开始 | 统一或文档化 `chrono` / `time` 边界。 |
+| 22 | M12 executor dry-run planner | `M12 Executor` | 💤 未开始 | 只产出 action plan，不执行写入。 |
+| 23 | M12 executor guarded apply | `M12 Executor` | 💤 未开始 | allowlist + dry-run-first + explicit apply flag。 |
 
 执行计划见 [automation-issue-batch-3.md](automation-issue-batch-3.md)。开发流程见
 [dev-workflow.md](dev-workflow.md)，batch-3 PRD 见 [prd/batch-3.md](prd/batch-3.md)。

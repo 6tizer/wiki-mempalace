@@ -43,3 +43,4 @@
 - [reliability-test-matrix/](reliability-test-matrix/) — DB failure injection、大 snapshot smoke、MCP malformed input、LLM bad JSON 回归矩阵。已合入 PR #65。
 - [dependency-audit-automation/](dependency-audit-automation/) — Scheduled/manual `cargo audit` lane with artifact upload, kept out of quick PR checks。已合入 PR #66。
 - [scheduled-vault-reports/](scheduled-vault-reports/) — Automation `vault-reports` job for timestamped Vault report bundles, latest pointers, and retention。已合入 PR #67。
+- [notion-archived-source-retirement/](notion-archived-source-retirement/) — DB-first Notion archived source retirement audit/plan；apply 保留后续 PR。
