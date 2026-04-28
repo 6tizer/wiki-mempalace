@@ -28,5 +28,4 @@ or behavior.
 
 ## Status
 
-- **Phase 1 complete in PR #78** — extracted schema, llm-smoke, and outbox handlers; quick CI passed.
-- **Phase 2 pending** — dispatcher/shared config extraction and command smoke coverage.
+- **Complete in PR #78/#79** — extracted low-risk command handlers, no-engine dispatch, shared runtime setup, and command smoke coverage.
