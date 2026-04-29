@@ -4,8 +4,9 @@ use serde_json::{json, Value};
 use std::io::{self, BufRead, Write};
 use time::OffsetDateTime;
 use wiki_core::{
-    normalize_and_validate_tag_groups, parse_memory_tier, ClaimId, DomainSchema, EntryType,
-    MemoryTier, QueryContext, Scope, SessionCrystallizationInput, WikiPage,
+    apply_time_decay_to_confidence, normalize_and_validate_tag_groups, parse_memory_tier, ClaimId,
+    DomainSchema, EntryType, MemoryTier, QueryContext, Scope, SessionCrystallizationInput,
+    WikiPage,
 };
 use wiki_kernel::{initial_status_for, write_projection, LlmWikiEngine, NoopWikiHook};
 use wiki_storage::{EmbeddingWrite, SqliteRepository};
@@ -20,6 +21,8 @@ const MCP_RESULT_LIMIT_MAX: usize = 100;
 enum McpToolError {
     #[error("{0}")]
     InvalidParams(String),
+    #[error("{0}")]
+    ScopeDenied(String),
     #[error("{0}")]
     MethodNotFound(String),
     #[error("{0}")]
@@ -37,6 +40,10 @@ enum McpToolError {
 impl McpToolError {
     fn invalid_params(message: impl std::fmt::Display) -> Self {
         Self::InvalidParams(message.to_string())
+    }
+
+    fn scope_denied(message: impl std::fmt::Display) -> Self {
+        Self::ScopeDenied(message.to_string())
     }
 
     fn method_not_found(method: &str) -> Self {
@@ -67,13 +74,18 @@ impl McpToolError {
         match self {
             Self::InvalidParams(_) | Self::ToolNotFound(_) => -32602,
             Self::MethodNotFound(_) => -32601,
-            Self::Engine(_) | Self::Storage(_) | Self::Llm(_) | Self::Mempalace(_) => -32000,
+            Self::ScopeDenied(_)
+            | Self::Engine(_)
+            | Self::Storage(_)
+            | Self::Llm(_)
+            | Self::Mempalace(_) => -32000,
         }
     }
 
     fn kind(&self) -> &'static str {
         match self {
             Self::InvalidParams(_) => "invalid_params",
+            Self::ScopeDenied(_) => "scope_denied",
             Self::MethodNotFound(_) => "method_not_found",
             Self::ToolNotFound(_) => "tool_not_found",
             Self::Engine(_) => "engine_error",
@@ -271,14 +283,16 @@ fn tools_list() -> Value {
                     "query":{"type":"string","description":"Natural language query"},
                     "rrf_k":{"type":"number","description":"RRF constant k (default 60)"},
                     "per_stream_limit":{"type":"integer","minimum":MCP_RESULT_LIMIT_MIN,"maximum":MCP_RESULT_LIMIT_MAX,"description":"Max results per stream (default 50, clamped 1..=100)"},
-                    "write_page":{"type":"boolean","description":"Write results as wiki page"}
+                    "write_page":{"type":"boolean","description":"Write results as wiki page"},
+                    "scope":{"type":"string","description":"Write scope when write_page=true. Defaults to server --viewer-scope and must match it."}
                 },"required":["query"]}
             },
             {
                 "name": "wiki_promote_claim",
                 "description": "Promote a claim up the memory tier if qualified by schema thresholds",
                 "inputSchema": {"type":"object","properties":{
-                    "claim_id":{"type":"string","description":"UUID of the claim to promote"}
+                    "claim_id":{"type":"string","description":"UUID of the claim to promote"},
+                    "scope":{"type":"string","description":"Scope. Defaults to server --viewer-scope and must match it."}
                 },"required":["claim_id"]}
             },
             {
@@ -289,13 +303,16 @@ fn tools_list() -> Value {
                     "findings":{"type":"array","items":{"type":"string"},"description":"Key findings"},
                     "files":{"type":"array","items":{"type":"string"},"description":"Files touched"},
                     "lessons":{"type":"array","items":{"type":"string"},"description":"Lessons learned"},
-                    "entry_type":{"type":"string","description":"Optional EntryType for the generated page (e.g. concept, entity, qa)"}
+                    "entry_type":{"type":"string","description":"Optional EntryType for the generated page (e.g. concept, entity, qa)"},
+                    "scope":{"type":"string","description":"Scope. Defaults to server --viewer-scope and must match it."}
                 },"required":["question"]}
             },
             {
                 "name": "wiki_lint",
                 "description": "Run health checks: broken wikilinks, orphan pages, stale claims, missing cross-refs",
-                "inputSchema": {"type":"object","properties":{}}
+                "inputSchema": {"type":"object","properties":{
+                    "scope":{"type":"string","description":"Scope. Defaults to server --viewer-scope and must match it."}
+                }}
             },
             {
                 "name": "wiki_wake_up",
@@ -307,7 +324,9 @@ fn tools_list() -> Value {
             {
                 "name": "wiki_maintenance",
                 "description": "Batch maintenance: apply confidence decay, run lint, promote qualified claims",
-                "inputSchema": {"type":"object","properties":{}}
+                "inputSchema": {"type":"object","properties":{
+                    "scope":{"type":"string","description":"Scope. Defaults to server --viewer-scope and must match it."}
+                }}
             },
             {
                 "name": "wiki_export_graph_dot",
@@ -436,7 +455,7 @@ fn call_tool(
         "wiki_ingest" => {
             let uri = required_str(&args, "uri")?;
             let body = required_str(&args, "body")?;
-            let scope = resolve_write_scope(&args, viewer);
+            let scope = resolve_write_scope(&args, viewer)?;
             let tags = tags_arg_from_value(&args, "tags")?;
             let sid = eng
                 .ingest_raw_with_tags(uri.to_string(), body, scope, "mcp", &tags)
@@ -454,7 +473,7 @@ fn call_tool(
         }
         "wiki_file_claim" => {
             let text = required_str(&args, "text")?;
-            let scope = resolve_write_scope(&args, viewer);
+            let scope = resolve_write_scope(&args, viewer)?;
             let tier = args
                 .get("tier")
                 .and_then(Value::as_str)
@@ -478,7 +497,7 @@ fn call_tool(
         "wiki_supersede_claim" => {
             let old_id_str = required_str(&args, "old_claim_id")?;
             let new_text = required_str(&args, "new_text")?;
-            let scope = resolve_write_scope(&args, viewer);
+            let scope = resolve_write_scope(&args, viewer)?;
             let tier = args
                 .get("tier")
                 .and_then(Value::as_str)
@@ -486,6 +505,7 @@ fn call_tool(
             let old =
                 ClaimId(uuid::Uuid::parse_str(old_id_str).map_err(McpToolError::invalid_params)?);
             let tier = parse_tier(tier).map_err(McpToolError::invalid_params)?;
+            ensure_supersede_visible(eng, old, viewer)?;
             let new_id = eng
                 .supersede(old, new_text.to_string(), scope, tier, "mcp")
                 .map_err(McpToolError::engine)?;
@@ -504,6 +524,7 @@ fn call_tool(
             let query = required_str(&args, "query")?;
             let rrf_k = args.get("rrf_k").and_then(Value::as_f64).unwrap_or(60.0);
             let limit = optional_limit(&args, "per_stream_limit", 50)?;
+            let scope = resolve_write_scope(&args, viewer)?;
             let ctx = QueryContext::new(query)
                 .with_rrf_k(rrf_k)
                 .with_per_stream_limit(limit)
@@ -520,7 +541,7 @@ fn call_tool(
                 for (doc, score) in ranked.iter().take(20) {
                     md.push_str(&format!("- `{doc}` score={score:.6}\n"));
                 }
-                let page = WikiPage::new(title, md, viewer.clone());
+                let page = WikiPage::new(title, md, scope);
                 eng.store.pages.insert(page.id, page);
             }
             save_flush_and_project(eng, repo, wiki_dir)?;
@@ -532,6 +553,7 @@ fn call_tool(
             }))
         }
         "wiki_promote_claim" => {
+            let _scope = resolve_write_scope(&args, viewer)?;
             let cid_str = required_str(&args, "claim_id")?;
             let cid =
                 ClaimId(uuid::Uuid::parse_str(cid_str).map_err(McpToolError::invalid_params)?);
@@ -546,6 +568,7 @@ fn call_tool(
         }
         "wiki_crystallize" => {
             let question = required_str(&args, "question")?;
+            let scope = resolve_write_scope(&args, viewer)?;
             let findings: Vec<String> = args
                 .get("findings")
                 .and_then(Value::as_array)
@@ -588,7 +611,7 @@ fn call_tool(
                         findings,
                         files_touched: files,
                         lessons,
-                        scope: viewer.clone(),
+                        scope,
                     },
                     "mcp",
                 )
@@ -612,6 +635,7 @@ fn call_tool(
             }))
         }
         "wiki_lint" => {
+            let _scope = resolve_write_scope(&args, viewer)?;
             let findings = eng.run_basic_lint("mcp", Some(viewer));
             save_flush_and_project(eng, repo, wiki_dir)?;
             Ok(json!({
@@ -678,8 +702,9 @@ fn call_tool(
             Ok(json!({"context": context}))
         }
         "wiki_maintenance" => {
+            let _scope = resolve_write_scope(&args, viewer)?;
             let now = OffsetDateTime::now_utc();
-            eng.apply_confidence_decay_all(now, 30.0);
+            let decayed = apply_confidence_decay_visible(eng, now, 30.0, viewer);
             let findings = eng.run_basic_lint("mcp", Some(viewer));
             let mut promoted = 0u32;
             let claim_ids: Vec<ClaimId> = eng.store.claims.keys().copied().collect();
@@ -691,6 +716,7 @@ fn call_tool(
             save_flush_and_project(eng, repo, wiki_dir)?;
             Ok(json!({
                 "decay_applied": true,
+                "claims_decayed": decayed,
                 "lint_findings": findings.len(),
                 "claims_promoted": promoted
             }))
@@ -727,7 +753,7 @@ fn call_tool(
         "wiki_ingest_llm" => {
             let uri = required_str(&args, "uri")?;
             let body = required_str(&args, "body")?;
-            let scope = resolve_write_scope(&args, viewer);
+            let scope = resolve_write_scope(&args, viewer)?;
             let dry_run = args
                 .get("dry_run")
                 .and_then(Value::as_bool)
@@ -885,11 +911,67 @@ fn read_line_limited<R: BufRead>(reader: &mut R, max_bytes: usize) -> io::Result
     }
 }
 
-fn resolve_write_scope(args: &Value, viewer: &Scope) -> Scope {
-    args.get("scope")
-        .and_then(Value::as_str)
-        .map(parse_scope)
-        .unwrap_or_else(|| viewer.clone())
+fn resolve_write_scope(args: &Value, viewer: &Scope) -> Result<Scope, McpToolError> {
+    let Some(raw) = args.get("scope") else {
+        return Ok(viewer.clone());
+    };
+    let Some(raw) = raw.as_str() else {
+        return Err(McpToolError::invalid_params("scope must be a string"));
+    };
+    let requested = parse_scope(raw);
+    if requested == *viewer {
+        Ok(requested)
+    } else {
+        Err(McpToolError::scope_denied(format!(
+            "scope {} is not allowed for server viewer {}",
+            scope_label(&requested),
+            scope_label(viewer)
+        )))
+    }
+}
+
+fn ensure_supersede_visible(
+    eng: &LlmWikiEngine<NoopWikiHook>,
+    old: ClaimId,
+    viewer: &Scope,
+) -> Result<(), McpToolError> {
+    let claim = eng
+        .store
+        .claims
+        .get(&old)
+        .ok_or_else(|| McpToolError::engine(format!("claim not found: {old:?}")))?;
+    if wiki_core::document_visible_to_viewer(&claim.scope, viewer) {
+        Ok(())
+    } else {
+        Err(McpToolError::scope_denied(format!(
+            "claim {} is not visible to server viewer {}",
+            old.0,
+            scope_label(viewer)
+        )))
+    }
+}
+
+fn apply_confidence_decay_visible(
+    eng: &mut LlmWikiEngine<NoopWikiHook>,
+    now: OffsetDateTime,
+    half_life_days: f64,
+    viewer: &Scope,
+) -> usize {
+    let mut decayed = 0;
+    for claim in eng.store.claims.values_mut() {
+        if wiki_core::document_visible_to_viewer(&claim.scope, viewer) {
+            apply_time_decay_to_confidence(claim, now, half_life_days);
+            decayed += 1;
+        }
+    }
+    decayed
+}
+
+fn scope_label(scope: &Scope) -> String {
+    match scope {
+        Scope::Private { agent_id } => format!("private:{agent_id}"),
+        Scope::Shared { team_id } => format!("shared:{team_id}"),
+    }
 }
 
 fn preflight_llm_plan_tags(
@@ -1449,23 +1531,252 @@ mod tests {
     }
 
     #[test]
-    fn mcp_explicit_scope_overrides_server_viewer_scope() {
+    fn mcp_explicit_scope_must_match_server_viewer_scope() {
         let viewer = Scope::Shared {
             team_id: "wiki".into(),
         };
 
         assert_eq!(
-            resolve_write_scope(&json!({}), &viewer),
+            resolve_write_scope(&json!({}), &viewer).unwrap(),
             Scope::Shared {
                 team_id: "wiki".into()
             }
         );
         assert_eq!(
-            resolve_write_scope(&json!({"scope": "private:mcp"}), &viewer),
-            Scope::Private {
-                agent_id: "mcp".into()
+            resolve_write_scope(&json!({"scope": "shared:wiki"}), &viewer).unwrap(),
+            Scope::Shared {
+                team_id: "wiki".into()
             }
         );
+        let err = resolve_write_scope(&json!({"scope": "private:mcp"}), &viewer)
+            .expect_err("cross-scope write should be denied");
+        assert_eq!(err.kind(), "scope_denied");
+    }
+
+    #[test]
+    fn mcp_cross_scope_file_claim_is_rejected_without_mutation() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let repo = SqliteRepository::open(tmp.path().join("wiki.db")).expect("repo");
+        let schema = DomainSchema::permissive_default();
+        let mut eng = LlmWikiEngine::load_from_repo(schema, &repo, NoopWikiHook).expect("engine");
+        let viewer = Scope::Shared {
+            team_id: "wiki".into(),
+        };
+
+        let resp = handle_request(
+            "tools/call",
+            json!({
+                "name": "wiki_file_claim",
+                "arguments": {
+                    "text": "cross scope write should not land",
+                    "scope": "private:mcp"
+                }
+            }),
+            json!(1),
+            &mut eng,
+            &repo,
+            &viewer,
+            std::path::Path::new("llm-config.toml"),
+            false,
+            None,
+            None,
+        );
+
+        assert_eq!(
+            resp.pointer("/error/data/kind").and_then(Value::as_str),
+            Some("scope_denied")
+        );
+        assert!(eng.store.claims.is_empty());
+    }
+
+    #[test]
+    fn mcp_supersede_requires_visible_old_claim() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let repo = SqliteRepository::open(tmp.path().join("wiki.db")).expect("repo");
+        let schema = DomainSchema::permissive_default();
+        let mut eng = LlmWikiEngine::load_from_repo(schema, &repo, NoopWikiHook).expect("engine");
+        let viewer = Scope::Private {
+            agent_id: "a".into(),
+        };
+        let visible_old =
+            eng.file_claim("visible old", viewer.clone(), MemoryTier::Semantic, "test");
+        let hidden_old = eng.file_claim(
+            "hidden old",
+            Scope::Private {
+                agent_id: "b".into(),
+            },
+            MemoryTier::Semantic,
+            "test",
+        );
+
+        let visible_resp = handle_request(
+            "tools/call",
+            json!({
+                "name": "wiki_supersede_claim",
+                "arguments": {
+                    "old_claim_id": visible_old.0.to_string(),
+                    "new_text": "visible new",
+                    "scope": "private:a"
+                }
+            }),
+            json!(1),
+            &mut eng,
+            &repo,
+            &viewer,
+            std::path::Path::new("llm-config.toml"),
+            false,
+            None,
+            None,
+        );
+        assert!(visible_resp.get("error").is_none(), "{visible_resp}");
+        assert!(eng.store.claims[&visible_old].stale);
+
+        let before_claim_count = eng.store.claims.len();
+        let hidden_resp = handle_request(
+            "tools/call",
+            json!({
+                "name": "wiki_supersede_claim",
+                "arguments": {
+                    "old_claim_id": hidden_old.0.to_string(),
+                    "new_text": "hidden new",
+                    "scope": "private:a"
+                }
+            }),
+            json!(2),
+            &mut eng,
+            &repo,
+            &viewer,
+            std::path::Path::new("llm-config.toml"),
+            false,
+            None,
+            None,
+        );
+
+        assert_eq!(
+            hidden_resp
+                .pointer("/error/data/kind")
+                .and_then(Value::as_str),
+            Some("scope_denied")
+        );
+        assert_eq!(eng.store.claims.len(), before_claim_count);
+        assert!(!eng.store.claims[&hidden_old].stale);
+    }
+
+    #[test]
+    fn mcp_write_page_and_crystallize_reject_cross_scope_before_mutation() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let repo = SqliteRepository::open(tmp.path().join("wiki.db")).expect("repo");
+        let schema = DomainSchema::permissive_default();
+        let mut eng = LlmWikiEngine::load_from_repo(schema, &repo, NoopWikiHook).expect("engine");
+        let viewer = Scope::Shared {
+            team_id: "wiki".into(),
+        };
+
+        let query_resp = handle_request(
+            "tools/call",
+            json!({
+                "name": "wiki_query",
+                "arguments": {
+                    "query": "should not write",
+                    "write_page": true,
+                    "scope": "private:mcp"
+                }
+            }),
+            json!(1),
+            &mut eng,
+            &repo,
+            &viewer,
+            std::path::Path::new("llm-config.toml"),
+            false,
+            None,
+            None,
+        );
+        assert_eq!(
+            query_resp
+                .pointer("/error/data/kind")
+                .and_then(Value::as_str),
+            Some("scope_denied")
+        );
+        assert!(eng.store.pages.is_empty());
+        assert!(eng.outbox.is_empty());
+
+        let crystallize_resp = handle_request(
+            "tools/call",
+            json!({
+                "name": "wiki_crystallize",
+                "arguments": {
+                    "question": "should not crystallize",
+                    "scope": "private:mcp"
+                }
+            }),
+            json!(2),
+            &mut eng,
+            &repo,
+            &viewer,
+            std::path::Path::new("llm-config.toml"),
+            false,
+            None,
+            None,
+        );
+        assert_eq!(
+            crystallize_resp
+                .pointer("/error/data/kind")
+                .and_then(Value::as_str),
+            Some("scope_denied")
+        );
+        assert!(eng.store.pages.is_empty());
+        assert!(eng.outbox.is_empty());
+    }
+
+    #[test]
+    fn mcp_maintenance_decays_only_viewer_visible_claims() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let repo = SqliteRepository::open(tmp.path().join("wiki.db")).expect("repo");
+        let schema = DomainSchema::permissive_default();
+        let mut eng = LlmWikiEngine::load_from_repo(schema, &repo, NoopWikiHook).expect("engine");
+        let viewer = Scope::Private {
+            agent_id: "a".into(),
+        };
+        let visible = eng.file_claim("visible", viewer.clone(), MemoryTier::Semantic, "test");
+        let hidden = eng.file_claim(
+            "hidden",
+            Scope::Private {
+                agent_id: "b".into(),
+            },
+            MemoryTier::Semantic,
+            "test",
+        );
+        let old = OffsetDateTime::now_utc() - time::Duration::days(60);
+        for id in [visible, hidden] {
+            let claim = eng.store.claims.get_mut(&id).unwrap();
+            claim.created_at = old;
+            claim.confidence = 0.8;
+        }
+
+        let resp = handle_request(
+            "tools/call",
+            json!({
+                "name": "wiki_maintenance",
+                "arguments": {}
+            }),
+            json!(1),
+            &mut eng,
+            &repo,
+            &viewer,
+            std::path::Path::new("llm-config.toml"),
+            false,
+            None,
+            None,
+        );
+
+        assert!(resp.get("error").is_none(), "{resp}");
+        assert_eq!(
+            resp.pointer("/result/claims_decayed")
+                .and_then(Value::as_u64),
+            Some(1)
+        );
+        assert!(eng.store.claims[&visible].confidence < 0.8);
+        assert_eq!(eng.store.claims[&hidden].confidence, 0.8);
     }
 
     #[test]
