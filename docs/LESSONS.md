@@ -89,6 +89,15 @@
 - Tests or reviews that caught issues: `cargo deny --all-features check advisories bans licenses sources` 抓到 RUSTSEC-2026-0104、license allowlist 缺口和重复依赖例外；workspace test/clippy 验证 `rustls-webpki` 升级无回归。
 - Next plan note: 下一 PR 做 Production SearchPorts default，不混入 CI/workflow 继续扩展。
 
+## 2026-04-29 / Audit v2 PR 08 Production SearchPorts
+
+- Scope: `query` / `explain` 默认 wiki 路从 storage-backed `SqliteSearchPorts` 取候选，mempalace 继续通过 `CompositeSearchPorts` 融合。
+- What worked: focused test 先清空 engine 内存 store，再确认 query/explain 仍能从持久化 snapshot 召回，直接锁住“不靠 InMemory 默认路”的行为。
+- What caused rework: 初版把 `--graph-extras-file` 当 `graph_override` 传入最终 query，会替代整个 composite graph stream；同时旧逻辑允许外部文件注入 `mp_*` id。
+- Spec changes needed: retrieval token quality 不在本 PR 做；CJK/Unicode 仍留给 PR9。
+- Tests or reviews that caught issues: retrieval review 抓到 `graph_extras` 绕过 mempalace bank/scope 和跳过 mempalace graph；修复为拒绝 `mp_*` extras，并在 active graph stream 之后合并 extras。
+- Next plan note: 下一 PR 做 CJK / Unicode retrieval，不再改 storage-vs-memory 边界。
+
 ## 2026-04-28 / PR #78 CLI Command Modularization phase 1
 
 - Scope: 先搬低风险命令域：`schema-validate`、`llm-smoke`、outbox export/ack。

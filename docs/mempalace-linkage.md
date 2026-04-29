@@ -77,7 +77,8 @@ cargo run -p wiki-cli -- \
   `on_claim_upserted`，只有无 resolver 或悬挂事件时才兼容回退到 `on_claim_event`
 3. 非 mempalace 消费事件继续保留在 outbox，中间层只把它们计为 `ignored`
 4. 在 mempalace 侧写 `drawers` / `kg_facts`，必要时执行 `kg_invalidate`
-5. 读侧在 `query/explain --palace-db` 开启时使用 `CompositeSearchPorts`，由
+5. 读侧默认用 `SqliteSearchPorts` 从 `wiki.db` snapshot rows 召回 wiki 候选；
+  `query/explain --palace-db` 开启时使用 `CompositeSearchPorts`，由
   `MempalaceSearchPorts` 把 mempalace 的候选注入 RRF
 
 ## 6) 当前边界
@@ -85,6 +86,16 @@ cargo run -p wiki-cli -- \
 `wiki-cli/src/mcp.rs` 的 10 个 `mempalace_*` MCP 工具已通过
 `wiki_mempalace_bridge::make_tools` 调用 `MempalaceTools`。默认 feature 下使用
 `NoopMempalaceTools`，`live` feature 下使用 `LiveMempalaceTools` 连接真实 palace。
+
+读侧 truth table：
+
+| CLI 条件 | wiki 路 | mempalace 路 | fallback |
+| --- | --- | --- | --- |
+| 无 `--palace-db` | `SqliteSearchPorts` | 无 | storage port 打不开时回退 `InMemorySearchPorts` |
+| `--palace-db` 有效 | `SqliteSearchPorts` | `MempalaceSearchPorts` | 无 |
+| `--palace-db` 无效 | `SqliteSearchPorts` | 跳过 | 打印 warning，继续 wiki-only |
+| `--vectors` | query vector 从 `wiki_embedding` 生成 override | 仍按当前融合合同使用 override | 无向量命中则回到 port vector |
+| `--graph-extras-file` | storage graph 与 extras 合并 | 有效 `--palace-db` 时先保留 mempalace graph，再合并 extras | extras 先按 viewer scope 过滤；`mp_*` 外部注入默认拒绝 |
 
 剩余耦合在 bridge 内部：`live_sink`、`live_search`、`live_ranker`、`live_tools`
 仍直接依赖 `rust_mempalace::service` / `db`。这是有意的 crate 边界：替换

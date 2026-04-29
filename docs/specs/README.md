@@ -61,4 +61,5 @@
 - [audit-v2-04-cross-bank-dedupe/](audit-v2-04-cross-bank-dedupe/) — Audit Report Follow-up v2 PR 04: drawer dedupe by `(bank_id, content_hash)`。已合入 PR #86。
 - [audit-v2-05-queryserved-privacy/](audit-v2-05-queryserved-privacy/) — Audit Report Follow-up v2 PR 05: QueryServed hash/scope/schema privacy。已合入 PR #87。
 - [audit-v2-06-llm-governance/](audit-v2-06-llm-governance/) — Audit Report Follow-up v2 PR 06: wiki-cli LLM env keys, untrusted prompt boundary, limits, redaction, and provider allowlist。已合入 PR #88。
-- [audit-v2-07-ci-hardening/](audit-v2-07-ci-hardening/) — Audit Report Follow-up v2 PR 07: required quick CI now includes clippy and cargo-deny policy checks。Active branch `codex/audit-v2-07-ci-hardening`。
+- [audit-v2-07-ci-hardening/](audit-v2-07-ci-hardening/) — Audit Report Follow-up v2 PR 07: required quick CI now includes clippy and cargo-deny policy checks。已合入 PR #89。
+- [audit-v2-08-production-searchports/](audit-v2-08-production-searchports/) — Audit Report Follow-up v2 PR 08: query/explain default to storage-backed wiki search ports with mempalace composition and in-memory fallback。Active branch `codex/audit-v2-08-production-searchports`。

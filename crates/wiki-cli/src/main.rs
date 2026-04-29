@@ -30,7 +30,7 @@ use wiki_mempalace_bridge::{
 use wiki_storage::{
     canonical_notion_page_id, AutomationJobFailureSummary, AutomationRunRecord,
     AutomationRunStatus, EmbeddingWrite, OutboxConsumerProgress, OutboxStats, SqliteRepository,
-    SqliteWriterLease, WikiRepository,
+    SqliteSearchPorts, SqliteWriterLease, WikiRepository,
 };
 
 mod banner;
@@ -2705,24 +2705,23 @@ fn run_with_engine(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             } else {
                 None
             };
-            let graph_override = if let Some(ref path) = cli.graph_extras_file {
+            let graph_extras = if let Some(ref path) = cli.graph_extras_file {
                 let extras = read_graph_extras_lines(path)?;
                 let extras = filter_graph_extras_for_viewer(extras, &eng.store, &viewer);
-                let ports = InMemorySearchPorts::new(&eng.store, Some(viewer.clone()));
-                let kernel = SearchPorts::graph_ranked_ids(&ports, &query, per_stream_limit);
-                Some(merge_graph_rankings(kernel, extras, per_stream_limit))
+                Some(extras)
             } else {
                 None
             };
             let ranked = run_fusion_query(
                 palace_db.as_deref(),
                 &palace_bank,
+                &repo,
                 &eng,
                 &viewer,
                 &ctx,
                 OffsetDateTime::now_utc(),
                 vec_override,
-                graph_override,
+                graph_extras,
             );
             let top: Vec<String> = ranked.iter().take(24).map(|(id, _)| id.clone()).collect();
             eng.record_query(&query, Some(&viewer), top, "cli");
@@ -2773,12 +2772,10 @@ fn run_with_engine(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             } else {
                 None
             };
-            let graph_override = if let Some(ref path) = cli.graph_extras_file {
+            let graph_extras = if let Some(ref path) = cli.graph_extras_file {
                 let extras = read_graph_extras_lines(path)?;
                 let extras = filter_graph_extras_for_viewer(extras, &eng.store, &viewer);
-                let ports = InMemorySearchPorts::new(&eng.store, Some(viewer.clone()));
-                let kernel = SearchPorts::graph_ranked_ids(&ports, &query, per_stream_limit);
-                Some(merge_graph_rankings(kernel, extras, per_stream_limit))
+                Some(extras)
             } else {
                 None
             };
@@ -2786,14 +2783,19 @@ fn run_with_engine(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             println!("\n查询: \"{}\"", query);
 
             // wiki 各路结果
-            let wiki_ports = InMemorySearchPorts::new(&eng.store, Some(viewer.clone()));
-            let wiki_bm25 = SearchPorts::bm25_ranked_ids(&wiki_ports, &query, per_stream_limit);
+            let wiki_ports = build_wiki_search_ports(&repo, &eng, &viewer);
+            let wiki_bm25 =
+                SearchPorts::bm25_ranked_ids(wiki_ports.as_ref(), &query, per_stream_limit);
             let wiki_vector = vec_override.clone().unwrap_or_else(|| {
-                SearchPorts::vector_ranked_ids(&wiki_ports, &query, per_stream_limit)
+                SearchPorts::vector_ranked_ids(wiki_ports.as_ref(), &query, per_stream_limit)
             });
-            let wiki_graph = graph_override.clone().unwrap_or_else(|| {
-                SearchPorts::graph_ranked_ids(&wiki_ports, &query, per_stream_limit)
-            });
+            let wiki_graph_base =
+                SearchPorts::graph_ranked_ids(wiki_ports.as_ref(), &query, per_stream_limit);
+            let wiki_graph = merge_optional_graph_extras(
+                wiki_graph_base,
+                graph_extras.clone(),
+                per_stream_limit,
+            );
 
             // mempalace 各路结果
             let mut mp_bm25: Vec<String> = Vec::new();
@@ -2846,7 +2848,7 @@ fn run_with_engine(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             }
 
             println!("\n=== Graph 路 ===");
-            if graph_override.is_some() {
+            if graph_extras.is_some() {
                 println!("wiki (override) ({}):", wiki_graph.len());
                 for (i, id) in wiki_graph.iter().enumerate() {
                     println!("  #{} {}", i + 1, id);
@@ -2862,12 +2864,13 @@ fn run_with_engine(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             let ranked = run_fusion_query(
                 palace_db.as_deref(),
                 &palace_bank,
+                &repo,
                 &eng,
                 &viewer,
                 &ctx,
                 OffsetDateTime::now_utc(),
                 vec_override,
-                graph_override,
+                graph_extras,
             );
             for (i, (id, score)) in ranked.into_iter().take(20).enumerate() {
                 println!("#{}: {:.6}  {}", i + 1, score, id);
@@ -3966,7 +3969,7 @@ pub(crate) fn graph_extra_visible_to_viewer(
     viewer: &Scope,
 ) -> bool {
     if doc_id.starts_with("mp_drawer:") || doc_id.starts_with("mp_kg:") {
-        return true;
+        return false;
     }
     if doc_id.starts_with("claim:")
         || doc_id.starts_with("page:")
@@ -3976,6 +3979,16 @@ pub(crate) fn graph_extra_visible_to_viewer(
         return doc_id_visible_to_viewer(doc_id, store, viewer);
     }
     false
+}
+
+fn merge_optional_graph_extras(
+    base_graph: Vec<String>,
+    graph_extras: Option<Vec<String>>,
+    per_stream_limit: usize,
+) -> Vec<String> {
+    graph_extras
+        .map(|extras| merge_graph_rankings(base_graph.clone(), extras, per_stream_limit))
+        .unwrap_or(base_graph)
 }
 
 fn filter_graph_extras_for_viewer(
@@ -3995,36 +4008,57 @@ fn truncate_chars(s: &str, max: usize) -> String {
 
 /// 执行融合检索：根据 palace_db 配置构建 SearchPorts 并调用 query_ranked_with_ports。
 /// ports 在函数内部创建和销毁，不与外部 eng 的 mutable 借用冲突。
+fn build_wiki_search_ports<'a>(
+    repo: &'a SqliteRepository,
+    eng: &'a LlmWikiEngine<NoopWikiHook>,
+    viewer: &Scope,
+) -> Box<dyn SearchPorts + 'a> {
+    match SqliteSearchPorts::open(repo, Some(viewer.clone())) {
+        Ok(ports) => Box::new(ports),
+        Err(error) => {
+            eprintln!(
+                "警告：无法创建 storage-backed wiki 搜索端口: {}，回退到 InMemorySearchPorts",
+                error
+            );
+            Box::new(InMemorySearchPorts::new(&eng.store, Some(viewer.clone())))
+        }
+    }
+}
+
 fn run_fusion_query<'a>(
     palace_db: Option<&str>,
     palace_bank: &str,
+    repo: &'a SqliteRepository,
     eng: &'a LlmWikiEngine<NoopWikiHook>,
     viewer: &'a Scope,
     ctx: &QueryContext<'_>,
     now: OffsetDateTime,
     vec_override: Option<Vec<String>>,
-    graph_override: Option<Vec<String>>,
+    graph_extras: Option<Vec<String>>,
 ) -> Vec<(String, f64)> {
+    let wiki_ports = build_wiki_search_ports(repo, eng, viewer);
     let ports: Box<dyn SearchPorts + 'a> = if let Some(pdb) = palace_db {
         match MempalaceSearchPorts::open(Path::new(pdb), Some(palace_bank.to_string())) {
-            Ok(mp_ports) => {
-                let wiki_ports = InMemorySearchPorts::new(&eng.store, Some(viewer.clone()));
-                Box::new(CompositeSearchPorts::new(
-                    vec![Box::new(wiki_ports), Box::new(mp_ports)],
-                    FusionConfig::default(),
-                ))
-            }
+            Ok(mp_ports) => Box::new(CompositeSearchPorts::new(
+                vec![wiki_ports, Box::new(mp_ports)],
+                FusionConfig::default(),
+            )),
             Err(e) => {
                 eprintln!(
                     "警告：无法打开 mempalace DB ({}): {}，回退到纯 wiki 检索",
                     pdb, e
                 );
-                Box::new(InMemorySearchPorts::new(&eng.store, Some(viewer.clone())))
+                wiki_ports
             }
         }
     } else {
-        Box::new(InMemorySearchPorts::new(&eng.store, Some(viewer.clone())))
+        wiki_ports
     };
+    let graph_override = graph_extras.map(|extras| {
+        let active_graph =
+            SearchPorts::graph_ranked_ids(ports.as_ref(), ctx.query, ctx.per_stream_limit);
+        merge_graph_rankings(active_graph, extras, ctx.per_stream_limit)
+    });
     eng.query_ranked_with_ports(ctx, now, ports.as_ref(), vec_override, graph_override)
 }
 
@@ -4259,7 +4293,7 @@ mod tests {
     }
 
     #[test]
-    fn graph_extras_filter_private_doc_and_keep_mempalace_ids() {
+    fn graph_extras_filter_private_doc_and_reject_mempalace_ids() {
         let mut store = InMemoryStore::default();
         let viewer = Scope::Private {
             agent_id: "agent1".into(),
@@ -4287,12 +4321,39 @@ mod tests {
             &viewer,
         );
 
+        assert_eq!(filtered, vec![own_id]);
+    }
+
+    struct FixedGraphPorts;
+
+    impl SearchPorts for FixedGraphPorts {
+        fn bm25_ranked_ids(&self, _query: &str, _limit: usize) -> Vec<String> {
+            Vec::new()
+        }
+
+        fn vector_ranked_ids(&self, _query: &str, _limit: usize) -> Vec<String> {
+            Vec::new()
+        }
+
+        fn graph_ranked_ids(&self, _query: &str, _limit: usize) -> Vec<String> {
+            vec!["mp_kg:banked".into(), "entity:wiki".into()]
+        }
+    }
+
+    #[test]
+    fn graph_extras_merge_with_active_graph_stream() {
+        let merged = merge_optional_graph_extras(
+            SearchPorts::graph_ranked_ids(&FixedGraphPorts, "q", 10),
+            Some(vec!["entity:extra".into()]),
+            10,
+        );
+
         assert_eq!(
-            filtered,
+            merged,
             vec![
-                "mp_drawer:42".to_string(),
-                "mp_kg:subject:predicate".to_string(),
-                own_id,
+                "mp_kg:banked".to_string(),
+                "entity:extra".to_string(),
+                "entity:wiki".to_string(),
             ]
         );
     }
@@ -5124,7 +5185,7 @@ mod tests {
     }
 
     #[test]
-    fn query_without_palace_db_uses_in_memory() {
+    fn query_without_palace_db_uses_storage_ports() {
         let dir = tempfile::tempdir().unwrap();
         let db_path = dir.path().join("test.db");
         let repo = SqliteRepository::open(&db_path).unwrap();
@@ -5134,29 +5195,41 @@ mod tests {
             agent_id: "cli".into(),
         };
 
-        eng.file_claim(
+        let claim_id = eng.file_claim(
             "Rust 是一门系统编程语言",
             viewer.clone(),
             MemoryTier::Semantic,
             "test",
         );
+        eng.save_to_repo(&repo).unwrap();
+        eng.store.claims.clear();
 
         let ctx = QueryContext::new("Rust 编程语言")
             .with_rrf_k(60.0)
             .with_per_stream_limit(10)
             .with_viewer_scope(viewer.clone());
-        let ports = InMemorySearchPorts::new(&eng.store, Some(viewer.clone()));
-        let ranked =
-            eng.query_ranked_with_ports(&ctx, OffsetDateTime::now_utc(), &ports, None, None);
+        let ranked = run_fusion_query(
+            None,
+            "wiki",
+            &repo,
+            &eng,
+            &viewer,
+            &ctx,
+            OffsetDateTime::now_utc(),
+            None,
+            None,
+        );
         assert!(!ranked.is_empty(), "应该能检索到结果");
         assert!(
-            ranked.iter().any(|(id, _)| id.starts_with("claim:")),
-            "结果应包含 claim"
+            ranked
+                .iter()
+                .any(|(id, _)| id == &format!("claim:{}", claim_id.0)),
+            "结果应来自已持久化的 storage-backed search ports"
         );
     }
 
     #[test]
-    fn query_with_invalid_palace_db_falls_back_gracefully() {
+    fn query_with_invalid_palace_db_falls_back_to_storage_ports() {
         let dir = tempfile::tempdir().unwrap();
         let db_path = dir.path().join("test.db");
         let repo = SqliteRepository::open(&db_path).unwrap();
@@ -5166,12 +5239,14 @@ mod tests {
             agent_id: "cli".into(),
         };
 
-        eng.file_claim(
+        let claim_id = eng.file_claim(
             "Rust 是一门系统编程语言",
             viewer.clone(),
             MemoryTier::Semantic,
             "test",
         );
+        eng.save_to_repo(&repo).unwrap();
+        eng.store.claims.clear();
 
         // 用一个目录路径作为 palace_db，让 MempalaceSearchPorts::open 失败
         let palace_dir = dir.path().join("palace_dir");
@@ -5185,10 +5260,24 @@ mod tests {
             .with_rrf_k(60.0)
             .with_per_stream_limit(10)
             .with_viewer_scope(viewer.clone());
-        let ports = InMemorySearchPorts::new(&eng.store, Some(viewer.clone()));
-        let ranked =
-            eng.query_ranked_with_ports(&ctx, OffsetDateTime::now_utc(), &ports, None, None);
+        let ranked = run_fusion_query(
+            Some(palace_dir.to_str().unwrap()),
+            "wiki",
+            &repo,
+            &eng,
+            &viewer,
+            &ctx,
+            OffsetDateTime::now_utc(),
+            None,
+            None,
+        );
         assert!(!ranked.is_empty(), "回退后应该能检索到结果");
+        assert!(
+            ranked
+                .iter()
+                .any(|(id, _)| id == &format!("claim:{}", claim_id.0)),
+            "invalid palace fallback should still use storage-backed wiki ports"
+        );
     }
 
     #[test]
@@ -5199,7 +5288,7 @@ mod tests {
     }
 
     #[test]
-    fn explain_without_palace_db_uses_in_memory() {
+    fn explain_without_palace_db_uses_storage_ports() {
         let dir = tempfile::tempdir().unwrap();
         let db_path = dir.path().join("test.db");
         let repo = SqliteRepository::open(&db_path).unwrap();
@@ -5209,24 +5298,33 @@ mod tests {
             agent_id: "cli".into(),
         };
 
-        eng.file_claim(
+        let claim_id = eng.file_claim(
             "Rust 是一门系统编程语言",
             viewer.clone(),
             MemoryTier::Semantic,
             "test",
         );
+        eng.save_to_repo(&repo).unwrap();
+        eng.store.claims.clear();
 
         let ctx = QueryContext::new("Rust 编程语言")
             .with_rrf_k(60.0)
             .with_per_stream_limit(10)
             .with_viewer_scope(viewer.clone());
-        let ports = InMemorySearchPorts::new(&eng.store, Some(viewer.clone()));
-        let ranked =
-            eng.query_ranked_with_ports(&ctx, OffsetDateTime::now_utc(), &ports, None, None);
+        let ports = build_wiki_search_ports(&repo, &eng, &viewer);
+        let ranked = eng.query_ranked_with_ports(
+            &ctx,
+            OffsetDateTime::now_utc(),
+            ports.as_ref(),
+            None,
+            None,
+        );
         assert!(!ranked.is_empty(), "explain 应该能检索到结果");
         assert!(
-            ranked.iter().any(|(id, _)| id.starts_with("claim:")),
-            "explain 结果应包含 claim"
+            ranked
+                .iter()
+                .any(|(id, _)| id == &format!("claim:{}", claim_id.0)),
+            "explain 结果应来自 storage-backed search ports"
         );
     }
 
