@@ -98,6 +98,15 @@
 - Tests or reviews that caught issues: retrieval review 抓到 `graph_extras` 绕过 mempalace bank/scope 和跳过 mempalace graph；修复为拒绝 `mp_*` extras，并在 active graph stream 之后合并 extras。
 - Next plan note: 下一 PR 做 CJK / Unicode retrieval，不再改 storage-vs-memory 边界。
 
+## 2026-04-29 / Audit v2 PR 09 CJK Unicode Retrieval
+
+- Scope: `rust-mempalace` 检索改成 Unicode token，空 token 不再 fake 成 `"memory"`，CJK query 追加 bounded LIKE fallback。
+- What worked: 先加中文 temp-palace e2e，再补 unit 锁住 FTS quote、CJK fallback patterns 和 sparse embedding，能直接防止 ASCII-only token 回归。
+- What caused rework: `cargo test` 仍只能接一个 test filter；聚焦多项时直接跑 package test 更稳。review 还抓到 CJK fallback 候选若先按 `id DESC LIMIT cap` 截断，会让宽泛新命中挤掉旧 exact 命中。
+- Spec changes needed: 本 PR 不引入中文分词库；后续如要更高质量召回，应单独做 tokenizer / ranking spec。
+- Tests or reviews that caught issues: retrieval review 抓到 fallback truncation P1；修复为全候选 rerank 后再按 user limit 截断，并让 LIKE fallback 按 exact/长 pattern score 排序。
+- Next plan note: 下一 PR 做 outbox + SQLite reliability，不混入 retrieval quality 扩展。
+
 ## 2026-04-28 / PR #78 CLI Command Modularization phase 1
 
 - Scope: 先搬低风险命令域：`schema-validate`、`llm-smoke`、outbox export/ack。

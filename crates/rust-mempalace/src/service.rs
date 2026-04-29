@@ -296,62 +296,31 @@ pub fn search_with_options(
     retrieval: &RetrievalConfig,
     include_explain: bool,
 ) -> Result<Vec<SearchRow>> {
-    let fts_query = build_fts_query(query);
     let cap = limit.saturating_mul(4).max(32) as i64;
     let k_rrf = retrieval.rrf_k.max(1.0);
-
-    let sql = r#"
-        SELECT d.id, d.wing, d.hall, d.room, d.source_path, d.bank_id,
-               snippet(drawers_fts, 0, '[', ']', ' ... ', 20) AS snippet,
-               d.content
-        FROM drawers_fts
-        JOIN drawers d ON d.id = drawers_fts.rowid
-        WHERE drawers_fts MATCH ?1
-          AND (?2 IS NULL OR d.wing = ?2)
-          AND (?3 IS NULL OR d.hall = ?3)
-          AND (?4 IS NULL OR d.room = ?4)
-          AND (?5 IS NULL OR d.bank_id = ?5)
-        ORDER BY bm25(drawers_fts), d.id DESC
-        LIMIT ?6
-    "#;
-
-    let mut stmt = conn.prepare(sql)?;
-    let mut rows = stmt.query(params![fts_query, wing, hall, room, bank_id, cap])?;
+    let has_cjk_query = contains_cjk(query);
 
     let mut out = Vec::new();
-    while let Some(r) = rows.next()? {
-        out.push(SearchRow {
-            id: r.get(0)?,
-            wing: r.get(1)?,
-            hall: r.get(2)?,
-            room: r.get(3)?,
-            source_path: r.get(4)?,
-            bank_id: r.get(5)?,
-            snippet: r.get(6)?,
-            content: r.get(7)?,
-            score: 0.0,
-            rrf: 0.0,
-            explain: None,
-        });
-    }
-    if out.is_empty() {
-        let like = format!("%{}%", query);
-        let mut fallback = conn.prepare(
-            r#"
-            SELECT id, wing, hall, room, source_path, bank_id, substr(content, 1, 220), content
-            FROM drawers
-            WHERE content LIKE ?1
-              AND (?2 IS NULL OR wing = ?2)
-              AND (?3 IS NULL OR hall = ?3)
-              AND (?4 IS NULL OR room = ?4)
-              AND (?5 IS NULL OR bank_id = ?5)
-            ORDER BY id DESC
+    if let Some(fts_query) = build_fts_query(query) {
+        let sql = r#"
+            SELECT d.id, d.wing, d.hall, d.room, d.source_path, d.bank_id,
+                   snippet(drawers_fts, 0, '[', ']', ' ... ', 20) AS snippet,
+                   d.content
+            FROM drawers_fts
+            JOIN drawers d ON d.id = drawers_fts.rowid
+            WHERE drawers_fts MATCH ?1
+              AND (?2 IS NULL OR d.wing = ?2)
+              AND (?3 IS NULL OR d.hall = ?3)
+              AND (?4 IS NULL OR d.room = ?4)
+              AND (?5 IS NULL OR d.bank_id = ?5)
+            ORDER BY bm25(drawers_fts), d.id DESC
             LIMIT ?6
-        "#,
-        )?;
-        let mut rows = fallback.query(params![like, wing, hall, room, bank_id, cap])?;
+        "#;
+
+        let mut stmt = conn.prepare(sql)?;
+        let mut rows = stmt.query(params![fts_query, wing, hall, room, bank_id, cap])?;
+
         while let Some(r) = rows.next()? {
-            let snip: String = r.get(6)?;
             out.push(SearchRow {
                 id: r.get(0)?,
                 wing: r.get(1)?,
@@ -359,7 +328,7 @@ pub fn search_with_options(
                 room: r.get(3)?,
                 source_path: r.get(4)?,
                 bank_id: r.get(5)?,
-                snippet: snip.clone(),
+                snippet: r.get(6)?,
                 content: r.get(7)?,
                 score: 0.0,
                 rrf: 0.0,
@@ -368,15 +337,13 @@ pub fn search_with_options(
         }
     }
 
+    if out.is_empty() || has_cjk_query {
+        append_like_fallback(conn, query, wing, hall, room, bank_id, cap, &mut out)?;
+    }
+
     apply_rrf_to_candidates(query, &mut out, k_rrf);
-    out.sort_by(|a, b| {
-        b.rrf
-            .partial_cmp(&a.rrf)
-            .unwrap_or(std::cmp::Ordering::Equal)
-            .then_with(|| a.id.cmp(&b.id))
-    });
-    out.truncate(limit);
     rerank_rows(query, &mut out, retrieval, include_explain);
+    out.truncate(limit);
     Ok(out)
 }
 
@@ -1135,11 +1102,7 @@ fn rerank_rows(
     retrieval: &RetrievalConfig,
     include_explain: bool,
 ) {
-    let terms: Vec<String> = query
-        .split_whitespace()
-        .map(|s| s.to_ascii_lowercase())
-        .filter(|s| !s.is_empty())
-        .collect();
+    let terms = relevance_terms(query);
     let qvec = sparse_embedding(query);
     for row in rows.iter_mut() {
         let lexical = simple_relevance_score(&row.content, &terms, row.id);
@@ -1169,7 +1132,7 @@ fn rerank_rows(
 }
 
 fn simple_relevance_score(content: &str, terms: &[String], id: i64) -> f64 {
-    let lc = content.to_ascii_lowercase();
+    let lc = unicode_lower(content);
     let mut score = 0.0;
     for t in terms {
         let c = lc.matches(t).count() as f64;
@@ -1182,16 +1145,204 @@ fn simple_relevance_score(content: &str, terms: &[String], id: i64) -> f64 {
     score + trigram * 3.0 + (id as f64 * 0.00001)
 }
 
-fn build_fts_query(query: &str) -> String {
-    let tokens: Vec<String> = query
-        .split(|c: char| !c.is_ascii_alphanumeric())
-        .filter(|s| !s.is_empty())
-        .map(|s| format!("\"{}\"", s.to_ascii_lowercase()))
+fn build_fts_query(query: &str) -> Option<String> {
+    let tokens: Vec<String> = unicode_tokens(query)
+        .into_iter()
+        .map(|s| format!("\"{}\"", s.replace('"', "\"\"")))
         .collect();
     if tokens.is_empty() {
-        "\"memory\"".to_string()
+        None
     } else {
-        tokens.join(" ")
+        Some(tokens.join(" "))
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn append_like_fallback(
+    conn: &Connection,
+    query: &str,
+    wing: Option<&str>,
+    hall: Option<&str>,
+    room: Option<&str>,
+    bank_id: Option<&str>,
+    cap: i64,
+    out: &mut Vec<SearchRow>,
+) -> Result<()> {
+    let patterns = like_fallback_patterns(query);
+    if patterns.is_empty() {
+        return Ok(());
+    }
+
+    let like_clause = std::iter::repeat_n("content LIKE ? ESCAPE '\\'", patterns.len())
+        .collect::<Vec<_>>()
+        .join(" OR ");
+    let score_clause = patterns
+        .iter()
+        .enumerate()
+        .map(|(idx, pattern)| {
+            format!(
+                "CASE WHEN content LIKE ? ESCAPE '\\' THEN {} ELSE 0 END",
+                like_pattern_score(pattern, idx)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(" + ");
+    let mut sql = format!(
+        "SELECT id, wing, hall, room, source_path, bank_id, substr(content, 1, 220), content \
+         FROM drawers WHERE ({like_clause})"
+    );
+    let like_values: Vec<rusqlite::types::Value> = patterns
+        .iter()
+        .map(|pattern| rusqlite::types::Value::Text(format!("%{}%", escape_like(pattern))))
+        .collect();
+    let mut values = like_values.clone();
+
+    append_optional_filter(&mut sql, &mut values, "wing", wing);
+    append_optional_filter(&mut sql, &mut values, "hall", hall);
+    append_optional_filter(&mut sql, &mut values, "room", room);
+    append_optional_filter(&mut sql, &mut values, "bank_id", bank_id);
+    sql.push_str(" ORDER BY ");
+    sql.push_str(&score_clause);
+    sql.push_str(" DESC, id DESC LIMIT ?");
+    values.extend(like_values);
+    values.push(rusqlite::types::Value::Integer(cap));
+
+    let existing: std::collections::HashSet<i64> = out.iter().map(|row| row.id).collect();
+    let mut fallback = conn.prepare(&sql)?;
+    let mut rows = fallback.query(rusqlite::params_from_iter(values.iter()))?;
+    while let Some(r) = rows.next()? {
+        let id: i64 = r.get(0)?;
+        if existing.contains(&id) || out.iter().any(|row| row.id == id) {
+            continue;
+        }
+        let snip: String = r.get(6)?;
+        out.push(SearchRow {
+            id,
+            wing: r.get(1)?,
+            hall: r.get(2)?,
+            room: r.get(3)?,
+            source_path: r.get(4)?,
+            bank_id: r.get(5)?,
+            snippet: snip,
+            content: r.get(7)?,
+            score: 0.0,
+            rrf: 0.0,
+            explain: None,
+        });
+    }
+    Ok(())
+}
+
+fn append_optional_filter(
+    sql: &mut String,
+    values: &mut Vec<rusqlite::types::Value>,
+    column: &str,
+    value: Option<&str>,
+) {
+    if let Some(value) = value {
+        sql.push_str(" AND ");
+        sql.push_str(column);
+        sql.push_str(" = ?");
+        values.push(rusqlite::types::Value::Text(value.to_string()));
+    }
+}
+
+fn escape_like(s: &str) -> String {
+    s.replace('\\', "\\\\")
+        .replace('%', "\\%")
+        .replace('_', "\\_")
+}
+
+fn like_pattern_score(pattern: &str, idx: usize) -> usize {
+    let length_weight = pattern.chars().count().saturating_mul(10);
+    length_weight.saturating_add(100usize.saturating_sub(idx.min(100)))
+}
+
+fn like_fallback_patterns(query: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    push_unique(&mut out, unicode_lower(query.trim()));
+    for token in unicode_tokens(query) {
+        push_unique(&mut out, token.clone());
+        if contains_cjk(&token) {
+            for gram in char_ngrams(&token, 2)
+                .into_iter()
+                .chain(char_ngrams(&token, 3))
+            {
+                push_unique(&mut out, gram);
+            }
+        }
+    }
+    out.into_iter()
+        .filter(|s| s.chars().count() >= 2)
+        .take(24)
+        .collect()
+}
+
+fn relevance_terms(query: &str) -> Vec<String> {
+    let mut out = unicode_tokens(query);
+    for token in out.clone() {
+        if contains_cjk(&token) {
+            for gram in char_ngrams(&token, 2)
+                .into_iter()
+                .chain(char_ngrams(&token, 3))
+            {
+                push_unique(&mut out, gram);
+            }
+        }
+    }
+    out
+}
+
+fn unicode_tokens(query: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut cur = String::new();
+    for ch in query.chars() {
+        if ch.is_alphanumeric() {
+            cur.extend(ch.to_lowercase());
+        } else if !cur.is_empty() {
+            out.push(std::mem::take(&mut cur));
+        }
+    }
+    if !cur.is_empty() {
+        out.push(cur);
+    }
+    out
+}
+
+fn unicode_lower(s: &str) -> String {
+    s.chars().flat_map(|ch| ch.to_lowercase()).collect()
+}
+
+fn contains_cjk(s: &str) -> bool {
+    s.chars().any(|ch| {
+        matches!(
+            ch as u32,
+            0x3400..=0x4DBF
+                | 0x4E00..=0x9FFF
+                | 0xF900..=0xFAFF
+                | 0x20000..=0x2A6DF
+                | 0x2A700..=0x2B73F
+                | 0x2B740..=0x2B81F
+                | 0x2B820..=0x2CEAF
+                | 0x3040..=0x30FF
+                | 0xAC00..=0xD7AF
+        )
+    })
+}
+
+fn char_ngrams(s: &str, n: usize) -> Vec<String> {
+    let chars: Vec<char> = s.chars().collect();
+    if n == 0 || chars.len() < n {
+        return Vec::new();
+    }
+    (0..=(chars.len() - n))
+        .map(|i| chars[i..i + n].iter().collect())
+        .collect()
+}
+
+fn push_unique(out: &mut Vec<String>, value: String) {
+    if !value.is_empty() && !out.iter().any(|existing| existing == &value) {
+        out.push(value);
     }
 }
 
@@ -1208,12 +1359,15 @@ pub fn upsert_vector(conn: &Connection, drawer_id: i64, content: &str) -> Result
 
 pub fn sparse_embedding(text: &str) -> BTreeMap<String, f64> {
     let mut map = BTreeMap::new();
-    for token in text
-        .split(|c: char| !c.is_ascii_alphanumeric())
-        .filter(|s| s.len() > 2)
-        .map(|s| s.to_ascii_lowercase())
-    {
-        *map.entry(token).or_insert(0.0) += 1.0;
+    for token in unicode_tokens(text) {
+        if token.chars().count() > 2 {
+            *map.entry(token.clone()).or_insert(0.0) += 1.0;
+        }
+        if contains_cjk(&token) {
+            for gram in char_ngrams(&token, 2) {
+                *map.entry(format!("cjk:{gram}")).or_insert(0.0) += 1.0;
+            }
+        }
     }
     let norm = map.values().map(|v| v * v).sum::<f64>().sqrt();
     if norm > 0.0 {
@@ -1300,7 +1454,9 @@ fn trigrams(s: &str) -> std::collections::HashSet<String> {
         .split_whitespace()
         .collect::<Vec<_>>()
         .join(" ")
-        .to_ascii_lowercase();
+        .chars()
+        .flat_map(|ch| ch.to_lowercase())
+        .collect::<String>();
     let chars: Vec<char> = clean.chars().collect();
     let mut out = std::collections::HashSet::new();
     if chars.len() < 3 {
@@ -1420,10 +1576,61 @@ mod tests {
     #[test]
     fn fts_query_quotes_user_tokens() {
         assert_eq!(
-            build_fts_query("hello OR world"),
-            "\"hello\" \"or\" \"world\""
+            build_fts_query("hello OR world").as_deref(),
+            Some("\"hello\" \"or\" \"world\"")
         );
-        assert_eq!(build_fts_query("!!!"), "\"memory\"");
+        assert_eq!(
+            build_fts_query("数据库一致性").as_deref(),
+            Some("\"数据库一致性\"")
+        );
+        assert_eq!(build_fts_query("!!!"), None);
+    }
+
+    #[test]
+    fn cjk_fallback_patterns_include_ngrams() {
+        let patterns = like_fallback_patterns("数据一致性");
+        assert!(patterns.contains(&"数据一致性".to_string()));
+        assert!(patterns.contains(&"一致性".to_string()));
+        assert!(patterns.contains(&"数据".to_string()));
+    }
+
+    #[test]
+    fn sparse_embedding_preserves_cjk_ngrams() {
+        let emb = sparse_embedding("数据库一致性");
+        assert!(emb.contains_key("数据库一致性"));
+        assert!(emb.contains_key("cjk:一致"));
+    }
+
+    #[test]
+    fn cjk_fallback_prioritizes_exact_hits_before_cap() {
+        let conn = Connection::open_in_memory().expect("open memory db");
+        crate::db::init_schema(&conn).expect("init schema");
+        let now = "2024-01-01T00:00:00Z";
+
+        conn.execute(
+            "INSERT INTO drawers(wing, hall, room, source_path, content, content_hash, bank_id, created_at)
+             VALUES('w', 'h', 'r', 'exact.md', '这里有一致性数据可靠证据', 'exact-hash', 'default', ?1)",
+            params![now],
+        )
+        .expect("insert exact cjk drawer");
+        for idx in 0..48 {
+            conn.execute(
+                "INSERT INTO drawers(wing, hall, room, source_path, content, content_hash, bank_id, created_at)
+                 VALUES('w', 'h', 'r', ?1, ?2, ?3, 'default', ?4)",
+                params![
+                    format!("broad-{idx}.md"),
+                    format!("数据 broad match {idx}"),
+                    format!("broad-hash-{idx}"),
+                    now
+                ],
+            )
+            .expect("insert broad cjk drawer");
+        }
+
+        let rows =
+            search(&conn, "一致性数据", None, None, None, None, 1).expect("search cjk fallback");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].source_path, "exact.md");
     }
 
     #[test]

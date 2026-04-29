@@ -232,6 +232,79 @@ fn e2e_cli_json_mode() {
 }
 
 #[test]
+fn e2e_cli_cjk_unicode_search() {
+    let palace = unique_palace_dir();
+    let _guard = TempDir::new(palace.clone());
+    let fixtures = palace.join("fixtures");
+    fs::create_dir_all(&fixtures).expect("fixtures dir");
+    fs::write(
+        fixtures.join("unicode.md"),
+        r#"# Unicode
+数据库一致性依赖事务日志和写入租约。
+英文 fallback should still preserve quoted FTS tokens.
+"#,
+    )
+    .expect("write unicode fixture");
+
+    assert_ok(
+        &run(
+            &[
+                "--quiet",
+                "init",
+                "--identity",
+                "E2E identity: preserve unicode retrieval.",
+            ],
+            &palace,
+        ),
+        "init unicode palace",
+    );
+    assert_ok(
+        &run(
+            &[
+                "--quiet",
+                "--output",
+                "json",
+                "mine",
+                fixtures.to_str().expect("fixtures path"),
+            ],
+            &palace,
+        ),
+        "mine unicode fixture",
+    );
+
+    let out = run(
+        &[
+            "--quiet",
+            "--output",
+            "json",
+            "search",
+            "数据一致性",
+            "--limit",
+            "5",
+        ],
+        &palace,
+    );
+    assert_ok(&out, "search cjk json");
+    let data = json_stdout(&out);
+    let results = data
+        .get("results")
+        .and_then(|v| v.as_array())
+        .expect("results array");
+    assert!(
+        !results.is_empty(),
+        "cjk results should not be empty: {data}"
+    );
+    assert!(
+        results.iter().any(|row| {
+            row.get("source_path")
+                .and_then(|v| v.as_str())
+                .is_some_and(|path| path.ends_with("unicode.md"))
+        }),
+        "cjk search should return unicode fixture: {data}"
+    );
+}
+
+#[test]
 fn e2e_mcp_suite() {
     let (_guard, palace) = setup_seeded_palace();
 
