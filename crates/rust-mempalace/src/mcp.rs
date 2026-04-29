@@ -6,6 +6,20 @@ use anyhow::Result;
 use serde_json::{json, Value};
 use std::io::{self, BufRead, Write};
 
+const MCP_RESULT_LIMIT_MIN: usize = 1;
+const MCP_RESULT_LIMIT_MAX: usize = 100;
+
+fn optional_limit(args: &Value, key: &str, default: usize) -> Result<usize> {
+    let Some(value) = args.get(key) else {
+        return Ok(default.clamp(MCP_RESULT_LIMIT_MIN, MCP_RESULT_LIMIT_MAX));
+    };
+    let raw = value
+        .as_u64()
+        .ok_or_else(|| anyhow::anyhow!("{key} must be an integer"))?;
+    let converted = usize::try_from(raw).unwrap_or(MCP_RESULT_LIMIT_MAX);
+    Ok(converted.clamp(MCP_RESULT_LIMIT_MIN, MCP_RESULT_LIMIT_MAX))
+}
+
 pub fn run_stdio(palace: &Palace, once: bool, quiet: bool, config: &AppConfig) -> Result<()> {
     palace.init(None)?;
     let stdin = io::stdin();
@@ -66,14 +80,14 @@ fn handle_request(
         "tools/list" => Ok(json!({
             "tools":[
                 {"name":"mempalace_status","description":"Palace overview","inputSchema":{"type":"object","properties":{}}},
-                {"name":"mempalace_search","description":"Search memories","inputSchema":{"type":"object","properties":{"query":{"type":"string"},"wing":{"type":"string"},"hall":{"type":"string"},"room":{"type":"string"},"bank_id":{"type":"string"},"limit":{"type":"integer"},"explain":{"type":"boolean"}},"required":["query"]}},
+                {"name":"mempalace_search","description":"Search memories","inputSchema":{"type":"object","properties":{"query":{"type":"string"},"wing":{"type":"string"},"hall":{"type":"string"},"room":{"type":"string"},"bank_id":{"type":"string"},"limit":{"type":"integer","minimum":MCP_RESULT_LIMIT_MIN,"maximum":MCP_RESULT_LIMIT_MAX},"explain":{"type":"boolean"}},"required":["query"]}},
                 {"name":"mempalace_wake_up","description":"Get wake-up context","inputSchema":{"type":"object","properties":{"wing":{"type":"string"},"bank_id":{"type":"string"}}}},
                 {"name":"mempalace_kg_query","description":"Query knowledge graph","inputSchema":{"type":"object","properties":{"subject":{"type":"string"},"as_of":{"type":"string"}},"required":["subject"]}},
                 {"name":"mempalace_taxonomy","description":"Get taxonomy (optional bank filter)","inputSchema":{"type":"object","properties":{"bank_id":{"type":"string"}}}},
                 {"name":"mempalace_traverse","description":"Traverse room links","inputSchema":{"type":"object","properties":{"wing":{"type":"string"},"room":{"type":"string"},"bank_id":{"type":"string"}},"required":["wing","room"]}},
                 {"name":"mempalace_kg_timeline","description":"KG timeline by subject","inputSchema":{"type":"object","properties":{"subject":{"type":"string"}},"required":["subject"]}},
                 {"name":"mempalace_kg_stats","description":"KG stats","inputSchema":{"type":"object","properties":{}}},
-                {"name":"mempalace_reflect","description":"Reflect on memories via optional LLM","inputSchema":{"type":"object","properties":{"query":{"type":"string"},"search_limit":{"type":"integer"},"bank_id":{"type":"string"}},"required":["query"]}},
+                {"name":"mempalace_reflect","description":"Reflect on memories via optional LLM","inputSchema":{"type":"object","properties":{"query":{"type":"string"},"search_limit":{"type":"integer","minimum":MCP_RESULT_LIMIT_MIN,"maximum":MCP_RESULT_LIMIT_MAX},"bank_id":{"type":"string"}},"required":["query"]}},
                 {"name":"mempalace_extract","description":"Extract KG triples from text via optional LLM","inputSchema":{"type":"object","properties":{"text":{"type":"string"},"drawer_id":{"type":"integer"}}}}
             ]
         })),
@@ -110,7 +124,7 @@ fn call_tool(palace: &Palace, params: Value, config: &AppConfig) -> Result<Value
             let hall = args.get("hall").and_then(Value::as_str);
             let room = args.get("room").and_then(Value::as_str);
             let bank_id = args.get("bank_id").and_then(Value::as_str);
-            let limit = args.get("limit").and_then(Value::as_u64).unwrap_or(8) as usize;
+            let limit = optional_limit(&args, "limit", 8)?;
             let explain = args
                 .get("explain")
                 .and_then(Value::as_bool)
@@ -210,10 +224,7 @@ fn call_tool(palace: &Palace, params: Value, config: &AppConfig) -> Result<Value
                 .get("query")
                 .and_then(Value::as_str)
                 .ok_or_else(|| anyhow::anyhow!("missing query"))?;
-            let search_limit = args
-                .get("search_limit")
-                .and_then(Value::as_u64)
-                .unwrap_or(8) as usize;
+            let search_limit = optional_limit(&args, "search_limit", 8)?;
             let bank_id = args.get("bank_id").and_then(Value::as_str);
             let text = reflect_answer(
                 &conn,
@@ -240,5 +251,21 @@ fn call_tool(palace: &Palace, params: Value, config: &AppConfig) -> Result<Value
             Ok(json!({"kg_facts_added": n}))
         }
         _ => Err(anyhow::anyhow!("unknown tool: {name}")),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn numeric_limits_are_clamped() {
+        assert_eq!(optional_limit(&json!({}), "limit", 8).unwrap(), 8);
+        assert_eq!(optional_limit(&json!({"limit": 0}), "limit", 8).unwrap(), 1);
+        assert_eq!(
+            optional_limit(&json!({"limit": 100_000}), "limit", 8).unwrap(),
+            100
+        );
+        assert!(optional_limit(&json!({"limit": "many"}), "limit", 8).is_err());
     }
 }

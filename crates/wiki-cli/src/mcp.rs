@@ -13,6 +13,8 @@ use wiki_storage::{EmbeddingWrite, SqliteRepository};
 use crate::{parse_scope, parse_tier};
 
 const MAX_MCP_LINE_BYTES: usize = 10 * 1024 * 1024;
+const MCP_RESULT_LIMIT_MIN: usize = 1;
+const MCP_RESULT_LIMIT_MAX: usize = 100;
 
 #[derive(Debug, thiserror::Error)]
 enum McpToolError {
@@ -94,6 +96,17 @@ fn required_str<'a>(args: &'a Value, key: &str) -> Result<&'a str, McpToolError>
     args.get(key)
         .and_then(Value::as_str)
         .ok_or_else(|| McpToolError::invalid_params(format!("missing {key}")))
+}
+
+fn optional_limit(args: &Value, key: &str, default: usize) -> Result<usize, McpToolError> {
+    let Some(value) = args.get(key) else {
+        return Ok(default.clamp(MCP_RESULT_LIMIT_MIN, MCP_RESULT_LIMIT_MAX));
+    };
+    let raw = value
+        .as_u64()
+        .ok_or_else(|| McpToolError::invalid_params(format!("{key} must be an integer")))?;
+    let converted = usize::try_from(raw).unwrap_or(MCP_RESULT_LIMIT_MAX);
+    Ok(converted.clamp(MCP_RESULT_LIMIT_MIN, MCP_RESULT_LIMIT_MAX))
 }
 
 fn parse_json_rpc_request_line(line: &str) -> Result<Value, serde_json::Error> {
@@ -257,7 +270,7 @@ fn tools_list() -> Value {
                 "inputSchema": {"type":"object","properties":{
                     "query":{"type":"string","description":"Natural language query"},
                     "rrf_k":{"type":"number","description":"RRF constant k (default 60)"},
-                    "per_stream_limit":{"type":"integer","description":"Max results per stream (default 50)"},
+                    "per_stream_limit":{"type":"integer","minimum":MCP_RESULT_LIMIT_MIN,"maximum":MCP_RESULT_LIMIT_MAX,"description":"Max results per stream (default 50, clamped 1..=100)"},
                     "write_page":{"type":"boolean","description":"Write results as wiki page"}
                 },"required":["query"]}
             },
@@ -326,7 +339,7 @@ fn tools_list() -> Value {
                     "hall":{"type":"string"},
                     "room":{"type":"string"},
                     "bank_id":{"type":"string"},
-                    "limit":{"type":"integer"},
+                    "limit":{"type":"integer","minimum":MCP_RESULT_LIMIT_MIN,"maximum":MCP_RESULT_LIMIT_MAX},
                     "explain":{"type":"boolean"}
                 },"required":["query"]}
             },
@@ -372,7 +385,7 @@ fn tools_list() -> Value {
                 "description": "RAG: search palace + LLM synthesis",
                 "inputSchema": {"type":"object","properties":{
                     "query":{"type":"string"},
-                    "search_limit":{"type":"integer"},
+                    "search_limit":{"type":"integer","minimum":MCP_RESULT_LIMIT_MIN,"maximum":MCP_RESULT_LIMIT_MAX},
                     "bank_id":{"type":"string"}
                 },"required":["query"]}
             },
@@ -490,10 +503,7 @@ fn call_tool(
         "wiki_query" => {
             let query = required_str(&args, "query")?;
             let rrf_k = args.get("rrf_k").and_then(Value::as_f64).unwrap_or(60.0);
-            let limit = args
-                .get("per_stream_limit")
-                .and_then(Value::as_u64)
-                .unwrap_or(50) as usize;
+            let limit = optional_limit(&args, "per_stream_limit", 50)?;
             let ctx = QueryContext::new(query)
                 .with_rrf_k(rrf_k)
                 .with_per_stream_limit(limit)
@@ -910,7 +920,7 @@ fn call_mempalace_tool(
             let hall = args.get("hall").and_then(Value::as_str);
             let room = args.get("room").and_then(Value::as_str);
             let bank_id = args.get("bank_id").and_then(Value::as_str);
-            let limit = args.get("limit").and_then(Value::as_u64).unwrap_or(8) as usize;
+            let limit = optional_limit(args, "limit", 8)?;
             let explain = args
                 .get("explain")
                 .and_then(Value::as_bool)
@@ -959,10 +969,7 @@ fn call_mempalace_tool(
 
         "mempalace_reflect" => {
             let query = required_str(args, "query")?;
-            let search_limit = args
-                .get("search_limit")
-                .and_then(Value::as_u64)
-                .unwrap_or(8) as usize;
+            let search_limit = optional_limit(args, "search_limit", 8)?;
             let bank_id = args.get("bank_id").and_then(Value::as_str);
             tools
                 .reflect(query, search_limit, bank_id)
@@ -1072,6 +1079,40 @@ mod tests {
         let mut cursor = std::io::Cursor::new(b"abcdef\n".as_slice());
         let err = read_line_limited(&mut cursor, 3).unwrap_err();
         assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+    }
+
+    #[test]
+    fn mcp_numeric_limits_are_clamped_and_schema_bounded() {
+        assert_eq!(optional_limit(&json!({}), "limit", 8).unwrap(), 8);
+        assert_eq!(optional_limit(&json!({"limit": 0}), "limit", 8).unwrap(), 1);
+        assert_eq!(
+            optional_limit(&json!({"limit": 100_000}), "limit", 8).unwrap(),
+            100
+        );
+        assert!(optional_limit(&json!({"limit": "many"}), "limit", 8).is_err());
+
+        let v = tools_list();
+        let tools = v.get("tools").and_then(Value::as_array).expect("tools[]");
+        let query = tools
+            .iter()
+            .find(|t| t.get("name").and_then(Value::as_str) == Some("wiki_query"))
+            .expect("wiki_query tool");
+        assert_eq!(
+            query
+                .pointer("/inputSchema/properties/per_stream_limit/maximum")
+                .and_then(Value::as_u64),
+            Some(100)
+        );
+        let search = tools
+            .iter()
+            .find(|t| t.get("name").and_then(Value::as_str) == Some("mempalace_search"))
+            .expect("mempalace_search tool");
+        assert_eq!(
+            search
+                .pointer("/inputSchema/properties/limit/minimum")
+                .and_then(Value::as_u64),
+            Some(1)
+        );
     }
 
     #[test]
