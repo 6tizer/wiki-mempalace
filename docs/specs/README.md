@@ -64,4 +64,5 @@
 - [audit-v2-07-ci-hardening/](audit-v2-07-ci-hardening/) — Audit Report Follow-up v2 PR 07: required quick CI now includes clippy and cargo-deny policy checks。已合入 PR #89。
 - [audit-v2-08-production-searchports/](audit-v2-08-production-searchports/) — Audit Report Follow-up v2 PR 08: query/explain default to storage-backed wiki search ports with mempalace composition and in-memory fallback。已合入 PR #90。
 - [audit-v2-09-cjk-unicode-retrieval/](audit-v2-09-cjk-unicode-retrieval/) — Audit Report Follow-up v2 PR 09: Unicode FTS tokens plus bounded CJK LIKE fallback for `rust-mempalace` retrieval。已合入 PR #91。
-- [audit-v2-10-outbox-sqlite-reliability/](audit-v2-10-outbox-sqlite-reliability/) — Audit Report Follow-up v2 PR 10: per-consumer outbox ack count plus SQLite busy timeout and transaction wrapper hardening。Active branch `codex/audit-v2-10-outbox-sqlite-reliability`。
+- [audit-v2-10-outbox-sqlite-reliability/](audit-v2-10-outbox-sqlite-reliability/) — Audit Report Follow-up v2 PR 10: per-consumer outbox ack count plus SQLite busy timeout and transaction wrapper hardening。已合入 PR #92。
+- [audit-v2-11-vault-docs-hardening/](audit-v2-11-vault-docs-hardening/) — Audit Report Follow-up v2 PR 11: Vault projection managed marker/quarantine, docs consistency, and scheduled hardening lane。已合入 PR #93。

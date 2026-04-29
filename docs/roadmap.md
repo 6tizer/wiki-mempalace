@@ -50,7 +50,7 @@
 | C16A Atomic snapshot + outbox | ✅ 已合入 | PR #25 已 merge；新增 `save_snapshot_and_append_outbox` 单事务持久化路径；CLI/MCP/backfill 写路径已切到原子提交 |
 | C16B Embedding ANN index | ✅ PR #72/#73 | `ann-embed` feature gate、locality-bucket bounded search、fallback full scan、ranking 回归已完成 |
 | M12 Executor | ✅ PR #81/#82 | `suggest --executor-plan` dry-run planner 与 `suggest-executor-apply` guarded apply 已完成；默认不执行写入，apply 需 plan + allowlist + explicit flag |
-| Audit Report Follow-up v2 | 🧭 已拆解 | 2026-04-29 对 Notion《wiki-mempalace 全方位代码审计报告》复核后，仍有安全、检索、outbox、Vault projection、CI/test/docs 未完成项；建议按 11 个独立 PR 完成，见下方“2026-04-29 审计复核新增剩余项” |
+| Audit Report Follow-up v2 | ✅ PR #83-#93 | 2026-04-29 对 Notion《wiki-mempalace 全方位代码审计报告》复核后拆成 11 个独立 PR；PR #83-#93 已合入，最后 Vault projection/docs/slow-lane hardening 由 PR #93 收敛 |
 
 ## 当前下一阶段
 
@@ -75,8 +75,8 @@
 | 7 | CI required hardening | ✅ PR #89 | P1 | I-1 | Required CI 加 clippy；新增 cargo-deny/advisory/license/yanked/duplicate 检查；保留 heavy audit scheduled/manual 边界。 | PR gate 明确；`cargo clippy --workspace --all-targets -- -D warnings` 进 required lane；deny 配置和 smoke 通过。 | 无 |
 | 8 | Production SearchPorts default | ✅ PR #90 | P2 | M-5 | 生产 query 默认使用 storage-backed BM25/vector/graph ports；`InMemorySearchPorts` 限定测试/fallback。 | 无 palace/storage 时行为有明确 fallback；query truth table 文档同步；CLI/MCP query tests 通过。 | PR 5 |
 | 9 | CJK / Unicode retrieval | ✅ PR #91 | P2 | M-6 | `rust-mempalace` FTS query 保留 Unicode token；CJK 走 trigram/LIKE fallback；空 token 不再固定成 `"memory"`。 | 中文 query e2e 通过；英文 FTS quote 回归不退化；搜索 limit 仍受 PR 1 clamp 保护。 | PR 1 |
-| 10 | Outbox + SQLite reliability | 🚧 Active branch | P2 | M-1 / M-8 | per-consumer ack 计数不再依赖全局 `processed_at`；统一 `busy_timeout` / transaction wrapper / retry 或 backoff 指标。 | 第二 consumer ack 计数正确；legacy `processed_at` 不破坏 cursor 语义；locked/busy 测试通过。 | PR 1 |
-| 11 | Vault projection safety + docs/test cleanup | Planned | P3 | L-1 / L-2 / L-3 / L-4 / I-5 / I-6 | 空 slug fallback、YAML/frontmatter escape、managed marker/trash/quarantine/dry-run；修 architecture/README 状态矛盾；新增慢速 hardening/perf/fuzz lane。 | projection 不生成空 basename、不误删手写 UUID 页；docs 状态一致；nightly/full lane 覆盖 perf、MCP fuzz、DB corruption、CJK、bank/scope 矩阵。 | PR 3 / PR 9 / PR 10 |
+| 10 | Outbox + SQLite reliability | ✅ PR #92 | P2 | M-1 / M-8 | per-consumer ack 计数不再依赖全局 `processed_at`；统一 `busy_timeout` / transaction wrapper / retry 或 backoff 指标。 | 第二 consumer ack 计数正确；legacy `processed_at` 不破坏 cursor 语义；locked/busy 测试通过。 | PR 1 |
+| 11 | Vault projection safety + docs/test cleanup | ✅ PR #93 | P3 | L-1 / L-2 / L-3 / L-4 / I-5 / I-6 | 空 slug fallback、YAML/frontmatter escape、managed marker/trash/quarantine/write guard；修 architecture/README 状态矛盾；新增慢速 hardening smoke lane。 | projection 不生成空 basename、不误删/覆盖手写 UUID 页；docs 状态一致；nightly/full lane 覆盖 perf smoke、MCP malformed/boundary、DB corruption、CJK、bank/scope 矩阵。 | PR 3 / PR 9 / PR 10 |
 
 ### P0：Production Compiler scale-up（非新功能）
 
@@ -180,5 +180,5 @@ scale-up 混做。
 - `mempalace_*` MCP 工具已经通过 `wiki_mempalace_bridge::make_tools` 访问 bridge。
 - outbox ack 已经以 `wiki_outbox_consumer_progress(consumer_tag, acked_up_to_id, acked_at)` 为消费者进度真源。
 - `consume-to-mempalace --palace` 的 live bank 已由 `--viewer-scope` 派生。
-- `--graph-extras-file` 已按 viewer scope 过滤 wiki doc id，只允许 `mp_drawer:` / `mp_kg:` 外部 id。
-- `write_projection` 已清理带合法 page-id frontmatter 的 stale managed page。
+- `--graph-extras-file` 已按 viewer scope 过滤 wiki doc id，并拒绝外部注入 `mp_drawer:` / `mp_kg:` id。
+- `write_projection` 只清理带显式 managed marker 的 stale projection page，并将其移入 `.wiki/trash/projection/`。

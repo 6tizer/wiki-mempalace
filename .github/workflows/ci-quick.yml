@@ -45,6 +45,7 @@ jobs:
           bash -n scripts/backup.sh
           bash -n scripts/dependency-audit.sh
           bash -n scripts/e2e.sh
+          bash -n scripts/hardening-smoke.sh
           bash -n scripts/recovery-drill.sh
 
       - name: Automation CLI smoke
