@@ -17,7 +17,7 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          components: rustfmt
+          components: rustfmt, clippy
 
       - name: Cache cargo artifacts
         uses: Swatinem/rust-cache@v2
@@ -28,8 +28,17 @@ jobs:
       - name: Workspace tests
         run: cargo test --workspace
 
+      - name: Workspace clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
       - name: ANN feature tests
         run: cargo test -p wiki-storage --features ann-embed embedding_
+
+      - name: Cargo deny
+        uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check advisories bans licenses sources
+          arguments: --all-features
 
       - name: Shell script syntax check
         run: |

@@ -1,0 +1,50 @@
+[graph]
+all-features = true
+
+[advisories]
+db-urls = ["https://github.com/rustsec/advisory-db"]
+yanked = "deny"
+ignore = []
+
+[licenses]
+allow = [
+  "Apache-2.0",
+  "Apache-2.0 WITH LLVM-exception",
+  "BSD-2-Clause",
+  "BSD-3-Clause",
+  "CDLA-Permissive-2.0",
+  "ISC",
+  "MIT",
+  "MPL-2.0",
+  "Unicode-3.0",
+  "Zlib",
+]
+confidence-threshold = 0.8
+
+[licenses.private]
+ignore = true
+
+[bans]
+multiple-versions = "deny"
+wildcards = "allow"
+highlight = "all"
+workspace-default-features = "allow"
+external-default-features = "allow"
+allow-workspace = true
+allow = []
+deny = []
+skip = [
+  { crate = "getrandom@0.2.17", reason = "transitive rustls/ring stack is not aligned with uuid/tempfile getrandom yet" },
+  { crate = "getrandom@0.3.4", reason = "transitive rand stack is not aligned with uuid/tempfile getrandom yet" },
+  { crate = "hashbrown@0.14.5", reason = "transitive rusqlite/hashlink stack lags indexmap hashbrown" },
+  { crate = "r-efi@5.3.0", reason = "transitive getrandom v0.3 stack differs from getrandom v0.4" },
+  { crate = "webpki-roots@0.26.11", reason = "transitive ureq v2 stack lags reqwest rustls root store" },
+  { crate = "windows-sys@0.52.0", reason = "transitive ring stack lags windows-sys used by async/dev tooling" },
+]
+skip-tree = []
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []

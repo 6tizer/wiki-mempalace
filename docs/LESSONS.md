@@ -80,6 +80,15 @@
 - Tests or reviews that caught issues: focused LLM tests 覆盖 env priority/fallback、allowlist reject、prompt redaction、oversized input、output token cap、provider error redaction/size limit；focused review 抓到 provider raw response size gap。
 - Next plan note: 下一 PR 做 CI required hardening，不混入 LLM 运行时行为。
 
+## 2026-04-29 / Audit v2 PR 07 CI Hardening
+
+- Scope: required `quick` PR gate 加 clippy 和 cargo-deny；保留 `cargo audit` scheduled/manual artifact lane。
+- What worked: 把新 required policy 塞进现有 `quick` job，避免依赖仓库 branch-protection 另行配置新 check 名称。
+- What caused rework: `cargo deny` 首跑发现 `rustls-webpki 0.103.12` 新 advisory，必须顺手升级 lockfile；同时 path workspace 依赖会被 wildcard deny 误伤，PR7 只启用 duplicate/license/source/advisory policy。
+- Spec changes needed: 旧 Dependency Audit PRD 只约束 `cargo audit` lane；PR7 必须明确 `cargo-deny` 是 required fast gate。
+- Tests or reviews that caught issues: `cargo deny --all-features check advisories bans licenses sources` 抓到 RUSTSEC-2026-0104、license allowlist 缺口和重复依赖例外；workspace test/clippy 验证 `rustls-webpki` 升级无回归。
+- Next plan note: 下一 PR 做 Production SearchPorts default，不混入 CI/workflow 继续扩展。
+
 ## 2026-04-28 / PR #78 CLI Command Modularization phase 1
 
 - Scope: 先搬低风险命令域：`schema-validate`、`llm-smoke`、outbox export/ack。
