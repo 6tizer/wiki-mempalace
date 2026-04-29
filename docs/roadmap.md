@@ -66,8 +66,8 @@
 
 | 顺序 | PR 主题 | 状态 | 优先级 | 覆盖审计项 | 范围边界 | 验收条件 | 依赖 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| 1 | MCP input boundary quick fix | ✅ Gate passed | P0 | H-5 / H-3 | MCP `limit` / `per_stream_limit` / `search_limit` clamp；`write_lint_report` 路径遍历拒绝。 | schema + handler 双层限幅；checked conversion；`../evil.md`、绝对路径、reports symlink、file symlink、超大 limit 测试通过。 | 无 |
-| 2 | MCP scope capability hardening | Planned | P0 | H-1 / I-3 | `resolve_write_scope` 不再允许任意覆盖 server viewer；`supersede` 加 viewer 可见性校验。 | 写工具只能用 server-side viewer/capability 或合法子 scope；跨 scope supersede 拒绝测试通过。 | PR 1 |
+| 1 | MCP input boundary quick fix | ✅ PR #83 | P0 | H-5 / H-3 | MCP `limit` / `per_stream_limit` / `search_limit` clamp；`write_lint_report` 路径遍历拒绝。 | schema + handler 双层限幅；checked conversion；`../evil.md`、绝对路径、reports symlink、file symlink、超大 limit 测试通过。 | 无 |
+| 2 | MCP scope capability hardening | ✅ Gate passed | P0 | H-1 / I-3 | `resolve_write_scope` 不再允许任意覆盖 server viewer；`supersede` 加 viewer 可见性校验。 | 写工具只能用 server-side viewer/capability 或合法子 scope；跨 scope supersede、write-page/crystallize mismatch、maintenance hidden-claim mutation 拒绝/隔离测试通过。 | PR 1 |
 | 3 | Mempalace bank capability | Planned | P0 | H-2 / I-3 | MCP mempalace 工具禁止 client 传 `bank_id`；由 `viewer_scope -> bank_id` 派生；KG query/timeline/stats 加 bank filter。 | 搜索、wake_up、taxonomy、traverse、reflect、KG 查询均按 bank 隔离；越权测试通过。 | PR 2 |
 | 4 | Cross-bank drawer dedupe migration | Planned | P0 | M-7 | `drawers(content_hash)` 全局唯一改为 `(bank_id, content_hash)`；live sink / mine path 查重同步改造。 | migration 可重复执行；相同内容不同 bank 可共存；同 bank 仍去重；bridge/live tests 通过。 | PR 3 |
 | 5 | QueryServed privacy/schema | Planned | P1 | M-3 | `QueryServed` 不再保存原始 query；增加 hash/scope/schema version；适配 M12/suggest 读取。 | salted hash + 可选 redacted preview；旧事件兼容；query history 不跨 scope 泄漏；相关策略测试通过。 | PR 2 |

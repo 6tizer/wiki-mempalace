@@ -35,6 +35,15 @@
 - Tests or reviews that caught issues: security-focused review 抓到 file-level symlink overwrite；新增回归测试后全 workspace gate 通过。
 - Next plan note: 下一 PR 做 MCP scope/capability hardening，不混入 bank derivation。
 
+## 2026-04-29 / Audit v2 PR 02 MCP Scope Capability
+
+- Scope: MCP 写工具 scope capability 和 supersede old-claim viewer gate。
+- What worked: 把能力边界收在 MCP resolver，缺省仍用 server viewer，显式 scope 必须 exact match。
+- What caused rework: 旧测试明确断言 client 可覆盖 scope；先翻转测试再改实现更清楚。
+- Spec changes needed: 本 PR 不做 capability token / sub-scope delegation，后续需要新 spec。
+- Tests or reviews that caught issues: security review 抓到 maintenance 全库 decay 和 query/crystallize 显式 scope mismatch；handler 级测试固定 cross-scope 写入不变更状态，hidden old claim supersede 不生成新 claim。
+- Next plan note: 下一 PR 做 mempalace bank capability，禁止 client 任意传 `bank_id`。
+
 ## 2026-04-28 / PR #78 CLI Command Modularization phase 1
 
 - Scope: 先搬低风险命令域：`schema-validate`、`llm-smoke`、outbox export/ack。
