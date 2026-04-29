@@ -26,6 +26,15 @@
 - Agent-facing CLI 默认值不要依赖 cwd；只要语义属于 vault 输出，相对路径应在
   `--wiki-dir` 存在时解析为 vault-relative，并用测试固定。
 
+## 2026-04-29 / Audit v2 PR 01 MCP Input Boundary
+
+- Scope: MCP result limit clamp + lint report path guard，先处理审计 P0 quick fix。
+- What worked: schema bound、handler clamp、checked conversion 同时落；MCP 和 standalone mempalace 各自加 focused tests。
+- What caused rework: reports 目录 symlink guard 不够，文件级 symlink 仍会被 `fs::write` 跟随。
+- Spec changes needed: path guard 验收必须覆盖 directory symlink 和 file symlink 两层。
+- Tests or reviews that caught issues: security-focused review 抓到 file-level symlink overwrite；新增回归测试后全 workspace gate 通过。
+- Next plan note: 下一 PR 做 MCP scope/capability hardening，不混入 bank derivation。
+
 ## 2026-04-28 / PR #78 CLI Command Modularization phase 1
 
 - Scope: 先搬低风险命令域：`schema-validate`、`llm-smoke`、outbox export/ack。

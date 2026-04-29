@@ -1,7 +1,7 @@
 use crate::InMemoryStore;
 use std::collections::{BTreeMap, HashSet};
-use std::fs;
-use std::io;
+use std::fs::{self, OpenOptions};
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use time::format_description::well_known::Rfc3339;
 use uuid::Uuid;
@@ -170,12 +170,22 @@ pub fn write_lint_report(
 ) -> io::Result<std::path::PathBuf> {
     let reports_dir = wiki_root.join("reports");
     fs::create_dir_all(&reports_dir)?;
-    let filename = if report_name.ends_with(".md") {
-        report_name.to_string()
-    } else {
-        format!("{report_name}.md")
-    };
-    let out = reports_dir.join(filename);
+    if fs::symlink_metadata(&reports_dir)?.file_type().is_symlink() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "reports directory must not be a symlink",
+        ));
+    }
+    let wiki_root = fs::canonicalize(wiki_root)?;
+    let reports_dir = fs::canonicalize(reports_dir)?;
+    if !reports_dir.starts_with(&wiki_root) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "reports directory must stay under wiki root",
+        ));
+    }
+    let filename = lint_report_filename(report_name)?;
+    let out = reports_dir.join(&filename);
     let mut grouped: BTreeMap<&'static str, Vec<&LintFinding>> = BTreeMap::new();
     for f in findings {
         let key = match f.severity {
@@ -202,8 +212,72 @@ pub fn write_lint_report(
         }
         md.push('\n');
     }
-    fs::write(&out, md)?;
+    write_lint_report_file(&reports_dir, std::ffi::OsStr::new(&filename), md.as_bytes())?;
     Ok(out)
+}
+
+fn write_lint_report_file(
+    reports_dir: &Path,
+    filename: &std::ffi::OsStr,
+    contents: &[u8],
+) -> io::Result<()> {
+    let pid = std::process::id();
+    for attempt in 0..16 {
+        let tmp_name = format!(".{}.{}.{}.tmp", filename.to_string_lossy(), pid, attempt);
+        let tmp_path = reports_dir.join(tmp_name);
+        let final_path = reports_dir.join(filename);
+        let mut file = match OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&tmp_path)
+        {
+            Ok(file) => file,
+            Err(err) if err.kind() == io::ErrorKind::AlreadyExists => continue,
+            Err(err) => return Err(err),
+        };
+        if let Err(err) = file.write_all(contents).and_then(|_| file.flush()) {
+            let _ = fs::remove_file(&tmp_path);
+            return Err(err);
+        }
+        drop(file);
+        if let Err(err) = fs::rename(&tmp_path, &final_path) {
+            let _ = fs::remove_file(&tmp_path);
+            return Err(err);
+        }
+        return Ok(());
+    }
+    Err(io::Error::new(
+        io::ErrorKind::AlreadyExists,
+        "could not create unique lint report temp file",
+    ))
+}
+
+fn lint_report_filename(report_name: &str) -> io::Result<String> {
+    let raw = report_name.trim();
+    if raw.is_empty()
+        || raw.contains("..")
+        || raw.contains('/')
+        || raw.contains('\\')
+        || Path::new(raw).is_absolute()
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "lint report name must be a slug filename",
+        ));
+    }
+    let stem = raw.strip_suffix(".md").unwrap_or(raw);
+    if stem.is_empty()
+        || stem.starts_with('.')
+        || !stem
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "lint report name must be a slug filename",
+        ));
+    }
+    Ok(format!("{stem}.md"))
 }
 
 /// EntryStatus → snake_case 字符串（与 serde rename_all 保持一致）。
@@ -734,6 +808,72 @@ mod tests {
             "markdown with invalid managed id should be preserved"
         );
         assert!(pages_dir.join("Current.md").exists());
+    }
+
+    #[test]
+    fn lint_report_rejects_path_traversal_names() {
+        let dir = tempdir().unwrap();
+        for bad in [
+            "../evil",
+            "/tmp/evil",
+            "nested/evil",
+            r"nested\evil",
+            "..evil",
+            ".hidden",
+        ] {
+            let err = write_lint_report(dir.path(), bad, &[]).unwrap_err();
+            assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput, "{bad}");
+        }
+    }
+
+    #[test]
+    fn lint_report_writes_slug_inside_reports_dir() {
+        let dir = tempdir().unwrap();
+        let report = write_lint_report(dir.path(), "lint-2026-04-29T05-00-00Z", &[]).unwrap();
+        assert_eq!(
+            report.file_name().and_then(|s| s.to_str()),
+            Some("lint-2026-04-29T05-00-00Z.md")
+        );
+        let expected_parent = std::fs::canonicalize(dir.path().join("reports")).unwrap();
+        assert_eq!(report.parent(), Some(expected_parent.as_path()));
+        assert!(report.exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn lint_report_rejects_reports_symlink_escape() {
+        let dir = tempdir().unwrap();
+        let outside = tempdir().unwrap();
+        std::os::unix::fs::symlink(outside.path(), dir.path().join("reports")).unwrap();
+
+        let err = write_lint_report(dir.path(), "lint-safe", &[]).unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn lint_report_replaces_file_symlink_without_following() {
+        let dir = tempdir().unwrap();
+        let reports = dir.path().join("reports");
+        std::fs::create_dir_all(&reports).unwrap();
+        let outside = dir.path().join("outside.md");
+        std::fs::write(&outside, "outside").unwrap();
+        let report_path = reports.join("lint-safe.md");
+        std::os::unix::fs::symlink(&outside, &report_path).unwrap();
+
+        let report = write_lint_report(dir.path(), "lint-safe", &[]).unwrap();
+
+        assert_eq!(
+            report,
+            std::fs::canonicalize(&reports)
+                .unwrap()
+                .join("lint-safe.md")
+        );
+        assert!(!std::fs::symlink_metadata(&report)
+            .unwrap()
+            .file_type()
+            .is_symlink());
+        assert_eq!(std::fs::read_to_string(outside).unwrap(), "outside");
     }
 
     // --- D1 frontmatter 测试 ---
