@@ -425,11 +425,30 @@ pub struct SearchRow {
 }
 
 pub fn status(conn: &Connection) -> Result<Status> {
-    let drawers: i64 = conn.query_row("SELECT COUNT(*) FROM drawers", [], |r| r.get(0))?;
-    let tunnels: i64 = conn.query_row("SELECT COUNT(*) FROM tunnels", [], |r| r.get(0))?;
-    let wings: i64 =
-        conn.query_row("SELECT COUNT(DISTINCT wing) FROM drawers", [], |r| r.get(0))?;
-    let kg_facts: i64 = conn.query_row("SELECT COUNT(*) FROM kg_facts", [], |r| r.get(0))?;
+    status_for_bank(conn, None)
+}
+
+pub fn status_for_bank(conn: &Connection, bank_id: Option<&str>) -> Result<Status> {
+    let drawers: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM drawers WHERE (?1 IS NULL OR bank_id = ?1)",
+        params![bank_id],
+        |r| r.get(0),
+    )?;
+    let tunnels: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM tunnels WHERE (?1 IS NULL OR bank_id = ?1)",
+        params![bank_id],
+        |r| r.get(0),
+    )?;
+    let wings: i64 = conn.query_row(
+        "SELECT COUNT(DISTINCT wing) FROM drawers WHERE (?1 IS NULL OR bank_id = ?1)",
+        params![bank_id],
+        |r| r.get(0),
+    )?;
+    let kg_facts: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM kg_facts WHERE (?1 IS NULL OR bank_id = ?1)",
+        params![bank_id],
+        |r| r.get(0),
+    )?;
     Ok(Status {
         drawers,
         wings,
@@ -517,20 +536,53 @@ pub fn kg_add(
     object: &str,
     valid_from: Option<&str>,
     source_drawer_id: Option<i64>,
+    bank_id: Option<&str>,
 ) -> Result<()> {
     let now = now_rfc3339()?;
+    let bank = kg_bank_for_insert(conn, bank_id, source_drawer_id)?;
     conn.execute(
-        "INSERT INTO kg_facts(subject, predicate, object, valid_from, valid_to, source_drawer_id, created_at) VALUES (?1, ?2, ?3, ?4, NULL, ?5, ?6)",
-        params![subject, predicate, object, valid_from.unwrap_or(&now), source_drawer_id, now],
+        "INSERT INTO kg_facts(subject, predicate, object, valid_from, valid_to, source_drawer_id, bank_id, created_at) VALUES (?1, ?2, ?3, ?4, NULL, ?5, ?6, ?7)",
+        params![subject, predicate, object, valid_from.unwrap_or(&now), source_drawer_id, bank, now],
     )?;
     Ok(())
 }
 
+fn kg_bank_for_insert(
+    conn: &Connection,
+    bank_id: Option<&str>,
+    source_drawer_id: Option<i64>,
+) -> Result<String> {
+    if let Some(bank) = bank_id {
+        return Ok(bank.to_string());
+    }
+    if let Some(drawer_id) = source_drawer_id {
+        let bank = conn
+            .query_row(
+                "SELECT bank_id FROM drawers WHERE id = ?1",
+                params![drawer_id],
+                |r| r.get::<_, String>(0),
+            )
+            .optional()?;
+        if let Some(bank) = bank {
+            return Ok(bank);
+        }
+    }
+    Ok("default".to_string())
+}
+
 pub fn drawer_content(conn: &Connection, id: i64) -> Result<Option<String>> {
+    drawer_content_for_bank(conn, id, None)
+}
+
+pub fn drawer_content_for_bank(
+    conn: &Connection,
+    id: i64,
+    bank_id: Option<&str>,
+) -> Result<Option<String>> {
     let v = conn
         .query_row(
-            "SELECT content FROM drawers WHERE id = ?1",
-            params![id],
+            "SELECT content FROM drawers WHERE id = ?1 AND (?2 IS NULL OR bank_id = ?2)",
+            params![id, bank_id],
             |r| r.get(0),
         )
         .optional()?;
@@ -576,7 +628,12 @@ pub fn reflect_answer(
 }
 
 /// LLM-assisted triple extraction into `kg_facts` (optional LLM).
-pub fn extract_to_kg(conn: &Connection, cfg: &LlmConfig, text: &str) -> Result<usize> {
+pub fn extract_to_kg(
+    conn: &Connection,
+    cfg: &LlmConfig,
+    text: &str,
+    bank_id: Option<&str>,
+) -> Result<usize> {
     if !crate::llm::llm_ready(cfg) {
         anyhow::bail!(
             "LLM not configured: set llm.enabled=true, llm.base_url, llm.model, and api key via llm.api_key_env or llm.api_key"
@@ -595,28 +652,34 @@ pub fn extract_to_kg(conn: &Connection, cfg: &LlmConfig, text: &str) -> Result<u
         if s.is_empty() || p.is_empty() || o.is_empty() {
             continue;
         }
-        kg_add(conn, s, p, o, None, None)?;
+        kg_add(conn, s, p, o, None, None, bank_id)?;
         n += 1;
     }
     Ok(n)
 }
 
-pub fn kg_query(conn: &Connection, subject: &str, as_of: Option<&str>) -> Result<Vec<KgFact>> {
+pub fn kg_query(
+    conn: &Connection,
+    subject: &str,
+    as_of: Option<&str>,
+    bank_id: Option<&str>,
+) -> Result<Vec<KgFact>> {
     let as_of_ts = match as_of {
         Some(value) => value.to_string(),
         None => now_rfc3339()?,
     };
     let mut stmt = conn.prepare(
         r#"
-        SELECT id, subject, predicate, object, valid_from, valid_to, source_drawer_id
+        SELECT id, subject, predicate, object, valid_from, valid_to, source_drawer_id, bank_id
         FROM kg_facts
         WHERE subject = ?1
           AND valid_from <= ?2
           AND (valid_to IS NULL OR valid_to > ?2)
+          AND (?3 IS NULL OR bank_id = ?3)
         ORDER BY valid_from DESC, id DESC
     "#,
     )?;
-    let mut rows = stmt.query(params![subject, as_of_ts])?;
+    let mut rows = stmt.query(params![subject, as_of_ts, bank_id])?;
     let mut out = Vec::new();
     while let Some(r) = rows.next()? {
         out.push(KgFact {
@@ -627,6 +690,7 @@ pub fn kg_query(conn: &Connection, subject: &str, as_of: Option<&str>) -> Result
             valid_from: r.get(4)?,
             valid_to: r.get(5)?,
             source_drawer_id: r.get(6)?,
+            bank_id: r.get(7)?,
         });
     }
     Ok(out)
@@ -638,14 +702,15 @@ pub fn kg_invalidate(
     predicate: &str,
     object: &str,
     ended: Option<&str>,
+    bank_id: Option<&str>,
 ) -> Result<usize> {
     let ended_at = match ended {
         Some(value) => value.to_string(),
         None => now_rfc3339()?,
     };
     let changed = conn.execute(
-        "UPDATE kg_facts SET valid_to = ?1 WHERE subject = ?2 AND predicate = ?3 AND object = ?4 AND valid_to IS NULL",
-        params![ended_at, subject, predicate, object],
+        "UPDATE kg_facts SET valid_to = ?1 WHERE subject = ?2 AND predicate = ?3 AND object = ?4 AND valid_to IS NULL AND (?5 IS NULL OR bank_id = ?5)",
+        params![ended_at, subject, predicate, object, bank_id],
     )?;
     Ok(changed)
 }
@@ -658,18 +723,20 @@ pub struct KgFact {
     pub valid_from: String,
     pub valid_to: Option<String>,
     pub source_drawer_id: Option<i64>,
+    pub bank_id: String,
 }
 
-pub fn kg_timeline(conn: &Connection, subject: &str) -> Result<Vec<KgFact>> {
+pub fn kg_timeline(conn: &Connection, subject: &str, bank_id: Option<&str>) -> Result<Vec<KgFact>> {
     let mut stmt = conn.prepare(
         r#"
-        SELECT id, subject, predicate, object, valid_from, valid_to, source_drawer_id
+        SELECT id, subject, predicate, object, valid_from, valid_to, source_drawer_id, bank_id
         FROM kg_facts
         WHERE subject = ?1
+          AND (?2 IS NULL OR bank_id = ?2)
         ORDER BY valid_from ASC, id ASC
     "#,
     )?;
-    let mut rows = stmt.query(params![subject])?;
+    let mut rows = stmt.query(params![subject, bank_id])?;
     let mut out = Vec::new();
     while let Some(r) = rows.next()? {
         out.push(KgFact {
@@ -680,6 +747,7 @@ pub fn kg_timeline(conn: &Connection, subject: &str) -> Result<Vec<KgFact>> {
             valid_from: r.get(4)?,
             valid_to: r.get(5)?,
             source_drawer_id: r.get(6)?,
+            bank_id: r.get(7)?,
         });
     }
     Ok(out)
@@ -692,19 +760,25 @@ pub struct KgStats {
     pub active_facts: i64,
 }
 
-pub fn kg_stats(conn: &Connection) -> Result<KgStats> {
-    let facts: i64 = conn.query_row("SELECT COUNT(*) FROM kg_facts", [], |r| r.get(0))?;
-    let subjects: i64 =
-        conn.query_row("SELECT COUNT(DISTINCT subject) FROM kg_facts", [], |r| {
-            r.get(0)
-        })?;
-    let predicates: i64 =
-        conn.query_row("SELECT COUNT(DISTINCT predicate) FROM kg_facts", [], |r| {
-            r.get(0)
-        })?;
+pub fn kg_stats(conn: &Connection, bank_id: Option<&str>) -> Result<KgStats> {
+    let facts: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM kg_facts WHERE (?1 IS NULL OR bank_id = ?1)",
+        params![bank_id],
+        |r| r.get(0),
+    )?;
+    let subjects: i64 = conn.query_row(
+        "SELECT COUNT(DISTINCT subject) FROM kg_facts WHERE (?1 IS NULL OR bank_id = ?1)",
+        params![bank_id],
+        |r| r.get(0),
+    )?;
+    let predicates: i64 = conn.query_row(
+        "SELECT COUNT(DISTINCT predicate) FROM kg_facts WHERE (?1 IS NULL OR bank_id = ?1)",
+        params![bank_id],
+        |r| r.get(0),
+    )?;
     let active_facts: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM kg_facts WHERE valid_to IS NULL",
-        [],
+        "SELECT COUNT(*) FROM kg_facts WHERE valid_to IS NULL AND (?1 IS NULL OR bank_id = ?1)",
+        params![bank_id],
         |r| r.get(0),
     )?;
     Ok(KgStats {
@@ -785,10 +859,11 @@ pub fn traverse(
         r#"
         SELECT from_wing, from_room, to_wing, to_room, 'explicit'
         FROM tunnels
-        WHERE (from_wing = ?1 AND from_room = ?2) OR (to_wing = ?1 AND to_room = ?2)
+        WHERE ((from_wing = ?1 AND from_room = ?2) OR (to_wing = ?1 AND to_room = ?2))
+          AND (?3 IS NULL OR bank_id = ?3)
     "#,
     )?;
-    let mut rows = explicit.query(params![wing, room])?;
+    let mut rows = explicit.query(params![wing, room, bank_id])?;
     while let Some(r) = rows.next()? {
         out.push(TraverseEdge {
             from_wing: r.get(0)?,
@@ -820,6 +895,7 @@ pub fn traverse(
     Ok(out)
 }
 
+#[derive(Debug)]
 pub struct TraverseEdge {
     pub from_wing: String,
     pub from_room: String,
@@ -1338,6 +1414,7 @@ pub fn split_mega_file(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rusqlite::params;
 
     #[test]
     fn fts_query_quotes_user_tokens() {
@@ -1363,5 +1440,134 @@ mod tests {
             fixed.iter().map(|(id, _)| *id).collect::<Vec<_>>(),
             vec![1, 2, 3, 4, 5]
         );
+    }
+
+    #[test]
+    fn kg_queries_and_stats_are_bank_scoped() {
+        let conn = Connection::open_in_memory().expect("open memory db");
+        crate::db::init_schema(&conn).expect("init schema");
+        let now = "2024-01-01T00:00:00Z";
+
+        conn.execute(
+            "INSERT INTO drawers(wing, hall, room, source_path, content, content_hash, bank_id, created_at)
+             VALUES('w', 'h', 'r1', 'a.md', 'alpha', 'hash-a', 'bank_a', ?1)",
+            params![now],
+        )
+        .expect("insert bank_a drawer");
+        let bank_a_drawer = conn.last_insert_rowid();
+        conn.execute(
+            "INSERT INTO drawers(wing, hall, room, source_path, content, content_hash, bank_id, created_at)
+             VALUES('w', 'h', 'r2', 'b.md', 'beta', 'hash-b', 'bank_b', ?1)",
+            params![now],
+        )
+        .expect("insert bank_b drawer");
+        let bank_b_drawer = conn.last_insert_rowid();
+        conn.execute(
+            "INSERT INTO drawers(wing, hall, room, source_path, content, content_hash, bank_id, created_at)
+             VALUES('w', 'h', 'r2', 'a2.md', 'alpha 2', 'hash-a2', 'bank_a', ?1)",
+            params![now],
+        )
+        .expect("insert bank_a coordinate-collision drawer");
+        conn.execute(
+            "INSERT INTO drawers(wing, hall, room, source_path, content, content_hash, bank_id, created_at)
+             VALUES('w', 'h', 'r1', 'b2.md', 'beta 2', 'hash-b2', 'bank_b', ?1)",
+            params![now],
+        )
+        .expect("insert bank_b coordinate-collision drawer");
+
+        kg_add(
+            &conn,
+            "Subject",
+            "likes",
+            "A",
+            Some(now),
+            Some(bank_a_drawer),
+            None,
+        )
+        .expect("add bank_a fact");
+        kg_add(
+            &conn,
+            "Subject",
+            "likes",
+            "B",
+            Some(now),
+            Some(bank_b_drawer),
+            None,
+        )
+        .expect("add bank_b fact");
+
+        let a = kg_query(&conn, "Subject", None, Some("bank_a")).expect("query bank_a");
+        assert_eq!(a.len(), 1);
+        assert_eq!(a[0].object, "A");
+        assert_eq!(a[0].bank_id, "bank_a");
+
+        let b = kg_timeline(&conn, "Subject", Some("bank_b")).expect("timeline bank_b");
+        assert_eq!(b.len(), 1);
+        assert_eq!(b[0].object, "B");
+        assert_eq!(b[0].bank_id, "bank_b");
+
+        let all = kg_query(&conn, "Subject", None, None).expect("query all banks");
+        assert_eq!(all.len(), 2);
+
+        let stats_a = kg_stats(&conn, Some("bank_a")).expect("stats bank_a");
+        assert_eq!(stats_a.facts, 1);
+        assert_eq!(stats_a.subjects, 1);
+        assert_eq!(stats_a.predicates, 1);
+
+        let status_b = status_for_bank(&conn, Some("bank_b")).expect("status bank_b");
+        assert_eq!(status_b.drawers, 2);
+        assert_eq!(status_b.kg_facts, 1);
+
+        conn.execute(
+            "INSERT INTO tunnels(from_wing, from_room, to_wing, to_room, bank_id, created_at)
+             VALUES('w', 'r1', 'w', 'r2', 'bank_b', ?1)",
+            params![now],
+        )
+        .expect("insert bank_b tunnel");
+        let scoped_traverse = traverse(&conn, "w", "r1", Some("bank_a")).expect("traverse bank_a");
+        assert!(
+            scoped_traverse.iter().all(|edge| edge.kind != "explicit"),
+            "bank_b explicit tunnel must not leak into bank_a even when room coordinates collide: {scoped_traverse:?}"
+        );
+        let bank_b_traverse = traverse(&conn, "w", "r1", Some("bank_b")).expect("traverse bank_b");
+        assert!(
+            bank_b_traverse.iter().any(|edge| edge.kind == "explicit"),
+            "bank_b traverse should see its own explicit tunnel"
+        );
+        let global_traverse = traverse(&conn, "w", "r1", None).expect("traverse global");
+        assert!(
+            global_traverse.iter().any(|edge| edge.kind == "explicit"),
+            "global traverse should keep legacy explicit tunnel visibility"
+        );
+        assert_eq!(
+            status_for_bank(&conn, Some("bank_a"))
+                .expect("status bank_a")
+                .tunnels,
+            0
+        );
+        assert_eq!(
+            status_for_bank(&conn, Some("bank_b"))
+                .expect("status bank_b")
+                .tunnels,
+            1
+        );
+
+        assert!(
+            drawer_content_for_bank(&conn, bank_b_drawer, Some("bank_a"))
+                .expect("bank-filtered drawer read")
+                .is_none()
+        );
+        assert_eq!(
+            drawer_content_for_bank(&conn, bank_b_drawer, Some("bank_b"))
+                .expect("bank-filtered drawer read"),
+            Some("beta".to_string())
+        );
+
+        let changed = kg_invalidate(&conn, "Subject", "likes", "A", Some(now), Some("bank_b"))
+            .expect("invalidate other bank");
+        assert_eq!(changed, 0);
+        let changed = kg_invalidate(&conn, "Subject", "likes", "A", Some(now), Some("bank_a"))
+            .expect("invalidate bank_a");
+        assert_eq!(changed, 1);
     }
 }

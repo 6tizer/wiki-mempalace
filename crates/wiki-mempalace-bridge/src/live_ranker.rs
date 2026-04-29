@@ -64,7 +64,8 @@ impl MempalaceGraphRanker for LiveMempalaceGraphRanker {
             doc_ids.push(format!("mp_drawer:{}", row.id));
         }
 
-        let kg_facts = service::kg_query(&conn, query, None).unwrap_or_default();
+        let kg_facts =
+            service::kg_query(&conn, query, None, self.bank_id.as_deref()).unwrap_or_default();
         for fact in &kg_facts {
             let id = format!("mp_kg:{}:{}", fact.subject, fact.predicate);
             if !doc_ids.contains(&id) {

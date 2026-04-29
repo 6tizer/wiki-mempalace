@@ -97,10 +97,25 @@ impl MempalaceWikiSink for LiveMempalaceSink {
         self.with_conn(|conn| {
             let subject = format!("claim:{}", new.0);
             let object = format!("claim:{}", old.0);
-            service::kg_add(conn, &subject, "supersedes", &object, None, None)
-                .map_err(|e| MempalaceError::Backend(e.to_string()))?;
-            service::kg_invalidate(conn, &format!("claim:{}", old.0), "is_active", "true", None)
-                .map_err(|e| MempalaceError::Backend(e.to_string()))?;
+            service::kg_add(
+                conn,
+                &subject,
+                "supersedes",
+                &object,
+                None,
+                None,
+                Some(&self.bank_id),
+            )
+            .map_err(|e| MempalaceError::Backend(e.to_string()))?;
+            service::kg_invalidate(
+                conn,
+                &format!("claim:{}", old.0),
+                "is_active",
+                "true",
+                None,
+                Some(&self.bank_id),
+            )
+            .map_err(|e| MempalaceError::Backend(e.to_string()))?;
             Ok(())
         })
     }
@@ -113,8 +128,16 @@ impl MempalaceWikiSink for LiveMempalaceSink {
         self.with_conn(|conn| {
             let subject = format!("source:{}", source_id.0);
             let object = format!("claim:{}", claim_id.0);
-            service::kg_add(conn, &subject, "supports", &object, None, None)
-                .map_err(|e| MempalaceError::Backend(e.to_string()))
+            service::kg_add(
+                conn,
+                &subject,
+                "supports",
+                &object,
+                None,
+                None,
+                Some(&self.bank_id),
+            )
+            .map_err(|e| MempalaceError::Backend(e.to_string()))
         })
     }
 

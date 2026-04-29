@@ -79,6 +79,8 @@ pub enum Commands {
         to_wing: String,
         #[arg(long)]
         to_room: String,
+        #[arg(long)]
+        bank: Option<String>,
     },
     Taxonomy {
         #[arg(long)]

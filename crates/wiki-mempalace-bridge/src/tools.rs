@@ -12,7 +12,7 @@ use crate::MempalaceError;
 ///
 /// 所有方法返回 `Result<Value, MempalaceError>`，JSON 结构与重构前完全一致。
 pub trait MempalaceTools: Send + Sync {
-    fn status(&self) -> Result<Value, MempalaceError>;
+    fn status(&self, bank_id: Option<&str>) -> Result<Value, MempalaceError>;
     #[allow(clippy::too_many_arguments)]
     fn search(
         &self,
@@ -32,16 +32,26 @@ pub trait MempalaceTools: Send + Sync {
         room: &str,
         bank_id: Option<&str>,
     ) -> Result<Value, MempalaceError>;
-    fn kg_query(&self, subject: &str, as_of: Option<&str>) -> Result<Value, MempalaceError>;
-    fn kg_timeline(&self, subject: &str) -> Result<Value, MempalaceError>;
-    fn kg_stats(&self) -> Result<Value, MempalaceError>;
+    fn kg_query(
+        &self,
+        subject: &str,
+        as_of: Option<&str>,
+        bank_id: Option<&str>,
+    ) -> Result<Value, MempalaceError>;
+    fn kg_timeline(&self, subject: &str, bank_id: Option<&str>) -> Result<Value, MempalaceError>;
+    fn kg_stats(&self, bank_id: Option<&str>) -> Result<Value, MempalaceError>;
     fn reflect(
         &self,
         query: &str,
         search_limit: usize,
         bank_id: Option<&str>,
     ) -> Result<Value, MempalaceError>;
-    fn extract(&self, text: Option<&str>, drawer_id: Option<i64>) -> Result<Value, MempalaceError>;
+    fn extract(
+        &self,
+        text: Option<&str>,
+        drawer_id: Option<i64>,
+        bank_id: Option<&str>,
+    ) -> Result<Value, MempalaceError>;
 }
 
 /// 无操作实现：所有字段为空 / 零值，保证不触碰 rust-mempalace。
@@ -49,7 +59,7 @@ pub trait MempalaceTools: Send + Sync {
 pub struct NoopMempalaceTools;
 
 impl MempalaceTools for NoopMempalaceTools {
-    fn status(&self) -> Result<Value, MempalaceError> {
+    fn status(&self, _bank_id: Option<&str>) -> Result<Value, MempalaceError> {
         Ok(json!({"drawers": 0, "wings": 0, "tunnels": 0, "kg_facts": 0}))
     }
 
@@ -87,15 +97,20 @@ impl MempalaceTools for NoopMempalaceTools {
         Ok(json!({"links": []}))
     }
 
-    fn kg_query(&self, _subject: &str, _as_of: Option<&str>) -> Result<Value, MempalaceError> {
+    fn kg_query(
+        &self,
+        _subject: &str,
+        _as_of: Option<&str>,
+        _bank_id: Option<&str>,
+    ) -> Result<Value, MempalaceError> {
         Ok(json!({"facts": []}))
     }
 
-    fn kg_timeline(&self, _subject: &str) -> Result<Value, MempalaceError> {
+    fn kg_timeline(&self, _subject: &str, _bank_id: Option<&str>) -> Result<Value, MempalaceError> {
         Ok(json!({"timeline": []}))
     }
 
-    fn kg_stats(&self) -> Result<Value, MempalaceError> {
+    fn kg_stats(&self, _bank_id: Option<&str>) -> Result<Value, MempalaceError> {
         Ok(json!({"facts": 0, "subjects": 0, "predicates": 0, "active_facts": 0}))
     }
 
@@ -112,6 +127,7 @@ impl MempalaceTools for NoopMempalaceTools {
         &self,
         _text: Option<&str>,
         _drawer_id: Option<i64>,
+        _bank_id: Option<&str>,
     ) -> Result<Value, MempalaceError> {
         Ok(json!({"kg_facts_added": 0}))
     }
@@ -148,7 +164,7 @@ mod tests {
     #[test]
     fn noop_status_shape() {
         let tools = NoopMempalaceTools;
-        let v = tools.status().unwrap();
+        let v = tools.status(None).unwrap();
         assert_has_keys(&v, &["drawers", "wings", "tunnels", "kg_facts"]);
         assert_eq!(v["drawers"], 0);
     }
@@ -187,21 +203,21 @@ mod tests {
     #[test]
     fn noop_kg_query_shape() {
         let tools = NoopMempalaceTools;
-        let v = tools.kg_query("s", None).unwrap();
+        let v = tools.kg_query("s", None, None).unwrap();
         assert_has_keys(&v, &["facts"]);
     }
 
     #[test]
     fn noop_kg_timeline_shape() {
         let tools = NoopMempalaceTools;
-        let v = tools.kg_timeline("s").unwrap();
+        let v = tools.kg_timeline("s", None).unwrap();
         assert_has_keys(&v, &["timeline"]);
     }
 
     #[test]
     fn noop_kg_stats_shape() {
         let tools = NoopMempalaceTools;
-        let v = tools.kg_stats().unwrap();
+        let v = tools.kg_stats(None).unwrap();
         assert_has_keys(&v, &["facts", "subjects", "predicates", "active_facts"]);
         assert_eq!(v["facts"], 0);
     }
@@ -216,7 +232,7 @@ mod tests {
     #[test]
     fn noop_extract_shape() {
         let tools = NoopMempalaceTools;
-        let v = tools.extract(Some("text"), None).unwrap();
+        let v = tools.extract(Some("text"), None, None).unwrap();
         assert_has_keys(&v, &["kg_facts_added"]);
         assert_eq!(v["kg_facts_added"], 0);
     }

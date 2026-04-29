@@ -164,11 +164,20 @@ fn run() -> Result<()> {
             from_room,
             to_wing,
             to_room,
+            bank,
         } => {
             palace.init(None)?;
             let conn = palace.open()?;
             let now = now_rfc3339()?;
-            db::insert_tunnel(&conn, &from_wing, &from_room, &to_wing, &to_room, &now)?;
+            db::insert_tunnel(
+                &conn,
+                &from_wing,
+                &from_room,
+                &to_wing,
+                &to_room,
+                &now,
+                bank.as_deref(),
+            )?;
             print_out(
                 cli.output,
                 json!({"linked": true, "from_wing": from_wing, "from_room": from_room, "to_wing": to_wing, "to_room": to_room}),
@@ -310,13 +319,14 @@ fn run() -> Result<()> {
                 &object,
                 valid_from.as_deref(),
                 source_drawer_id,
+                None,
             )?;
             println!("kg fact added: {} {} {}", subject, predicate, object);
         }
         Commands::KgQuery { subject, as_of } => {
             palace.init(None)?;
             let conn = palace.open()?;
-            let rows = kg_query(&conn, &subject, as_of.as_deref())?;
+            let rows = kg_query(&conn, &subject, as_of.as_deref(), None)?;
             if rows.is_empty() {
                 print_out(
                     cli.output,
@@ -328,7 +338,7 @@ fn run() -> Result<()> {
             if cli.output == OutputFormat::Json {
                 print_out(
                     cli.output,
-                    json!({"facts": rows.iter().map(|r| json!({"id":r.id,"subject":r.subject,"predicate":r.predicate,"object":r.object,"valid_from":r.valid_from,"valid_to":r.valid_to,"source_drawer_id":r.source_drawer_id})).collect::<Vec<_>>()}),
+                    json!({"facts": rows.iter().map(|r| json!({"id":r.id,"subject":r.subject,"predicate":r.predicate,"object":r.object,"valid_from":r.valid_from,"valid_to":r.valid_to,"source_drawer_id":r.source_drawer_id,"bank_id":r.bank_id})).collect::<Vec<_>>()}),
                     "",
                 );
             } else {
@@ -351,11 +361,11 @@ fn run() -> Result<()> {
         Commands::KgTimeline { subject } => {
             palace.init(None)?;
             let conn = palace.open()?;
-            let rows = kg_timeline(&conn, &subject)?;
+            let rows = kg_timeline(&conn, &subject, None)?;
             if cli.output == OutputFormat::Json {
                 print_out(
                     cli.output,
-                    json!({"timeline": rows.iter().map(|r| json!({"id":r.id,"subject":r.subject,"predicate":r.predicate,"object":r.object,"valid_from":r.valid_from,"valid_to":r.valid_to,"source_drawer_id":r.source_drawer_id})).collect::<Vec<_>>()}),
+                    json!({"timeline": rows.iter().map(|r| json!({"id":r.id,"subject":r.subject,"predicate":r.predicate,"object":r.object,"valid_from":r.valid_from,"valid_to":r.valid_to,"source_drawer_id":r.source_drawer_id,"bank_id":r.bank_id})).collect::<Vec<_>>()}),
                     "",
                 );
             } else {
@@ -374,7 +384,7 @@ fn run() -> Result<()> {
         Commands::KgStats => {
             palace.init(None)?;
             let conn = palace.open()?;
-            let s = kg_stats(&conn)?;
+            let s = kg_stats(&conn, None)?;
             print_out(
                 cli.output,
                 json!({"facts":s.facts,"subjects":s.subjects,"predicates":s.predicates,"active_facts":s.active_facts}),
@@ -410,7 +420,8 @@ fn run() -> Result<()> {
         } => {
             palace.init(None)?;
             let conn = palace.open()?;
-            let changed = kg_invalidate(&conn, &subject, &predicate, &object, ended.as_deref())?;
+            let changed =
+                kg_invalidate(&conn, &subject, &predicate, &object, ended.as_deref(), None)?;
             println!("invalidated {changed} facts");
         }
         Commands::Reflect {
@@ -440,7 +451,7 @@ fn run() -> Result<()> {
                 (None, None) => anyhow::bail!("provide --text or --drawer-id"),
                 (Some(_), Some(_)) => anyhow::bail!("use only one of --text or --drawer-id"),
             };
-            let n = extract_to_kg(&conn, &config.llm, &body)?;
+            let n = extract_to_kg(&conn, &config.llm, &body, None)?;
             print_out(
                 cli.output,
                 json!({"kg_facts_added": n}),

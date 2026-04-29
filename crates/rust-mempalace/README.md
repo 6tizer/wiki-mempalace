@@ -128,8 +128,8 @@ LLM 启用判定（四项需同时满足）：
 
 - **drawers**：原文片段及 `wing` / `hall` / `room`、`bank_id`（记忆库/租户隔离）、`source_path`、内容哈希等元数据。
 - **drawers_fts**：FTS5 虚拟表，服务检索。
-- **tunnels**：跨 wing 的显式链接。
-- **kg_facts**：带 `valid_from` / `valid_to` 的 SPO 事实；可与 `source_drawer_id` 关联。
+- **tunnels**：跨 wing 的显式链接，带 `bank_id` 隔离。
+- **kg_facts**：带 `valid_from` / `valid_to` / `bank_id` 的 SPO 事实；可与 `source_drawer_id` 关联。
 - **traverse**：除显式 tunnel 外，不同 wing 下同名 `room` 可作为隐式连通边参与遍历。
 
 ---
