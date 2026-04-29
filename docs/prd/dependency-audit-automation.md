@@ -2,7 +2,9 @@
 
 ## Status
 
-Implemented in PR #66.
+Implemented in PR #66. Audit v2 PR 07 将 required PR gate 扩展到
+`cargo-deny`；本 PRD 的 scheduled/manual 边界仍只约束 `cargo audit`
+重型 artifact lane。
 
 ## Goal
 
@@ -17,7 +19,7 @@ Add a low-frequency supply-chain audit lane for Rust dependencies without slowin
 
 ## Out of Scope
 
-- Making dependency audit a required pull-request check.
+- Making `cargo audit` artifact lane a required pull-request check.
 - Remediating any advisory found by the audit.
 - Adding new runtime dependencies.
 - Writing audit output into the production Vault report tree.

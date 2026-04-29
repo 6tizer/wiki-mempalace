@@ -28,6 +28,7 @@
 - [ ] `cargo fmt --all -- --check`
 - [ ] `cargo test --workspace`
 - [ ] `cargo clippy --workspace --all-targets -- -D warnings`
+- [ ] `cargo deny --all-features check advisories bans licenses sources`
 - [ ] Other:
 
 ## Review Notes

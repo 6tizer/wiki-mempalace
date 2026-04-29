@@ -213,6 +213,7 @@ handoff 必须自包含，任何新窗口只读 spec 片段 + handoff 就能接�
 cargo fmt --all -- --check
 cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
+cargo deny --all-features check advisories bans licenses sources
 ```
 
 脚本新增时至少跑：
@@ -223,3 +224,5 @@ python -m py_compile scripts/<script>.py
 ```
 
 LongMemEval 不作为 PR required check；只走 scheduled / manual workflow，并上传 artifact。
+`cargo audit` 仍只走 scheduled / manual dependency audit workflow；required PR gate
+使用 `cargo-deny` 快速检查 advisories、license、yanked、duplicates、sources。
