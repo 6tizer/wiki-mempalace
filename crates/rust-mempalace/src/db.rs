@@ -24,7 +24,6 @@ pub fn init_schema(conn: &Connection) -> Result<()> {
             created_at TEXT NOT NULL
         );
 
-        CREATE UNIQUE INDEX IF NOT EXISTS idx_drawers_hash ON drawers(content_hash);
         CREATE INDEX IF NOT EXISTS idx_drawers_whr ON drawers(wing, hall, room);
 
         CREATE TABLE IF NOT EXISTS tunnels (
@@ -109,6 +108,11 @@ pub fn migrate_schema(conn: &Connection) -> Result<()> {
             [],
         )?;
     }
+    conn.execute("DROP INDEX IF EXISTS idx_drawers_hash", [])?;
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_drawers_bank_hash ON drawers(bank_id, content_hash)",
+        [],
+    )?;
 
     // Add hits column to benchmark_runs if missing (existing DBs have hits = 0 for old rows)
     let mut bstmt = conn.prepare("PRAGMA table_info(benchmark_runs)")?;
@@ -224,6 +228,7 @@ mod tests {
                 content_hash TEXT NOT NULL,
                 created_at TEXT NOT NULL
             );
+            CREATE UNIQUE INDEX idx_drawers_hash ON drawers(content_hash);
             CREATE TABLE tunnels (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 from_wing TEXT NOT NULL,
@@ -261,6 +266,29 @@ mod tests {
         assert!(has_column(&conn, "drawers", "bank_id"));
         assert!(has_column(&conn, "tunnels", "bank_id"));
         assert!(has_column(&conn, "kg_facts", "bank_id"));
+        assert!(!has_index(&conn, "idx_drawers_hash"));
+        assert!(has_index(&conn, "idx_drawers_bank_hash"));
+        conn.execute(
+            "INSERT INTO drawers(wing, hall, room, source_path, content, content_hash, bank_id, created_at)
+             VALUES('w', 'h', 'r1', 'a.md', 'same', 'hash-same', 'bank_a', 'now')",
+            [],
+        )
+        .expect("insert bank_a drawer");
+        conn.execute(
+            "INSERT INTO drawers(wing, hall, room, source_path, content, content_hash, bank_id, created_at)
+             VALUES('w', 'h', 'r1', 'b.md', 'same', 'hash-same', 'bank_b', 'now')",
+            [],
+        )
+        .expect("same hash in different bank is allowed");
+        let same_bank = conn.execute(
+            "INSERT INTO drawers(wing, hall, room, source_path, content, content_hash, bank_id, created_at)
+             VALUES('w', 'h', 'r2', 'c.md', 'same', 'hash-same', 'bank_a', 'now')",
+            [],
+        );
+        assert!(
+            same_bank.is_err(),
+            "same hash in same bank should remain unique"
+        );
         conn.execute(
             "INSERT INTO tunnels(from_wing, from_room, to_wing, to_room, created_at)
              VALUES('w', 'a', 'w', 'b', 'now')",
@@ -285,5 +313,14 @@ mod tests {
             }
         }
         false
+    }
+
+    fn has_index(conn: &Connection, name: &str) -> bool {
+        conn.query_row(
+            "SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = ?1",
+            params![name],
+            |_| Ok(()),
+        )
+        .is_ok()
     }
 }

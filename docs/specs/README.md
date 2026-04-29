@@ -57,4 +57,5 @@
 - [m12-executor-guarded-apply/](m12-executor-guarded-apply/) — guarded apply for M12 executor plans with explicit allowlist。已合入 PR #82。
 - [audit-v2-01-mcp-input-boundary/](audit-v2-01-mcp-input-boundary/) — Audit Report Follow-up v2 PR 01: MCP limit clamp and lint report path traversal guard。已合入 PR #83。
 - [audit-v2-02-mcp-scope-capability/](audit-v2-02-mcp-scope-capability/) — Audit Report Follow-up v2 PR 02: MCP write scope capability and supersede visibility guard。已合入 PR #84。
-- [audit-v2-03-mempalace-bank-capability/](audit-v2-03-mempalace-bank-capability/) — Audit Report Follow-up v2 PR 03: derive mempalace bank from MCP viewer scope and scope KG reads。Active branch `codex/audit-v2-03-mempalace-bank-capability`。
+- [audit-v2-03-mempalace-bank-capability/](audit-v2-03-mempalace-bank-capability/) — Audit Report Follow-up v2 PR 03: derive mempalace bank from MCP viewer scope and scope KG reads。已合入 PR #85。
+- [audit-v2-04-cross-bank-dedupe/](audit-v2-04-cross-bank-dedupe/) — Audit Report Follow-up v2 PR 04: drawer dedupe by `(bank_id, content_hash)`。Active branch `codex/audit-v2-04-cross-bank-dedupe`。

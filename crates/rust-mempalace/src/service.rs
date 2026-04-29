@@ -182,8 +182,8 @@ pub fn mine_path(
         let content_hash = sha256_hex(&source_path, content_trimmed);
         let exists = conn
             .query_row(
-                "SELECT 1 FROM drawers WHERE content_hash = ?1 LIMIT 1",
-                params![content_hash],
+                "SELECT 1 FROM drawers WHERE bank_id = ?1 AND content_hash = ?2 LIMIT 1",
+                params![bank, content_hash],
                 |_| Ok(1i64),
             )
             .optional()?
@@ -240,8 +240,8 @@ pub fn mine_path_convos(
             let content_hash = sha256_hex(&source_path, &chunk);
             let exists = conn
                 .query_row(
-                    "SELECT 1 FROM drawers WHERE content_hash = ?1 LIMIT 1",
-                    params![content_hash],
+                    "SELECT 1 FROM drawers WHERE bank_id = ?1 AND content_hash = ?2 LIMIT 1",
+                    params![bank, content_hash],
                     |_| Ok(1i64),
                 )
                 .optional()?
@@ -1415,6 +1415,7 @@ pub fn split_mega_file(
 mod tests {
     use super::*;
     use rusqlite::params;
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
     fn fts_query_quotes_user_tokens() {
@@ -1569,5 +1570,98 @@ mod tests {
         let changed = kg_invalidate(&conn, "Subject", "likes", "A", Some(now), Some("bank_a"))
             .expect("invalidate bank_a");
         assert_eq!(changed, 1);
+    }
+
+    #[test]
+    fn mine_path_dedupes_by_bank_and_content_hash() {
+        let conn = Connection::open_in_memory().expect("open memory db");
+        crate::db::init_schema(&conn).expect("init schema");
+        let root = unique_test_dir("mine-bank-dedupe");
+        std::fs::create_dir_all(&root).expect("create temp dir");
+        let note = root.join("same.md");
+        std::fs::write(&note, "same content for both banks").expect("write note");
+        let rules = root.join("missing-rules.json");
+
+        assert_eq!(
+            mine_path(&conn, &root, &rules, None, None, None, Some("bank_a")).expect("mine bank_a"),
+            1
+        );
+        assert_eq!(
+            mine_path(&conn, &root, &rules, None, None, None, Some("bank_b")).expect("mine bank_b"),
+            1
+        );
+        assert_eq!(
+            mine_path(&conn, &root, &rules, None, None, None, Some("bank_a"))
+                .expect("remine bank_a"),
+            0
+        );
+
+        let bank_a: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM drawers WHERE bank_id = 'bank_a'",
+                [],
+                |r| r.get(0),
+            )
+            .expect("bank_a count");
+        let bank_b: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM drawers WHERE bank_id = 'bank_b'",
+                [],
+                |r| r.get(0),
+            )
+            .expect("bank_b count");
+        assert_eq!(bank_a, 1);
+        assert_eq!(bank_b, 1);
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn mine_path_convos_dedupes_by_bank_and_content_hash() {
+        let conn = Connection::open_in_memory().expect("open memory db");
+        crate::db::init_schema(&conn).expect("init schema");
+        let root = unique_test_dir("mine-convos-bank-dedupe");
+        std::fs::create_dir_all(&root).expect("create temp dir");
+        let convo = root.join("chat.txt");
+        std::fs::write(
+            &convo,
+            "User: remember this same conversation\nAssistant: same answer",
+        )
+        .expect("write convo");
+        let rules = root.join("missing-rules.json");
+
+        assert_eq!(
+            mine_path_convos(&conn, &root, &rules, None, None, None, Some("bank_a"))
+                .expect("mine convos bank_a"),
+            1
+        );
+        assert_eq!(
+            mine_path_convos(&conn, &root, &rules, None, None, None, Some("bank_b"))
+                .expect("mine convos bank_b"),
+            1
+        );
+        assert_eq!(
+            mine_path_convos(&conn, &root, &rules, None, None, None, Some("bank_a"))
+                .expect("remine convos bank_a"),
+            0
+        );
+
+        let total: i64 = conn
+            .query_row("SELECT COUNT(*) FROM drawers", [], |r| r.get(0))
+            .expect("total count");
+        assert_eq!(total, 2);
+
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    fn unique_test_dir(name: &str) -> PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        std::env::temp_dir().join(format!(
+            "rust-mempalace-{name}-{}-{nanos}",
+            std::process::id()
+        ))
     }
 }

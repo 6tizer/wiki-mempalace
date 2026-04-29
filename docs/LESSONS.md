@@ -53,6 +53,15 @@
 - Tests or reviews that caught issues: focused tests 覆盖 MCP schema/拒绝 client bank，以及 KG query/timeline/stats/invalidate bank-scoped 行为；security review 抓到显式 tunnel traverse/status 泄漏和旧 schema bank index migration 顺序问题。
 - Next plan note: 下一 PR 做 cross-bank drawer dedupe，把 `drawers(content_hash)` 从全局唯一迁到 `(bank_id, content_hash)`。
 
+## 2026-04-29 / Audit v2 PR 04 Cross-Bank Drawer Dedupe
+
+- Scope: `drawers(content_hash)` 全局唯一迁移为 `(bank_id, content_hash)`。
+- What worked: 先改 SQLite 唯一索引，再同步 mine/live sink 的 preflight 查重，保证 DB 约束和应用层跳过逻辑一致。
+- What caused rework: 无。
+- Spec changes needed: PR4 不改 `content_hash` 计算；同一 source/content 在不同 bank 共享 hash，但唯一性由 bank 维度区分。
+- Tests or reviews that caught issues: 旧 schema migration 测试覆盖 legacy index drop + composite index；mine/live sink 测试覆盖跨 bank 可共存、同 bank idempotent；migration review 抓到 `mine_path_convos` 覆盖缺口。
+- Next plan note: 下一 PR 做 QueryServed privacy/schema，避免 query 原文进入 outbox/history。
+
 ## 2026-04-28 / PR #78 CLI Command Modularization phase 1
 
 - Scope: 先搬低风险命令域：`schema-validate`、`llm-smoke`、outbox export/ack。

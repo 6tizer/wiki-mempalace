@@ -46,8 +46,8 @@ impl LiveMempalaceSink {
             let content_hash = sha256_hex(source_path, content);
             let exists = conn
                 .query_row(
-                    "SELECT 1 FROM drawers WHERE content_hash = ?1 LIMIT 1",
-                    params![content_hash],
+                    "SELECT 1 FROM drawers WHERE bank_id = ?1 AND content_hash = ?2 LIMIT 1",
+                    params![self.bank_id.as_str(), content_hash],
                     |_| Ok(1i64),
                 )
                 .optional()
