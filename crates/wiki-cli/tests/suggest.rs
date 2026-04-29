@@ -25,11 +25,11 @@ fn run_ingest(db_path: &Path, scope: &str, uri: &str, body: &str) {
 
 fn append_query_event(db_path: &Path, fingerprint: &str, top_doc_ids: Vec<String>) {
     let repo = SqliteRepository::open(db_path).unwrap();
-    repo.append_outbox(&WikiEvent::QueryServed {
-        query_fingerprint: fingerprint.to_string(),
+    repo.append_outbox(&WikiEvent::legacy_query_served(
+        fingerprint,
         top_doc_ids,
-        at: OffsetDateTime::now_utc(),
-    })
+        OffsetDateTime::now_utc(),
+    ))
     .unwrap();
 }
 

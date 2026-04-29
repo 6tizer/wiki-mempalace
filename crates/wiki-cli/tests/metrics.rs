@@ -189,11 +189,11 @@ fn metrics_custom_consumer_tag_reports_backlog() {
     let db_path = db.path().to_owned();
     let repo = SqliteRepository::open(&db_path).unwrap();
     for idx in 1..=3 {
-        repo.append_outbox(&WikiEvent::QueryServed {
-            query_fingerprint: format!("q{idx}"),
-            top_doc_ids: vec![format!("doc:{idx}")],
-            at: OffsetDateTime::now_utc(),
-        })
+        repo.append_outbox(&WikiEvent::legacy_query_served(
+            format!("q{idx}"),
+            vec![format!("doc:{idx}")],
+            OffsetDateTime::now_utc(),
+        ))
         .unwrap();
     }
     repo.mark_outbox_processed(1, "archive").unwrap();

@@ -196,9 +196,17 @@ fn repeated_visible_queries(
 ) -> Vec<QueryGroup> {
     let mut counts: BTreeMap<String, QueryGroup> = BTreeMap::new();
     for event in events {
-        let WikiEvent::QueryServed { top_doc_ids, .. } = event else {
+        let WikiEvent::QueryServed {
+            viewer_scope: event_scope,
+            top_doc_ids,
+            ..
+        } = event
+        else {
             continue;
         };
+        if !query_event_scope_visible(event_scope.as_ref(), viewer_scope) {
+            continue;
+        }
         if query_doc_scope(store, viewer_scope, top_doc_ids).is_none() {
             continue;
         }
@@ -234,6 +242,16 @@ fn query_doc_scope(
         Some(first)
     } else {
         None
+    }
+}
+
+fn query_event_scope_visible(event_scope: Option<&Scope>, viewer_scope: Option<&Scope>) -> bool {
+    match (event_scope, viewer_scope) {
+        (Some(event_scope), Some(viewer_scope)) => {
+            document_visible_to_viewer(event_scope, viewer_scope)
+        }
+        (Some(_), None) => false,
+        (None, _) => true,
     }
 }
 
@@ -483,16 +501,12 @@ mod tests {
         let doc_id = format_page_doc_id(page.id);
         store.pages.insert(page.id, page);
         let events = vec![
-            WikiEvent::QueryServed {
-                query_fingerprint: "raw secret query".to_string(),
-                top_doc_ids: vec![doc_id.clone()],
-                at: generated_at(),
-            },
-            WikiEvent::QueryServed {
-                query_fingerprint: "raw secret query".to_string(),
-                top_doc_ids: vec![doc_id],
-                at: generated_at(),
-            },
+            WikiEvent::legacy_query_served(
+                "raw secret query",
+                vec![doc_id.clone()],
+                generated_at(),
+            ),
+            WikiEvent::legacy_query_served("raw secret query", vec![doc_id], generated_at()),
         ];
 
         let report = scan(&store, &schema, Some(&scope), &events);
@@ -515,6 +529,103 @@ mod tests {
     }
 
     #[test]
+    fn scoped_query_served_requires_event_scope_to_match_viewer() {
+        let schema = DomainSchema::permissive_default();
+        let viewer = private_scope("a");
+        let other = private_scope("b");
+        let mut store = InMemoryStore::default();
+        let page = WikiPage::new("Visible", "body", viewer.clone());
+        let doc_id = format_page_doc_id(page.id);
+        store.pages.insert(page.id, page);
+
+        let events = vec![
+            WikiEvent::query_served(
+                "other scope query",
+                Some(other.clone()),
+                vec![doc_id.clone()],
+                generated_at(),
+            ),
+            WikiEvent::query_served(
+                "other scope query",
+                Some(other),
+                vec![doc_id],
+                generated_at(),
+            ),
+        ];
+
+        let report = scan(&store, &schema, Some(&viewer), &events);
+
+        assert!(!report
+            .suggestions
+            .iter()
+            .any(|suggestion| suggestion.code == "suggest.crystallize_candidate"));
+    }
+
+    #[test]
+    fn scoped_query_served_is_skipped_without_scan_viewer() {
+        let schema = DomainSchema::permissive_default();
+        let scope = private_scope("a");
+        let mut store = InMemoryStore::default();
+        let page = WikiPage::new("Visible", "body", scope.clone());
+        let doc_id = format_page_doc_id(page.id);
+        store.pages.insert(page.id, page);
+        let events = vec![
+            WikiEvent::query_served(
+                "scoped query",
+                Some(scope.clone()),
+                vec![doc_id.clone()],
+                generated_at(),
+            ),
+            WikiEvent::query_served("scoped query", Some(scope), vec![doc_id], generated_at()),
+        ];
+
+        let report = scan(&store, &schema, None, &events);
+
+        assert!(!report
+            .suggestions
+            .iter()
+            .any(|suggestion| suggestion.code == "suggest.crystallize_candidate"));
+    }
+
+    #[test]
+    fn scoped_visible_query_served_generates_candidate_without_raw_query() {
+        let schema = DomainSchema::permissive_default();
+        let viewer = private_scope("a");
+        let mut store = InMemoryStore::default();
+        let page = WikiPage::new("Visible", "body", viewer.clone());
+        let doc_id = format_page_doc_id(page.id);
+        store.pages.insert(page.id, page);
+        let events = vec![
+            WikiEvent::query_served(
+                "new secret query",
+                Some(viewer.clone()),
+                vec![doc_id.clone()],
+                generated_at(),
+            ),
+            WikiEvent::query_served(
+                "new secret query",
+                Some(viewer.clone()),
+                vec![doc_id],
+                generated_at(),
+            ),
+        ];
+
+        let report = scan(&store, &schema, Some(&viewer), &events);
+
+        let suggestion = report
+            .suggestions
+            .iter()
+            .find(|suggestion| suggestion.code == "suggest.crystallize_candidate")
+            .expect("expected crystallize suggestion");
+        assert!(!suggestion.reason.contains("new secret query"));
+        assert!(!suggestion
+            .suggested_command
+            .as_deref()
+            .unwrap_or_default()
+            .contains("new secret query"));
+    }
+
+    #[test]
     fn hidden_unresolved_mixed_scope_query_served_are_skipped() {
         let schema = DomainSchema::permissive_default();
         let viewer = private_scope("a");
@@ -528,36 +639,32 @@ mod tests {
         store.pages.insert(hidden_page.id, hidden_page);
         let unresolved_doc_id = format!("page:{}", Uuid::new_v4());
         let events = vec![
-            WikiEvent::QueryServed {
-                query_fingerprint: "hidden raw query".to_string(),
-                top_doc_ids: vec![hidden_doc_id.clone()],
-                at: generated_at(),
-            },
-            WikiEvent::QueryServed {
-                query_fingerprint: "hidden raw query".to_string(),
-                top_doc_ids: vec![hidden_doc_id.clone()],
-                at: generated_at(),
-            },
-            WikiEvent::QueryServed {
-                query_fingerprint: "unresolved raw query".to_string(),
-                top_doc_ids: vec![unresolved_doc_id.clone()],
-                at: generated_at(),
-            },
-            WikiEvent::QueryServed {
-                query_fingerprint: "unresolved raw query".to_string(),
-                top_doc_ids: vec![unresolved_doc_id],
-                at: generated_at(),
-            },
-            WikiEvent::QueryServed {
-                query_fingerprint: "mixed raw query".to_string(),
-                top_doc_ids: vec![visible_doc_id.clone(), hidden_doc_id.clone()],
-                at: generated_at(),
-            },
-            WikiEvent::QueryServed {
-                query_fingerprint: "empty raw query".to_string(),
-                top_doc_ids: Vec::new(),
-                at: generated_at(),
-            },
+            WikiEvent::legacy_query_served(
+                "hidden raw query",
+                vec![hidden_doc_id.clone()],
+                generated_at(),
+            ),
+            WikiEvent::legacy_query_served(
+                "hidden raw query",
+                vec![hidden_doc_id.clone()],
+                generated_at(),
+            ),
+            WikiEvent::legacy_query_served(
+                "unresolved raw query",
+                vec![unresolved_doc_id.clone()],
+                generated_at(),
+            ),
+            WikiEvent::legacy_query_served(
+                "unresolved raw query",
+                vec![unresolved_doc_id],
+                generated_at(),
+            ),
+            WikiEvent::legacy_query_served(
+                "mixed raw query",
+                vec![visible_doc_id.clone(), hidden_doc_id.clone()],
+                generated_at(),
+            ),
+            WikiEvent::legacy_query_served("empty raw query", Vec::new(), generated_at()),
         ];
 
         let report = scan(&store, &schema, Some(&viewer), &events);
@@ -568,16 +675,16 @@ mod tests {
             .any(|suggestion| suggestion.code == "suggest.crystallize_candidate"));
 
         let mixed_events = vec![
-            WikiEvent::QueryServed {
-                query_fingerprint: "mixed raw query".to_string(),
-                top_doc_ids: vec![visible_doc_id.clone(), hidden_doc_id.clone()],
-                at: generated_at(),
-            },
-            WikiEvent::QueryServed {
-                query_fingerprint: "mixed raw query".to_string(),
-                top_doc_ids: vec![visible_doc_id, hidden_doc_id],
-                at: generated_at(),
-            },
+            WikiEvent::legacy_query_served(
+                "mixed raw query",
+                vec![visible_doc_id.clone(), hidden_doc_id.clone()],
+                generated_at(),
+            ),
+            WikiEvent::legacy_query_served(
+                "mixed raw query",
+                vec![visible_doc_id, hidden_doc_id],
+                generated_at(),
+            ),
         ];
         let mixed_report = scan(&store, &schema, None, &mixed_events);
         assert!(!mixed_report
@@ -596,16 +703,8 @@ mod tests {
         let doc_id = format_claim_doc_id(claim.id);
         store.claims.insert(claim.id, claim);
         let events = vec![
-            WikiEvent::QueryServed {
-                query_fingerprint: "stale raw query".to_string(),
-                top_doc_ids: vec![doc_id.clone()],
-                at: generated_at(),
-            },
-            WikiEvent::QueryServed {
-                query_fingerprint: "stale raw query".to_string(),
-                top_doc_ids: vec![doc_id],
-                at: generated_at(),
-            },
+            WikiEvent::legacy_query_served("stale raw query", vec![doc_id.clone()], generated_at()),
+            WikiEvent::legacy_query_served("stale raw query", vec![doc_id], generated_at()),
         ];
 
         let report = scan(&store, &schema, Some(&scope), &events);
@@ -625,11 +724,11 @@ mod tests {
             .with_entry_type(EntryType::Concept);
         store.pages.insert(page.id, page);
         let before = serde_json::to_value(store.to_snapshot(&[])).unwrap();
-        let events = vec![WikiEvent::QueryServed {
-            query_fingerprint: "raw query".to_string(),
-            top_doc_ids: Vec::new(),
-            at: generated_at(),
-        }];
+        let events = vec![WikiEvent::legacy_query_served(
+            "raw query",
+            Vec::new(),
+            generated_at(),
+        )];
         let before_events = serde_json::to_value(&events).unwrap();
 
         let _report = scan(&store, &schema, Some(&scope), &events);

@@ -618,7 +618,7 @@ impl<H: WikiHook> LlmWikiEngine<H> {
     ) -> Vec<(String, f64)> {
         let ranked = self.query_ranked_memory(ctx, now, vector_rank_override, graph_rank_override);
         let top: Vec<String> = ranked.iter().take(24).map(|(id, _)| id.clone()).collect();
-        self.record_query(ctx.query, top, actor);
+        self.record_query(ctx.query, ctx.viewer_scope.as_ref(), top, actor);
         ranked
     }
 
@@ -640,7 +640,7 @@ impl<H: WikiHook> LlmWikiEngine<H> {
             graph_rank_override,
         );
         let top: Vec<String> = ranked.iter().take(24).map(|(id, _)| id.clone()).collect();
-        self.record_query(ctx.query, top, actor);
+        self.record_query(ctx.query, ctx.viewer_scope.as_ref(), top, actor);
         ranked
     }
 
@@ -771,17 +771,29 @@ impl<H: WikiHook> LlmWikiEngine<H> {
 
     pub fn record_query(
         &mut self,
-        query_fingerprint: impl Into<String>,
+        query: impl AsRef<str>,
+        viewer_scope: Option<&Scope>,
         top_doc_ids: Vec<String>,
         actor: &str,
     ) {
-        let fp = query_fingerprint.into();
-        self.audit(AuditOperation::RunQuery, actor, format!("query fp={fp}"));
-        self.emit(WikiEvent::QueryServed {
-            query_fingerprint: fp,
+        let event = WikiEvent::query_served(
+            query.as_ref(),
+            viewer_scope.cloned(),
             top_doc_ids,
-            at: OffsetDateTime::now_utc(),
-        });
+            OffsetDateTime::now_utc(),
+        );
+        let WikiEvent::QueryServed {
+            query_fingerprint, ..
+        } = &event
+        else {
+            unreachable!("query_served constructor must return QueryServed");
+        };
+        self.audit(
+            AuditOperation::RunQuery,
+            actor,
+            format!("query hash={query_fingerprint}"),
+        );
+        self.emit(event);
     }
 
     pub fn load_from_repo<R: WikiRepository>(
@@ -1624,15 +1636,25 @@ mod tests {
     fn record_query_emits_query_served_event() {
         let mut eng = LlmWikiEngine::new(DomainSchema::permissive_default());
         let top = vec!["claim:1".into(), "page:2".into()];
-        eng.record_query("redis", top.clone(), "tester");
+        let scope = Scope::Private {
+            agent_id: "a".into(),
+        };
+        eng.record_query("redis secret", Some(&scope), top.clone(), "tester");
         assert!(eng.outbox.iter().any(|event| {
             matches!(
                 event,
                 WikiEvent::QueryServed {
                     query_fingerprint,
+                    query_hash: Some(query_hash),
+                    query_hash_schema_version: Some(1),
+                    schema_version: 2,
+                    viewer_scope: Some(event_scope),
                     top_doc_ids,
                     ..
-                } if query_fingerprint == "redis" && top_doc_ids == &top
+                } if query_fingerprint == query_hash
+                    && !query_fingerprint.contains("redis secret")
+                    && event_scope == &scope
+                    && top_doc_ids == &top
             )
         }));
     }

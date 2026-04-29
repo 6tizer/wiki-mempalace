@@ -720,11 +720,11 @@ mod tests {
                 at: time::OffsetDateTime::now_utc(),
             })
             .unwrap(),
-            serde_json::to_string(&WikiEvent::QueryServed {
-                query_fingerprint: "q".into(),
-                top_doc_ids: vec!["claim:1".into()],
-                at: time::OffsetDateTime::now_utc(),
-            })
+            serde_json::to_string(&WikiEvent::legacy_query_served(
+                "q",
+                vec!["claim:1".into()],
+                time::OffsetDateTime::now_utc(),
+            ))
             .unwrap(),
             serde_json::to_string(&WikiEvent::LintRunFinished {
                 findings: 2,
@@ -757,8 +757,11 @@ mod tests {
 
         let actual_events: Vec<String> = event_source
             .lines()
+            .skip_while(|line| !line.trim().starts_with("pub enum WikiEvent"))
+            .skip(1)
+            .take_while(|line| line.trim() != "}")
             .map(str::trim)
-            .filter(|line| line.ends_with('{') && !line.starts_with("pub enum"))
+            .filter(|line| line.ends_with('{'))
             .map(|line| line.trim_end_matches('{').trim().to_string())
             .filter(|line| !line.is_empty())
             .collect();
