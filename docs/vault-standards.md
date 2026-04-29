@@ -21,9 +21,22 @@
 
 `write_projection` **只**维护 `pages/`**、`index.md`、`log.md`；**不向** `sources/` 根目录写 source 副本，**也不向** 根 `concepts/` 写哈希命名的 claim 投影（claim 的语义由 `pages/concept/` 承载，引擎内部保留在 `wiki.db`）。
 
+引擎投影页必须带：
+
+- `managed_by: wiki-mempalace`
+- `managed_kind: wiki-page-projection`
+
+只有同时带上述 marker 和合法 UUID `id:` 的 `pages/` 文件会被 projection cleanup 视为
+engine-managed。stale / obsolete managed page 会被移动到 `.wiki/trash/projection/`，
+不会直接不可恢复删除。手写页面即使有 UUID `id:`，只要没有 managed marker，也不会被
+`write_projection` 清理或覆盖；若它与新 projection 目标同名，projection 会失败并保留
+原文件。`pages/` 和 `pages/{entry_type}/` 写入父目录不能是 symlink；root
+`index.md` / `log.md` 也拒绝 symlink 目标。
+
 ## 命名规则
 
 - **Notion 迁移 slug**：保留中文字符；空白、标点、`/` 等折叠为 `-`；文件名最长 80 个字符；**不用** UUID 作为默认文件名。
+- 引擎投影时如果标题 slug 为空，文件名 fallback 为 `page-{page_id前8位}.md`，避免生成 `.md`。
 - Summary 文件：`pages/summary/摘要：{原标题}.md`（与 Notion 迁移一致）。
 
 ## Source frontmatter 契约

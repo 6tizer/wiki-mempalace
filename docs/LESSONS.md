@@ -116,6 +116,15 @@
 - Tests or reviews that caught issues: reliability review 抓到 manual ack 可把 cursor 推到未来，以及 busy test 没覆盖 wrapper；`cargo test -p wiki-storage -- --nocapture` 固定了 second-consumer ack、legacy `processed_at` 兼容、future-cursor clamp 和 busy lock wait。
 - Next plan note: 下一 PR 做 Vault projection safety + docs/test cleanup，不继续扩大 outbox protocol。
 
+## 2026-04-29 / Audit v2 PR 11 Vault Docs Hardening
+
+- Scope: Vault projection safety、docs consistency、scheduled/manual hardening lane。
+- What worked: 把 engine-owned 判断从 UUID `id:` 升级为显式 managed marker，再把 stale cleanup 改成 quarantine，并在 page/root 写入目标和父目录加 guard，避免误删、覆盖手写 UUID 页或写穿 symlink。
+- What caused rework: architecture 文档同时存在重复章节和旧 Notion 状态；review 还抓到 cleanup guard 不等于 write guard、target guard 不等于 parent/root guard，PR11 必须把文档一致性和写路径数据保护都当验收项。
+- Spec changes needed: 旧无 marker projection 文件保守保留；如需清理历史文件，应另开 dry-run cleanup spec。
+- Tests or reviews that caught issues: focused projection tests 覆盖 empty slug、YAML escape、managed marker、quarantine、write collision、symlinked subdir、root index symlink、手写 UUID 保留；slow lane smoke 覆盖 perf/MCP boundary/DB/CJK/bank-scope 矩阵。
+- Next plan note: Audit v2 新增剩余项已收敛，后续进入 CI/PR closeout。
+
 ## 2026-04-28 / PR #78 CLI Command Modularization phase 1
 
 - Scope: 先搬低风险命令域：`schema-validate`、`llm-smoke`、outbox export/ack。

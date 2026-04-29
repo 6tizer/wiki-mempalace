@@ -17,6 +17,7 @@
 - [automation-health-alerts.md](automation-health-alerts.md) — `wiki-cli automation health` 阈值、退出码、介入建议。
 - [recovery-runbook.md](recovery-runbook.md) — `wiki.db`、vault、`palace.db` 恢复流程。
 - [recovery-drill-template.md](recovery-drill-template.md) — 恢复演练记录模板。
+- `.github/workflows/hardening.yml` / `scripts/hardening-smoke.sh` — scheduled/manual slow lane，覆盖 perf smoke、MCP malformed/boundary、DB corruption、CJK、bank/scope；不属于 PR quick required gate。
 
 ## 活跃计划
 

@@ -1,0 +1,46 @@
+name: Hardening
+
+on:
+  workflow_dispatch:
+    inputs:
+      lane:
+        description: "Hardening lane to run"
+        required: true
+        default: "all"
+        type: choice
+        options:
+          - all
+          - perf
+          - mcp-boundary
+          - db-corruption
+          - cjk-retrieval
+          - bank-scope
+  schedule:
+    - cron: "0 4 * * *"
+
+permissions:
+  contents: read
+
+jobs:
+  hardening:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        lane: [perf, mcp-boundary, db-corruption, cjk-retrieval, bank-scope]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache cargo artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Run hardening lane
+        if: github.event_name == 'schedule' || inputs.lane == 'all' || inputs.lane == matrix.lane
+        run: bash scripts/hardening-smoke.sh "${{ matrix.lane }}"

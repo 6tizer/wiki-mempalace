@@ -7,6 +7,9 @@ use time::format_description::well_known::Rfc3339;
 use uuid::Uuid;
 use wiki_core::{AuditRecord, Claim, LintFinding, LintSeverity, RawArtifact, Scope, WikiPage};
 
+const PROJECTION_MANAGED_BY: &str = "wiki-mempalace";
+const PROJECTION_MANAGED_KIND: &str = "wiki-page-projection";
+
 #[derive(Debug, Default, Clone, Copy)]
 pub struct ProjectionStats {
     pub pages_written: usize,
@@ -39,7 +42,7 @@ pub fn write_projection(
         fs::create_dir_all(&dir)?;
         let fname = projection_page_filename(page, subdir, &filename_counts);
         let path = dir.join(format!("{fname}.md"));
-        fs::write(&path, render_page_with_frontmatter(page))?;
+        write_projection_page_file(&pages_dir, &path, page)?;
         written_page_paths.insert(path);
         stats.pages_written += 1;
         *page_counts.entry(subdir).or_default() += 1;
@@ -50,8 +53,8 @@ pub fn write_projection(
     // `render_claim_with_frontmatter` 仍保留供测试 / 未来导出使用。
     let _ = &store.claims;
 
-    fs::write(wiki_root.join("index.md"), render_index(&page_counts))?;
-    fs::write(wiki_root.join("log.md"), render_log(audits))?;
+    write_root_projection_file(wiki_root, "index.md", render_index(&page_counts).as_bytes())?;
+    write_root_projection_file(wiki_root, "log.md", render_log(audits).as_bytes())?;
     Ok(stats)
 }
 
@@ -75,22 +78,219 @@ pub fn write_projection_pages(
         let dir = pages_dir.join(subdir);
         fs::create_dir_all(&dir)?;
         let fname = projection_page_filename(page, subdir, &filename_counts);
-        fs::write(
-            dir.join(format!("{fname}.md")),
-            render_page_with_frontmatter(page),
-        )?;
+        write_projection_page_file(&pages_dir, &dir.join(format!("{fname}.md")), page)?;
         stats.pages_written += 1;
     }
     Ok(stats)
 }
 
+fn write_projection_page_file(pages_dir: &Path, path: &Path, page: &WikiPage) -> io::Result<()> {
+    prepare_projection_write_target(pages_dir, path, page.id.0)?;
+    write_projection_file_atomic(path, render_page_with_frontmatter(page).as_bytes())
+}
+
+fn write_root_projection_file(wiki_root: &Path, filename: &str, contents: &[u8]) -> io::Result<()> {
+    let path = wiki_root.join(filename);
+    validate_root_projection_target(wiki_root, &path)?;
+    write_projection_file_atomic(&path, contents)
+}
+
+fn validate_root_projection_target(wiki_root: &Path, path: &Path) -> io::Result<()> {
+    let Some(parent) = path.parent() else {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "root projection target must have a parent directory",
+        ));
+    };
+    let canonical_wiki_root = fs::canonicalize(wiki_root)?;
+    let canonical_parent = fs::canonicalize(parent)?;
+    if canonical_parent != canonical_wiki_root {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!(
+                "root projection target parent must be wiki root: {}",
+                parent.display()
+            ),
+        ));
+    }
+    let metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(err) => return Err(err),
+    };
+    if metadata.file_type().is_symlink() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!(
+                "root projection target must not be a symlink: {}",
+                path.display()
+            ),
+        ));
+    }
+    if !metadata.is_file() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!(
+                "root projection target must be a markdown file: {}",
+                path.display()
+            ),
+        ));
+    }
+    Ok(())
+}
+
+fn prepare_projection_write_target(pages_dir: &Path, path: &Path, page_id: Uuid) -> io::Result<()> {
+    validate_projection_parent(pages_dir, path)?;
+    let metadata = match fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(err) => return Err(err),
+    };
+    if metadata.file_type().is_symlink() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!(
+                "projection target must not be a symlink: {}",
+                path.display()
+            ),
+        ));
+    }
+    if !metadata.is_file() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!(
+                "projection target must be a markdown file: {}",
+                path.display()
+            ),
+        ));
+    }
+
+    let content = match fs::read_to_string(path) {
+        Ok(content) => content,
+        Err(err) if err.kind() == io::ErrorKind::InvalidData => {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!(
+                    "projection target exists but is not valid UTF-8: {}",
+                    path.display()
+                ),
+            ));
+        }
+        Err(err) => return Err(err),
+    };
+    match managed_projection_page_id(&content) {
+        Some(existing_id) if existing_id == page_id => Ok(()),
+        Some(_) => quarantine_managed_page(pages_dir, path),
+        None => Err(io::Error::new(
+            io::ErrorKind::AlreadyExists,
+            format!(
+                "projection target exists but is not a wiki-mempalace managed projection: {}",
+                path.display()
+            ),
+        )),
+    }
+}
+
+fn validate_projection_parent(pages_dir: &Path, path: &Path) -> io::Result<()> {
+    let Some(parent) = path.parent() else {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "projection target must have a parent directory",
+        ));
+    };
+    if fs::symlink_metadata(pages_dir)?.file_type().is_symlink() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "pages directory must not be a symlink",
+        ));
+    }
+    let relative_parent = parent.strip_prefix(pages_dir).map_err(|_| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!(
+                "projection target parent must stay under pages directory: {}",
+                parent.display()
+            ),
+        )
+    })?;
+
+    let mut current = pages_dir.to_path_buf();
+    for component in relative_parent.components() {
+        let std::path::Component::Normal(part) = component else {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "projection target parent must not contain special path components",
+            ));
+        };
+        current.push(part);
+        if fs::symlink_metadata(&current)?.file_type().is_symlink() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!(
+                    "projection target parent must not be under a symlink: {}",
+                    current.display()
+                ),
+            ));
+        }
+    }
+
+    let canonical_pages_dir = fs::canonicalize(pages_dir)?;
+    let canonical_parent = fs::canonicalize(parent)?;
+    if !canonical_parent.starts_with(&canonical_pages_dir) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!(
+                "projection target parent escaped pages directory: {}",
+                parent.display()
+            ),
+        ));
+    }
+    Ok(())
+}
+
+fn write_projection_file_atomic(path: &Path, contents: &[u8]) -> io::Result<()> {
+    let Some(parent) = path.parent() else {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "projection target must have a parent directory",
+        ));
+    };
+    let filename = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("page.md");
+    let pid = std::process::id();
+    for attempt in 0..16 {
+        let tmp_path = parent.join(format!(".{filename}.{pid}.{attempt}.tmp"));
+        let mut file = match OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&tmp_path)
+        {
+            Ok(file) => file,
+            Err(err) if err.kind() == io::ErrorKind::AlreadyExists => continue,
+            Err(err) => return Err(err),
+        };
+        if let Err(err) = file.write_all(contents).and_then(|_| file.flush()) {
+            let _ = fs::remove_file(&tmp_path);
+            return Err(err);
+        }
+        drop(file);
+        if let Err(err) = fs::rename(&tmp_path, path) {
+            let _ = fs::remove_file(&tmp_path);
+            return Err(err);
+        }
+        return Ok(());
+    }
+    Err(io::Error::new(
+        io::ErrorKind::AlreadyExists,
+        "could not create unique projection temp file",
+    ))
+}
+
 fn cleanup_stale_managed_pages(pages_dir: &Path, store: &InMemoryStore) -> io::Result<()> {
-    // Only files with a valid UUID `id:` frontmatter that is NOT in the current in-memory store
-    // are removed. Files without an `id:` field or with an unparseable value are preserved.
-    // NOTE: Any markdown file placed manually under `pages/` that has an `id: <uuid>` frontmatter
-    // with a UUID not present in the engine store will be treated as stale and deleted.
-    // To preserve hand-authored files alongside engine-managed pages, omit the `id:` frontmatter
-    // or use a non-UUID value.
+    // Only pages with the explicit projection marker are engine-owned. A hand-written
+    // page may still carry a UUID `id:` frontmatter without being deleted.
     let current_page_ids: HashSet<Uuid> = store.pages.keys().map(|id| id.0).collect();
     for path in markdown_files_under(pages_dir)? {
         let content = match fs::read_to_string(&path) {
@@ -98,11 +298,11 @@ fn cleanup_stale_managed_pages(pages_dir: &Path, store: &InMemoryStore) -> io::R
             Err(err) if err.kind() == io::ErrorKind::InvalidData => continue,
             Err(err) => return Err(err),
         };
-        let Some(id) = managed_frontmatter_page_id(&content) else {
+        let Some(id) = managed_projection_page_id(&content) else {
             continue;
         };
         if !current_page_ids.contains(&id) {
-            fs::remove_file(path)?;
+            quarantine_managed_page(pages_dir, &path)?;
         }
     }
     Ok(())
@@ -118,11 +318,53 @@ fn cleanup_obsolete_managed_paths(
             Err(err) if err.kind() == io::ErrorKind::InvalidData => continue,
             Err(err) => return Err(err),
         };
-        if managed_frontmatter_page_id(&content).is_some() && !written_page_paths.contains(&path) {
-            fs::remove_file(path)?;
+        if managed_projection_page_id(&content).is_some() && !written_page_paths.contains(&path) {
+            quarantine_managed_page(pages_dir, &path)?;
         }
     }
     Ok(())
+}
+
+fn quarantine_managed_page(pages_dir: &Path, path: &Path) -> io::Result<()> {
+    let Some(wiki_root) = pages_dir.parent() else {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "pages directory must have a wiki root parent",
+        ));
+    };
+    let trash_dir = wiki_root.join(".wiki").join("trash").join("projection");
+    fs::create_dir_all(&trash_dir)?;
+
+    let rel = path.strip_prefix(pages_dir).unwrap_or(path);
+    let mut base = rel
+        .components()
+        .filter_map(|component| match component {
+            std::path::Component::Normal(part) => Some(part.to_string_lossy()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("__");
+    if base.trim().is_empty() {
+        base = "page.md".into();
+    }
+
+    for attempt in 0..128 {
+        let name = if attempt == 0 {
+            base.clone()
+        } else {
+            format!("{attempt}-{base}")
+        };
+        let dest = trash_dir.join(name);
+        if dest.exists() {
+            continue;
+        }
+        return fs::rename(path, dest);
+    }
+
+    Err(io::Error::new(
+        io::ErrorKind::AlreadyExists,
+        "could not create unique projection quarantine file",
+    ))
 }
 
 fn markdown_files_under(root: &Path) -> io::Result<Vec<std::path::PathBuf>> {
@@ -148,17 +390,41 @@ fn collect_markdown_files(dir: &Path, out: &mut Vec<std::path::PathBuf>) -> io::
     Ok(())
 }
 
-fn managed_frontmatter_page_id(content: &str) -> Option<Uuid> {
+fn managed_projection_page_id(content: &str) -> Option<Uuid> {
     let rest = content.strip_prefix("---\n")?;
     let end = rest.find("\n---")?;
     let frontmatter = &rest[..end];
+    if frontmatter_field(frontmatter, "managed_by").as_deref() != Some(PROJECTION_MANAGED_BY) {
+        return None;
+    }
+    if frontmatter_field(frontmatter, "managed_kind").as_deref() != Some(PROJECTION_MANAGED_KIND) {
+        return None;
+    }
+    frontmatter_field(frontmatter, "id").and_then(|raw_id| Uuid::parse_str(&raw_id).ok())
+}
+
+fn frontmatter_field(frontmatter: &str, field: &str) -> Option<String> {
     for line in frontmatter.lines() {
         let trimmed = line.trim();
-        let Some(raw_id) = trimmed.strip_prefix("id:") else {
+        let Some(raw) = trimmed
+            .strip_prefix(field)
+            .and_then(|value| value.strip_prefix(':'))
+        else {
             continue;
         };
-        let raw_id = raw_id.trim().trim_matches('"').trim_matches('\'');
-        return Uuid::parse_str(raw_id).ok();
+        let raw = raw.trim();
+        if raw.is_empty() {
+            return None;
+        }
+        let unquoted = raw
+            .strip_prefix('"')
+            .and_then(|value| value.strip_suffix('"'))
+            .or_else(|| {
+                raw.strip_prefix('\'')
+                    .and_then(|value| value.strip_suffix('\''))
+            })
+            .unwrap_or(raw);
+        return Some(unquoted.to_string());
     }
     None
 }
@@ -347,10 +613,20 @@ fn page_filename_counts(pages: &[&WikiPage]) -> BTreeMap<(&'static str, String),
     let mut counts = BTreeMap::new();
     for page in pages {
         let subdir = page_subdir_for_entry_type(page.entry_type.as_ref());
-        let base = vault_page_filename(&page.title);
+        let base = projection_page_basename(page);
         *counts.entry((subdir, base)).or_default() += 1;
     }
     counts
+}
+
+fn projection_page_basename(page: &WikiPage) -> String {
+    let base = vault_page_filename(&page.title);
+    if base.is_empty() {
+        let id = page.id.0.to_string();
+        format!("page-{}", &id[..8])
+    } else {
+        base
+    }
 }
 
 fn projection_page_filename(
@@ -358,7 +634,7 @@ fn projection_page_filename(
     subdir: &'static str,
     filename_counts: &BTreeMap<(&'static str, String), usize>,
 ) -> String {
-    let base = vault_page_filename(&page.title);
+    let base = projection_page_basename(page);
     if filename_counts
         .get(&(subdir, base.clone()))
         .copied()
@@ -372,9 +648,30 @@ fn projection_page_filename(
     }
 }
 
-/// YAML 双引号内转义：只处理双引号和反斜杠。
+/// YAML 双引号内转义。
 fn yaml_escape(s: &str) -> String {
-    s.replace('\\', "\\\\").replace('"', "\\\"")
+    let mut out = String::with_capacity(s.len());
+    for ch in s.chars() {
+        match ch {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            ch if ch.is_control() => {
+                let code = ch as u32;
+                if code <= 0xff {
+                    out.push_str(&format!("\\x{code:02X}"));
+                } else if code <= 0xffff {
+                    out.push_str(&format!("\\u{code:04X}"));
+                } else {
+                    out.push_str(&format!("\\U{code:08X}"));
+                }
+            }
+            ch => out.push(ch),
+        }
+    }
+    out
 }
 
 fn render_yaml_string_list(field: &str, values: &[String]) -> String {
@@ -399,6 +696,8 @@ fn scope_label(scope: &Scope) -> String {
 /// 渲染 WikiPage 为带 YAML frontmatter 的完整 Markdown。
 fn render_page_with_frontmatter(page: &WikiPage) -> String {
     let mut fm = String::from("---\n");
+    fm.push_str(&format!("managed_by: {PROJECTION_MANAGED_BY}\n"));
+    fm.push_str(&format!("managed_kind: {PROJECTION_MANAGED_KIND}\n"));
     fm.push_str(&format!("id: \"{}\"\n", page.id.0));
     fm.push_str(&format!("title: \"{}\"\n", yaml_escape(&page.title)));
     fm.push_str(&format!("status: {}\n", status_str(page.status)));
@@ -717,7 +1016,10 @@ mod tests {
 
         std::fs::write(
             pages_dir.join("摘要：Same.md"),
-            format!("---\nid: \"{}\"\n---\n\nold duplicate path", first.id.0),
+            format!(
+                "---\nmanaged_by: {PROJECTION_MANAGED_BY}\nmanaged_kind: {PROJECTION_MANAGED_KIND}\nid: \"{}\"\n---\n\nold duplicate path",
+                first.id.0
+            ),
         )
         .unwrap();
 
@@ -734,6 +1036,130 @@ mod tests {
         assert_eq!(files.len(), 2);
         assert!(files.iter().all(|name| name.starts_with("摘要：Same-")));
         assert!(!pages_dir.join("摘要：Same.md").exists());
+        assert!(wiki_root
+            .join(".wiki/trash/projection/summary__摘要：Same.md")
+            .exists());
+    }
+
+    #[test]
+    fn projection_uses_page_id_fallback_for_empty_slug() {
+        let dir = tempdir().unwrap();
+        let wiki_root = dir.path();
+        let mut store = InMemoryStore::default();
+        let page = WikiPage::new("!!!", "body", private_scope()).with_entry_type(EntryType::Qa);
+        let page_id = page.id.0.to_string();
+        let expected = format!("page-{}.md", &page_id[..8]);
+        store.pages.insert(page.id, page);
+
+        write_projection(wiki_root, &store, &[]).unwrap();
+
+        assert!(wiki_root.join("pages/qa").join(expected).exists());
+        assert!(
+            !wiki_root.join("pages/qa/.md").exists(),
+            "empty slug must not produce .md"
+        );
+    }
+
+    #[test]
+    fn projection_rejects_unmanaged_target_collision_without_overwrite() {
+        let dir = tempdir().unwrap();
+        let wiki_root = dir.path();
+        let pages_dir = wiki_root.join("pages").join("summary");
+        std::fs::create_dir_all(&pages_dir).unwrap();
+        let manual = pages_dir.join("Manual.md");
+        std::fs::write(&manual, "---\nid: \"manual\"\n---\n\nmanual body").unwrap();
+
+        let mut store = InMemoryStore::default();
+        let page = WikiPage::new("Manual", "projected body", private_scope())
+            .with_entry_type(EntryType::Summary);
+        store.pages.insert(page.id, page);
+
+        let err = write_projection(wiki_root, &store, &[]).unwrap_err();
+
+        assert_eq!(err.kind(), std::io::ErrorKind::AlreadyExists);
+        assert_eq!(
+            std::fs::read_to_string(&manual).unwrap(),
+            "---\nid: \"manual\"\n---\n\nmanual body"
+        );
+    }
+
+    #[test]
+    fn projection_quarantines_managed_target_owned_by_another_page_before_write() {
+        let dir = tempdir().unwrap();
+        let wiki_root = dir.path();
+        let pages_dir = wiki_root.join("pages").join("summary");
+        std::fs::create_dir_all(&pages_dir).unwrap();
+        let old_id = uuid::Uuid::new_v4();
+        std::fs::write(
+            pages_dir.join("Replacement.md"),
+            format!(
+                "---\nmanaged_by: {PROJECTION_MANAGED_BY}\nmanaged_kind: {PROJECTION_MANAGED_KIND}\nid: \"{}\"\n---\n\nold projected body",
+                old_id
+            ),
+        )
+        .unwrap();
+
+        let mut store = InMemoryStore::default();
+        let page = WikiPage::new("Replacement", "new projected body", private_scope())
+            .with_entry_type(EntryType::Summary);
+        store.pages.insert(page.id, page);
+
+        write_projection(wiki_root, &store, &[]).unwrap();
+
+        let current = std::fs::read_to_string(pages_dir.join("Replacement.md")).unwrap();
+        assert!(current.contains("new projected body"));
+        assert!(wiki_root
+            .join(".wiki/trash/projection/summary__Replacement.md")
+            .exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn projection_rejects_symlinked_page_subdir_before_write() {
+        let dir = tempdir().unwrap();
+        let outside = tempdir().unwrap();
+        let wiki_root = dir.path();
+        let pages_dir = wiki_root.join("pages");
+        std::fs::create_dir_all(&pages_dir).unwrap();
+        std::os::unix::fs::symlink(outside.path(), pages_dir.join("summary")).unwrap();
+
+        let mut store = InMemoryStore::default();
+        let page =
+            WikiPage::new("Escapes", "body", private_scope()).with_entry_type(EntryType::Summary);
+        store.pages.insert(page.id, page);
+
+        let err = write_projection(wiki_root, &store, &[]).unwrap_err();
+
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+        assert!(
+            !outside.path().join("Escapes.md").exists(),
+            "projection must not write through symlinked entry-type directory"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn projection_rejects_root_index_symlink_before_write() {
+        let dir = tempdir().unwrap();
+        let outside = tempdir().unwrap();
+        let wiki_root = dir.path();
+        let outside_index = outside.path().join("index.md");
+        std::fs::write(&outside_index, "outside index").unwrap();
+        std::os::unix::fs::symlink(&outside_index, wiki_root.join("index.md")).unwrap();
+
+        let mut store = InMemoryStore::default();
+        let page = WikiPage::new("Root Symlink Guard", "body", private_scope())
+            .with_entry_type(EntryType::Summary);
+        store.pages.insert(page.id, page);
+
+        let err = write_projection(wiki_root, &store, &[]).unwrap_err();
+
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+        assert_eq!(
+            std::fs::read_to_string(outside_index).unwrap(),
+            "outside index",
+            "root projection must not write through index.md symlink"
+        );
     }
 
     #[test]
@@ -771,7 +1197,7 @@ mod tests {
     }
 
     #[test]
-    fn projection_removes_stale_managed_page_and_preserves_unmanaged() {
+    fn projection_quarantines_stale_managed_page_and_preserves_unmanaged_uuid_page() {
         let dir = tempdir().unwrap();
         let wiki_root = dir.path();
         let pages_dir = wiki_root.join("pages").join("concept");
@@ -782,7 +1208,7 @@ mod tests {
         std::fs::write(
             &stale,
             format!(
-                "---\nid: \"{}\"\ntitle: \"Stale\"\n---\n\n# stale\n",
+                "---\nmanaged_by: {PROJECTION_MANAGED_BY}\nmanaged_kind: {PROJECTION_MANAGED_KIND}\nid: \"{}\"\ntitle: \"Stale\"\n---\n\n# stale\n",
                 stale_id
             ),
         )
@@ -791,8 +1217,24 @@ mod tests {
         let unmanaged = pages_dir.join("unmanaged.md");
         std::fs::write(&unmanaged, "# unmanaged\n").unwrap();
 
+        let unmanaged_uuid = pages_dir.join("handwritten-uuid.md");
+        std::fs::write(
+            &unmanaged_uuid,
+            format!(
+                "---\nid: \"{}\"\ntitle: \"Manual\"\n---\n\n# manual\n",
+                uuid::Uuid::new_v4()
+            ),
+        )
+        .unwrap();
+
         let invalid_id = pages_dir.join("invalid-id.md");
-        std::fs::write(&invalid_id, "---\nid: \"not-a-uuid\"\n---\n\n# invalid\n").unwrap();
+        std::fs::write(
+            &invalid_id,
+            format!(
+                "---\nmanaged_by: {PROJECTION_MANAGED_BY}\nmanaged_kind: {PROJECTION_MANAGED_KIND}\nid: \"not-a-uuid\"\n---\n\n# invalid\n"
+            ),
+        )
+        .unwrap();
 
         let mut store = InMemoryStore::default();
         let page =
@@ -801,8 +1243,18 @@ mod tests {
 
         write_projection(wiki_root, &store, &[]).unwrap();
 
-        assert!(!stale.exists(), "stale managed page should be removed");
+        assert!(
+            !stale.exists(),
+            "stale managed page should leave active pages dir"
+        );
+        assert!(wiki_root
+            .join(".wiki/trash/projection/concept__stale.md")
+            .exists());
         assert!(unmanaged.exists(), "unmanaged markdown should be preserved");
+        assert!(
+            unmanaged_uuid.exists(),
+            "handwritten markdown with UUID id but no marker should be preserved"
+        );
         assert!(
             invalid_id.exists(),
             "markdown with invalid managed id should be preserved"
@@ -885,6 +1337,8 @@ mod tests {
             .with_status(EntryStatus::Approved);
         let rendered = render_page_with_frontmatter(&page);
         assert!(rendered.starts_with("---\n"));
+        assert!(rendered.contains("managed_by: wiki-mempalace\n"));
+        assert!(rendered.contains("managed_kind: wiki-page-projection\n"));
         assert!(rendered.contains("status: approved\n"));
         assert!(rendered.contains("entry_type: concept\n"));
         assert!(rendered.contains(&format!("id: \"{}\"\n", page.id.0)));
@@ -951,6 +1405,22 @@ mod tests {
         let page = WikiPage::new("He said \"hello\" then left", "body", private_scope());
         let rendered = render_page_with_frontmatter(&page);
         assert!(rendered.contains(r#"title: "He said \"hello\" then left""#));
+    }
+
+    #[test]
+    fn frontmatter_yaml_strings_escape_newlines_tabs_and_controls() {
+        let mut page = WikiPage::new("Line 1\nLine 2\t\u{0007}", "body", private_scope());
+        page.tags = vec!["tag\nwith newline".into()];
+        let rendered = render_page_with_frontmatter(&page);
+
+        assert!(rendered.contains(r#"title: "Line 1\nLine 2\t\x07""#));
+        assert!(rendered.contains("  - \"tag\\nwith newline\"\n"));
+        let frontmatter = rendered.split("---\n\n").next().unwrap_or_default();
+        assert_eq!(
+            frontmatter.matches("Line 1").count(),
+            1,
+            "escaped title must stay on one frontmatter line"
+        );
     }
 
     #[test]
