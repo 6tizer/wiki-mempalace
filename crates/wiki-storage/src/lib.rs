@@ -1,6 +1,7 @@
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use std::io::Write;
+use std::time::Duration as StdDuration;
 use time::{
     format_description, format_description::well_known::Rfc3339, OffsetDateTime, PrimitiveDateTime,
 };
@@ -337,6 +338,7 @@ const STATE_ROW_PAGES: &str = "pages";
 const STATE_ROW_ENTITIES: &str = "entities";
 const STATE_ROW_EDGES: &str = "edges";
 const STATE_ROW_AUDITS: &str = "audits";
+const SQLITE_BUSY_TIMEOUT_MS: u64 = 5_000;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EmbeddingSearchBackend {
@@ -491,6 +493,7 @@ fn describe_writer_lease(content: &str) -> String {
 impl SqliteRepository {
     pub fn open(path: impl AsRef<std::path::Path>) -> Result<Self, StorageError> {
         let conn = Connection::open(path)?;
+        conn.busy_timeout(StdDuration::from_millis(SQLITE_BUSY_TIMEOUT_MS))?;
         conn.pragma_update(None, "journal_mode", "WAL")?;
         conn.execute_batch(
             r#"
@@ -771,20 +774,30 @@ CREATE INDEX IF NOT EXISTS wiki_canonical_alias_page_idx
         })
     }
 
-    /// 写入或更新一条向量（`vec` 为 little-endian `f32` 序列）。
-    pub fn upsert_embedding(&self, doc_id: &str, vector: &[f32]) -> Result<(), StorageError> {
+    fn immediate_transaction<T>(
+        &self,
+        op: impl FnOnce(&Self) -> Result<T, StorageError>,
+    ) -> Result<T, StorageError> {
         self.conn.execute_batch("BEGIN IMMEDIATE")?;
-        let result = self.upsert_embedding_inner(doc_id, vector);
+        let result = op(self);
         match result {
-            Ok(()) => {
-                self.conn.execute_batch("COMMIT")?;
-                Ok(())
-            }
+            Ok(value) => match self.conn.execute_batch("COMMIT") {
+                Ok(()) => Ok(value),
+                Err(error) => {
+                    let _ = self.conn.execute_batch("ROLLBACK");
+                    Err(StorageError::Db(error))
+                }
+            },
             Err(error) => {
                 let _ = self.conn.execute_batch("ROLLBACK");
                 Err(error)
             }
         }
+    }
+
+    /// 写入或更新一条向量（`vec` 为 little-endian `f32` 序列）。
+    pub fn upsert_embedding(&self, doc_id: &str, vector: &[f32]) -> Result<(), StorageError> {
+        self.immediate_transaction(|repo| repo.upsert_embedding_inner(doc_id, vector))
     }
 
     pub fn save_snapshot_and_append_outbox_with_embeddings(
@@ -793,24 +806,13 @@ CREATE INDEX IF NOT EXISTS wiki_canonical_alias_page_idx
         events: &[WikiEvent],
         embeddings: &[EmbeddingWrite],
     ) -> Result<usize, StorageError> {
-        self.conn.execute_batch("BEGIN IMMEDIATE")?;
-        let result = (|| {
-            let n = self.save_snapshot_and_append_outbox_inner(snapshot, events)?;
+        self.immediate_transaction(|repo| {
+            let n = repo.save_snapshot_and_append_outbox_inner(snapshot, events)?;
             for embedding in embeddings {
-                self.upsert_embedding_inner(&embedding.doc_id, &embedding.vector)?;
+                repo.upsert_embedding_inner(&embedding.doc_id, &embedding.vector)?;
             }
             Ok(n)
-        })();
-        match result {
-            Ok(n) => {
-                self.conn.execute_batch("COMMIT")?;
-                Ok(n)
-            }
-            Err(error) => {
-                let _ = self.conn.execute_batch("ROLLBACK");
-                Err(error)
-            }
-        }
+        })
     }
 
     fn upsert_embedding_inner(&self, doc_id: &str, vector: &[f32]) -> Result<(), StorageError> {
@@ -842,28 +844,17 @@ CREATE INDEX IF NOT EXISTS wiki_canonical_alias_page_idx
     }
 
     pub fn delete_embedding(&self, doc_id: &str) -> Result<(), StorageError> {
-        self.conn.execute_batch("BEGIN IMMEDIATE")?;
-        let result = (|| {
-            self.conn.execute(
+        self.immediate_transaction(|repo| {
+            repo.conn.execute(
                 "DELETE FROM wiki_embedding_ann WHERE doc_id = ?1",
                 params![doc_id],
             )?;
-            self.conn.execute(
+            repo.conn.execute(
                 "DELETE FROM wiki_embedding WHERE doc_id = ?1",
                 params![doc_id],
             )?;
             Ok(())
-        })();
-        match result {
-            Ok(()) => {
-                self.conn.execute_batch("COMMIT")?;
-                Ok(())
-            }
-            Err(error) => {
-                let _ = self.conn.execute_batch("ROLLBACK");
-                Err(error)
-            }
-        }
+        })
     }
 
     pub fn embedding_search_backend(&self) -> EmbeddingSearchBackend {
@@ -1052,11 +1043,10 @@ CREATE INDEX IF NOT EXISTS wiki_canonical_alias_page_idx
     }
 
     fn rebuild_embedding_ann_index(&self) -> Result<(), StorageError> {
-        self.conn.execute_batch("BEGIN IMMEDIATE")?;
-        let result = (|| {
-            self.conn.execute("DELETE FROM wiki_embedding_ann", [])?;
+        self.immediate_transaction(|repo| {
+            repo.conn.execute("DELETE FROM wiki_embedding_ann", [])?;
             let embedding_rows = {
-                let mut stmt = self
+                let mut stmt = repo
                     .conn
                     .prepare("SELECT doc_id, dim, vec FROM wiki_embedding ORDER BY doc_id ASC")?;
                 let rows = stmt.query_map([], |row| {
@@ -1079,20 +1069,10 @@ CREATE INDEX IF NOT EXISTS wiki_canonical_alias_page_idx
                     );
                     continue;
                 };
-                self.upsert_embedding_ann_inner(&doc_id, &vector)?;
+                repo.upsert_embedding_ann_inner(&doc_id, &vector)?;
             }
             Ok(())
-        })();
-        match result {
-            Ok(()) => {
-                self.conn.execute_batch("COMMIT")?;
-                Ok(())
-            }
-            Err(error) => {
-                let _ = self.conn.execute_batch("ROLLBACK");
-                Err(error)
-            }
-        }
+        })
     }
 
     pub fn upsert_canonical_alias(
@@ -1130,24 +1110,13 @@ CREATE INDEX IF NOT EXISTS wiki_canonical_alias_page_idx
         events: &[WikiEvent],
         aliases: &[CanonicalAliasMapping],
     ) -> Result<usize, StorageError> {
-        self.conn.execute_batch("BEGIN IMMEDIATE")?;
-        let result = (|| {
-            let n = self.save_snapshot_and_append_outbox_inner(snapshot, events)?;
+        self.immediate_transaction(|repo| {
+            let n = repo.save_snapshot_and_append_outbox_inner(snapshot, events)?;
             for alias in aliases {
-                self.upsert_canonical_alias_inner(alias)?;
+                repo.upsert_canonical_alias_inner(alias)?;
             }
             Ok(n)
-        })();
-        match result {
-            Ok(n) => {
-                self.conn.execute_batch("COMMIT")?;
-                Ok(n)
-            }
-            Err(error) => {
-                let _ = self.conn.execute_batch("ROLLBACK");
-                Err(error)
-            }
-        }
+        })
     }
 
     pub fn save_snapshot_and_delete_notion_page_indexes(
@@ -1155,29 +1124,18 @@ CREATE INDEX IF NOT EXISTS wiki_canonical_alias_page_idx
         snapshot: &StorageSnapshot,
         notion_page_ids: &[String],
     ) -> Result<usize, StorageError> {
-        self.conn.execute_batch("BEGIN IMMEDIATE")?;
-        let result = (|| {
-            self.save_snapshot_and_append_outbox_inner(snapshot, &[])?;
+        self.immediate_transaction(|repo| {
+            repo.save_snapshot_and_append_outbox_inner(snapshot, &[])?;
             let mut deleted = 0;
             for notion_page_id in notion_page_ids {
                 let notion_page_id = canonical_notion_page_id(notion_page_id);
-                deleted += self.conn.execute(
+                deleted += repo.conn.execute(
                     "DELETE FROM notion_page_index WHERE notion_page_id = ?1",
                     params![notion_page_id],
                 )?;
             }
             Ok(deleted)
-        })();
-        match result {
-            Ok(n) => {
-                self.conn.execute_batch("COMMIT")?;
-                Ok(n)
-            }
-            Err(error) => {
-                let _ = self.conn.execute_batch("ROLLBACK");
-                Err(error)
-            }
-        }
+        })
     }
 
     fn start_automation_run_at(
@@ -1334,6 +1292,12 @@ CREATE INDEX IF NOT EXISTS wiki_canonical_alias_page_idx
         up_to_id: i64,
         consumer_tag: &str,
     ) -> Result<usize, StorageError> {
+        let head_id: i64 =
+            self.conn
+                .query_row("SELECT COALESCE(MAX(id), 0) FROM wiki_outbox", [], |row| {
+                    row.get(0)
+                })?;
+        let effective_up_to_id = up_to_id.min(head_id);
         let previous_ack = self
             .conn
             .query_row(
@@ -1345,15 +1309,15 @@ CREATE INDEX IF NOT EXISTS wiki_canonical_alias_page_idx
             )
             .optional()?
             .unwrap_or(0);
-        if up_to_id <= previous_ack {
+        if effective_up_to_id <= previous_ack {
             return Ok(0);
         }
 
         let newly_acked: i64 = self.conn.query_row(
             "SELECT COUNT(*)
              FROM wiki_outbox
-             WHERE id > ?1 AND id <= ?2 AND processed_at IS NULL",
-            params![previous_ack, up_to_id],
+             WHERE id > ?1 AND id <= ?2",
+            params![previous_ack, effective_up_to_id],
             |row| row.get(0),
         )?;
 
@@ -1363,14 +1327,14 @@ CREATE INDEX IF NOT EXISTS wiki_canonical_alias_page_idx
              ON CONFLICT(consumer_tag) DO UPDATE SET
                acked_up_to_id = excluded.acked_up_to_id,
                acked_at = excluded.acked_at",
-            params![consumer_tag, up_to_id],
+            params![consumer_tag, effective_up_to_id],
         )?;
 
         self.conn.execute(
             "UPDATE wiki_outbox
              SET processed_at = datetime('now'), consumer_tag = ?2
              WHERE id <= ?1 AND processed_at IS NULL",
-            params![up_to_id, consumer_tag],
+            params![effective_up_to_id, consumer_tag],
         )?;
         Ok(newly_acked as usize)
     }
@@ -1798,15 +1762,10 @@ impl WikiRepository for SqliteRepository {
     }
 
     fn save_snapshot(&self, snapshot: &StorageSnapshot) -> Result<(), StorageError> {
-        self.conn.execute_batch("BEGIN IMMEDIATE")?;
-        let result = self.save_snapshot_and_append_outbox_inner(snapshot, &[]);
-        match result {
-            Ok(_) => self.conn.execute_batch("COMMIT")?,
-            Err(_) => {
-                let _ = self.conn.execute_batch("ROLLBACK");
-            }
-        }
-        result.map(|_| ())
+        self.immediate_transaction(|repo| {
+            repo.save_snapshot_and_append_outbox_inner(snapshot, &[])?;
+            Ok(())
+        })
     }
 
     fn append_outbox(&self, event: &WikiEvent) -> Result<(), StorageError> {
@@ -1819,24 +1778,16 @@ impl WikiRepository for SqliteRepository {
     }
 
     fn append_outbox_batch(&self, events: &[WikiEvent]) -> Result<usize, StorageError> {
-        self.conn.execute_batch("BEGIN IMMEDIATE")?;
-        let result = (|| {
+        self.immediate_transaction(|repo| {
             for event in events {
                 let payload = serde_json::to_string(event)?;
-                self.conn.execute(
+                repo.conn.execute(
                     "INSERT INTO wiki_outbox(event_json) VALUES(?1)",
                     params![payload],
                 )?;
             }
             Ok(events.len())
-        })();
-        match result {
-            Ok(_) => self.conn.execute_batch("COMMIT")?,
-            Err(_) => {
-                let _ = self.conn.execute_batch("ROLLBACK");
-            }
-        }
-        result
+        })
     }
 
     fn save_snapshot_and_append_outbox(
@@ -1844,15 +1795,9 @@ impl WikiRepository for SqliteRepository {
         snapshot: &StorageSnapshot,
         events: &[WikiEvent],
     ) -> Result<usize, StorageError> {
-        self.conn.execute_batch("BEGIN IMMEDIATE")?;
-        let result = self.save_snapshot_and_append_outbox_inner(snapshot, events);
-        match result {
-            Ok(_) => self.conn.execute_batch("COMMIT")?,
-            Err(_) => {
-                let _ = self.conn.execute_batch("ROLLBACK");
-            }
-        }
-        result
+        self.immediate_transaction(|repo| {
+            repo.save_snapshot_and_append_outbox_inner(snapshot, events)
+        })
     }
 
     fn export_outbox_ndjson(&self) -> Result<String, StorageError> {
@@ -1896,15 +1841,7 @@ impl WikiRepository for SqliteRepository {
         up_to_id: i64,
         consumer_tag: &str,
     ) -> Result<usize, StorageError> {
-        self.conn.execute_batch("BEGIN IMMEDIATE")?;
-        let result = self.mark_outbox_processed_inner(up_to_id, consumer_tag);
-        match result {
-            Ok(_) => self.conn.execute_batch("COMMIT")?,
-            Err(_) => {
-                let _ = self.conn.execute_batch("ROLLBACK");
-            }
-        }
-        result
+        self.immediate_transaction(|repo| repo.mark_outbox_processed_inner(up_to_id, consumer_tag))
     }
 
     fn get_notion_sync_cursor(&self, db_id: &str) -> Result<Option<OffsetDateTime>, StorageError> {
@@ -1971,9 +1908,8 @@ impl WikiRepository for SqliteRepository {
         entries: &[(String, String, SourceId)],
     ) -> Result<(), StorageError> {
         let now_str = encode_time(OffsetDateTime::now_utc())?;
-        self.conn.execute_batch("BEGIN IMMEDIATE")?;
-        let result = {
-            let mut stmt = self.conn.prepare(
+        self.immediate_transaction(|repo| {
+            let mut stmt = repo.conn.prepare(
                 "INSERT OR IGNORE INTO notion_page_index(notion_page_id, db_id, source_id, synced_at)
                  VALUES(?1, ?2, ?3, ?4)",
             )?;
@@ -1986,18 +1922,8 @@ impl WikiRepository for SqliteRepository {
                     now_str.clone()
                 ])?;
             }
-            Ok::<(), StorageError>(())
-        };
-        match result {
-            Ok(_) => {
-                self.conn.execute_batch("COMMIT")?;
-                Ok(())
-            }
-            Err(error) => {
-                let _ = self.conn.execute_batch("ROLLBACK");
-                Err(error)
-            }
-        }
+            Ok(())
+        })
     }
 
     fn list_notion_page_indexes(&self) -> Result<Vec<NotionPageIndexRecord>, StorageError> {
@@ -2131,6 +2057,66 @@ mod tests {
     use super::*;
     use tempfile::tempdir;
     use wiki_core::{Scope, WikiEvent};
+
+    fn test_query_event(idx: usize) -> WikiEvent {
+        WikiEvent::legacy_query_served(
+            format!("q{idx}"),
+            vec![format!("doc:{idx}")],
+            OffsetDateTime::now_utc(),
+        )
+    }
+
+    #[test]
+    fn sqlite_open_sets_busy_timeout() {
+        let dir = tempdir().unwrap();
+        let db = dir.path().join("wiki.db");
+        let repo = SqliteRepository::open(&db).unwrap();
+
+        let busy_timeout_ms: i64 = repo
+            .conn
+            .query_row("PRAGMA busy_timeout", [], |row| row.get(0))
+            .unwrap();
+
+        assert_eq!(busy_timeout_ms, SQLITE_BUSY_TIMEOUT_MS as i64);
+    }
+
+    #[test]
+    fn sqlite_busy_timeout_waits_for_short_write_lock() {
+        let dir = tempdir().unwrap();
+        let db = dir.path().join("wiki.db");
+        let repo = SqliteRepository::open(&db).unwrap();
+        let snapshot = StorageSnapshot {
+            sources: vec![RawArtifact::new(
+                "file:///busy.md",
+                "busy timeout",
+                Scope::Private {
+                    agent_id: "busy".into(),
+                },
+            )],
+            ..StorageSnapshot::default()
+        };
+        let (locked_tx, locked_rx) = std::sync::mpsc::channel();
+        let db_for_lock = db.clone();
+
+        let handle = std::thread::spawn(move || {
+            let conn = rusqlite::Connection::open(db_for_lock).expect("open lock conn");
+            conn.execute_batch("BEGIN IMMEDIATE")
+                .expect("hold write lock");
+            locked_tx.send(()).expect("send lock acquired");
+            std::thread::sleep(StdDuration::from_millis(100));
+            conn.execute_batch("COMMIT").expect("release write lock");
+        });
+
+        locked_rx
+            .recv_timeout(StdDuration::from_secs(2))
+            .expect("lock acquired");
+        repo.save_snapshot_and_append_outbox(&snapshot, &[test_query_event(1)])
+            .expect("append waits for lock release");
+        handle.join().expect("lock thread joins");
+
+        assert_eq!(repo.load_snapshot().unwrap().sources.len(), 1);
+        assert_eq!(repo.export_outbox_ndjson().unwrap().lines().count(), 1);
+    }
 
     #[test]
     fn writer_lease_blocks_second_writer_and_releases_on_drop() {
@@ -2601,12 +2587,7 @@ mod tests {
         let repo = SqliteRepository::open(&db).unwrap();
 
         for idx in 1..=3 {
-            repo.append_outbox(&WikiEvent::legacy_query_served(
-                format!("q{idx}"),
-                vec![format!("doc:{idx}")],
-                time::OffsetDateTime::now_utc(),
-            ))
-            .unwrap();
+            repo.append_outbox(&test_query_event(idx)).unwrap();
         }
 
         let stats_before_ack = repo.get_outbox_stats().unwrap();
@@ -2638,16 +2619,11 @@ mod tests {
         let repo = SqliteRepository::open(&db).unwrap();
 
         for idx in 1..=4 {
-            repo.append_outbox(&WikiEvent::legacy_query_served(
-                format!("q{idx}"),
-                vec![format!("doc:{idx}")],
-                time::OffsetDateTime::now_utc(),
-            ))
-            .unwrap();
+            repo.append_outbox(&test_query_event(idx)).unwrap();
         }
 
         assert_eq!(repo.mark_outbox_processed(2, "mempalace").unwrap(), 2);
-        assert_eq!(repo.mark_outbox_processed(3, "archive").unwrap(), 1);
+        assert_eq!(repo.mark_outbox_processed(3, "archive").unwrap(), 3);
 
         let mempalace = repo.get_outbox_consumer_progress("mempalace").unwrap();
         let archive = repo.get_outbox_consumer_progress("archive").unwrap();
@@ -2656,7 +2632,7 @@ mod tests {
         assert_eq!(archive.acked_up_to_id, Some(3));
         assert_eq!(archive.backlog_events, 1);
 
-        assert_eq!(repo.mark_outbox_processed(4, "mempalace").unwrap(), 1);
+        assert_eq!(repo.mark_outbox_processed(4, "mempalace").unwrap(), 2);
         assert_eq!(repo.mark_outbox_processed(3, "archive").unwrap(), 0);
 
         let mempalace = repo.get_outbox_consumer_progress("mempalace").unwrap();
@@ -2665,6 +2641,47 @@ mod tests {
         assert_eq!(mempalace.backlog_events, 0);
         assert_eq!(archive.acked_up_to_id, Some(3));
         assert_eq!(archive.backlog_events, 1);
+    }
+
+    #[test]
+    fn outbox_ack_count_ignores_legacy_processed_at_for_new_consumer() {
+        let dir = tempdir().unwrap();
+        let db = dir.path().join("wiki.db");
+        let repo = SqliteRepository::open(&db).unwrap();
+
+        for idx in 1..=3 {
+            repo.append_outbox(&test_query_event(idx)).unwrap();
+        }
+
+        assert_eq!(repo.mark_outbox_processed(2, "mempalace").unwrap(), 2);
+        let stats_after_first_consumer = repo.get_outbox_stats().unwrap();
+        assert_eq!(stats_after_first_consumer.unprocessed_events, 1);
+
+        assert_eq!(repo.mark_outbox_processed(2, "archive").unwrap(), 2);
+        let archive = repo.get_outbox_consumer_progress("archive").unwrap();
+        assert_eq!(archive.acked_up_to_id, Some(2));
+        assert_eq!(archive.backlog_events, 1);
+    }
+
+    #[test]
+    fn outbox_ack_clamps_manual_ack_to_current_head() {
+        let dir = tempdir().unwrap();
+        let db = dir.path().join("wiki.db");
+        let repo = SqliteRepository::open(&db).unwrap();
+
+        for idx in 1..=2 {
+            repo.append_outbox(&test_query_event(idx)).unwrap();
+        }
+
+        assert_eq!(repo.mark_outbox_processed(999, "archive").unwrap(), 2);
+        let archive = repo.get_outbox_consumer_progress("archive").unwrap();
+        assert_eq!(archive.acked_up_to_id, Some(2));
+        assert_eq!(archive.backlog_events, 0);
+
+        repo.append_outbox(&test_query_event(3)).unwrap();
+        let export = repo.export_outbox_ndjson_for_consumer("archive").unwrap();
+        assert_eq!(export.start_after_id, 2);
+        assert_eq!(export.event_count, 1);
     }
 
     #[test]

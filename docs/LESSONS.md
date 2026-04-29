@@ -107,6 +107,15 @@
 - Tests or reviews that caught issues: retrieval review 抓到 fallback truncation P1；修复为全候选 rerank 后再按 user limit 截断，并让 LIKE fallback 按 exact/长 pattern score 排序。
 - Next plan note: 下一 PR 做 outbox + SQLite reliability，不混入 retrieval quality 扩展。
 
+## 2026-04-29 / Audit v2 PR 10 Outbox SQLite Reliability
+
+- Scope: storage 层 ack 计数改为 per-consumer cursor 语义，manual ack clamp 到当前 head，SQLite open 设置 busy timeout，多步骤写事务统一走 helper。
+- What worked: 直接把第二 consumer ack、manual ack 进未来、短暂 write lock 复现成 storage unit tests，避免只靠文档断言多消费者语义。
+- What caused rework: 旧测试里 mempalace 第二次 ack 仍按 global processed 语义期待 `1`，新语义下应计自己从 `2` 到 `4` 的两条事件。
+- Spec changes needed: `OutboxStats.unprocessed_events` 仍是 legacy/global 指标；后续若要展示每 consumer 未处理数，应新加 metrics 字段，不复用该字段。
+- Tests or reviews that caught issues: reliability review 抓到 manual ack 可把 cursor 推到未来，以及 busy test 没覆盖 wrapper；`cargo test -p wiki-storage -- --nocapture` 固定了 second-consumer ack、legacy `processed_at` 兼容、future-cursor clamp 和 busy lock wait。
+- Next plan note: 下一 PR 做 Vault projection safety + docs/test cleanup，不继续扩大 outbox protocol。
+
 ## 2026-04-28 / PR #78 CLI Command Modularization phase 1
 
 - Scope: 先搬低风险命令域：`schema-validate`、`llm-smoke`、outbox export/ack。
