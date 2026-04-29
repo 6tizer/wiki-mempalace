@@ -2716,7 +2716,7 @@ fn run_with_engine(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                 graph_override,
             );
             let top: Vec<String> = ranked.iter().take(24).map(|(id, _)| id.clone()).collect();
-            eng.record_query(&query, top, "cli");
+            eng.record_query(&query, Some(&viewer), top, "cli");
             if write_page {
                 let title = page_title.unwrap_or_else(|| format!("query-{}", timestamp_slug()));
                 let page = query_to_page(
@@ -4540,17 +4540,17 @@ mod tests {
         let db_path = dir.path().join("test.db");
         let repo = SqliteRepository::open(&db_path).unwrap();
 
-        repo.append_outbox(&WikiEvent::QueryServed {
-            query_fingerprint: "first".into(),
-            top_doc_ids: vec!["a".into()],
-            at: OffsetDateTime::now_utc(),
-        })
+        repo.append_outbox(&WikiEvent::legacy_query_served(
+            "first",
+            vec!["a".into()],
+            OffsetDateTime::now_utc(),
+        ))
         .unwrap();
-        repo.append_outbox(&WikiEvent::QueryServed {
-            query_fingerprint: "second".into(),
-            top_doc_ids: vec!["b".into()],
-            at: OffsetDateTime::now_utc(),
-        })
+        repo.append_outbox(&WikiEvent::legacy_query_served(
+            "second",
+            vec!["b".into()],
+            OffsetDateTime::now_utc(),
+        ))
         .unwrap();
         repo.mark_outbox_processed(1, "mempalace").unwrap();
 

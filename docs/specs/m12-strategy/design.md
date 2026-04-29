@@ -53,10 +53,15 @@ M12 first version stops at `M12 suggest report`.
   `run_gap_scan`, and `collect_wiki_metrics`.
 - Query history must come from stored outbox/export data, not by running a new
   query pipeline.
-- `QueryServed.query_fingerprint` is treated as potentially raw query text.
-  Because current events do not store scope, M12 may only use a query event when
-  its `top_doc_ids` can be resolved through the current store and pass
-  `doc_id_visible_to_viewer`-equivalent checks for the current viewer.
+- `QueryServed.query_fingerprint` is treated as legacy-compatible and
+  potentially raw for old events. New PR5 events also carry `query_hash`,
+  `query_hash_schema_version`, `schema_version`, and `viewer_scope`; M12 must
+  not render query text or hash as a user-facing query.
+- For new scoped events, M12 may only use the event when `viewer_scope` is
+  visible to the current scan viewer and its `top_doc_ids` resolve through the
+  current store. For legacy events without `viewer_scope`, M12 keeps the old
+  compatibility path and requires `top_doc_ids` to pass
+  `doc_id_visible_to_viewer`-equivalent checks.
 - If query event visibility cannot be proven, skip the query event. Do not print
   the query text in JSON, Markdown, or `suggested_command`.
 - Do not call write/audit paths while scanning:

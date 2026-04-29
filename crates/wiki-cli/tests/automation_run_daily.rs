@@ -45,11 +45,11 @@ fn derive_backup_tar_path(db_backup: &Path) -> PathBuf {
 
 fn append_outbox_query_events(repo: &SqliteRepository, count: i64) {
     for idx in 1..=count {
-        repo.append_outbox(&WikiEvent::QueryServed {
-            query_fingerprint: format!("q{idx}"),
-            top_doc_ids: vec![format!("doc:{idx}")],
-            at: OffsetDateTime::now_utc(),
-        })
+        repo.append_outbox(&WikiEvent::legacy_query_served(
+            format!("q{idx}"),
+            vec![format!("doc:{idx}")],
+            OffsetDateTime::now_utc(),
+        ))
         .unwrap();
     }
 }
@@ -680,11 +680,11 @@ fn automation_doctor_reports_consumer_backlog() {
     let repo = SqliteRepository::open(&db_path).unwrap();
 
     for idx in 1..=3 {
-        repo.append_outbox(&WikiEvent::QueryServed {
-            query_fingerprint: format!("q{idx}"),
-            top_doc_ids: vec![format!("doc:{idx}")],
-            at: OffsetDateTime::now_utc(),
-        })
+        repo.append_outbox(&WikiEvent::legacy_query_served(
+            format!("q{idx}"),
+            vec![format!("doc:{idx}")],
+            OffsetDateTime::now_utc(),
+        ))
         .unwrap();
     }
     repo.mark_outbox_processed(2, "mempalace").unwrap();

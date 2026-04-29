@@ -62,6 +62,15 @@
 - Tests or reviews that caught issues: 旧 schema migration 测试覆盖 legacy index drop + composite index；mine/live sink 测试覆盖跨 bank 可共存、同 bank idempotent；migration review 抓到 `mine_path_convos` 覆盖缺口。
 - Next plan note: 下一 PR 做 QueryServed privacy/schema，避免 query 原文进入 outbox/history。
 
+## 2026-04-29 / Audit v2 PR 05 QueryServed Privacy
+
+- Scope: `QueryServed` 从原始 query 文本改为 hash/scope/schema 事件合同，并保持旧事件读取兼容。
+- What worked: 保留 `query_fingerprint` 作兼容字段，但新事件只写 hash；真正的新语义放到 `query_hash` / schema version / `viewer_scope`。
+- What caused rework: outbox event matrix 测试原先用简单 `{` 行解析 enum；给 `events.rs` 加 impl/tests 后误读，需要把解析限定在 `pub enum WikiEvent` 块内。
+- Spec changes needed: M12/suggest 对新事件先校验事件 scope，再校验 `top_doc_ids`；旧无 scope 事件只走兼容 fallback。
+- Tests or reviews that caught issues: focused tests 覆盖新事件不含 raw query、旧事件 serde、CLI query outbox、M12 scoped query-history filter。
+- Next plan note: 下一 PR 做 LLM governance，不混入 query/retrieval 改造。
+
 ## 2026-04-28 / PR #78 CLI Command Modularization phase 1
 
 - Scope: 先搬低风险命令域：`schema-validate`、`llm-smoke`、outbox export/ack。

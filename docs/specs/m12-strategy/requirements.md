@@ -41,10 +41,11 @@
 - Default report directory: `wiki/reports/suggestions/`.
 - Signal collection must use read-only paths. M12 must not call command paths
   that create audit/outbox events while collecting signals.
-- `QueryServed` history must be scope-safe. The current event payload has
-  `query_fingerprint` and `top_doc_ids` but no explicit scope; M12 must not emit
-  raw query text or build crystallize commands from query history unless the
-  event can be resolved as visible for the current `--viewer-scope`.
+- `QueryServed` history must be scope-safe. New events carry hash/schema/scope
+  fields; legacy events may only be used through the old `top_doc_ids`
+  visibility fallback. M12 must not emit raw query text or build crystallize
+  commands from query history unless the event can be resolved as visible for
+  the current `--viewer-scope`.
 
 ## Report Contract
 

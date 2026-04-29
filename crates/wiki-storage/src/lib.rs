@@ -2097,11 +2097,11 @@ mod tests {
         let db = dir.path().join("wiki.db");
         let repo = SqliteRepository::open(&db).unwrap();
 
-        repo.append_outbox(&WikiEvent::QueryServed {
-            query_fingerprint: "q1".into(),
-            top_doc_ids: vec!["a".into()],
-            at: time::OffsetDateTime::now_utc(),
-        })
+        repo.append_outbox(&WikiEvent::legacy_query_served(
+            "q1",
+            vec!["a".into()],
+            time::OffsetDateTime::now_utc(),
+        ))
         .unwrap();
         repo.append_outbox(&WikiEvent::SourceIngested {
             source_id: wiki_core::SourceId(uuid::Uuid::new_v4()),
@@ -2136,11 +2136,11 @@ mod tests {
         let db = dir.path().join("wiki.db");
         let repo = SqliteRepository::open(&db).unwrap();
 
-        repo.append_outbox(&WikiEvent::QueryServed {
-            query_fingerprint: "q1".into(),
-            top_doc_ids: vec!["a".into()],
-            at: time::OffsetDateTime::now_utc(),
-        })
+        repo.append_outbox(&WikiEvent::legacy_query_served(
+            "q1",
+            vec!["a".into()],
+            time::OffsetDateTime::now_utc(),
+        ))
         .unwrap();
         repo.append_outbox(&WikiEvent::SourceIngested {
             source_id: wiki_core::SourceId(uuid::Uuid::new_v4()),
@@ -2449,11 +2449,11 @@ mod tests {
         let repo = SqliteRepository::open(&db).unwrap();
 
         for idx in 1..=3 {
-            repo.append_outbox(&WikiEvent::QueryServed {
-                query_fingerprint: format!("q{idx}"),
-                top_doc_ids: vec![format!("doc:{idx}")],
-                at: time::OffsetDateTime::now_utc(),
-            })
+            repo.append_outbox(&WikiEvent::legacy_query_served(
+                format!("q{idx}"),
+                vec![format!("doc:{idx}")],
+                time::OffsetDateTime::now_utc(),
+            ))
             .unwrap();
         }
 
@@ -2486,11 +2486,11 @@ mod tests {
         let repo = SqliteRepository::open(&db).unwrap();
 
         for idx in 1..=4 {
-            repo.append_outbox(&WikiEvent::QueryServed {
-                query_fingerprint: format!("q{idx}"),
-                top_doc_ids: vec![format!("doc:{idx}")],
-                at: time::OffsetDateTime::now_utc(),
-            })
+            repo.append_outbox(&WikiEvent::legacy_query_served(
+                format!("q{idx}"),
+                vec![format!("doc:{idx}")],
+                time::OffsetDateTime::now_utc(),
+            ))
             .unwrap();
         }
 
@@ -2858,16 +2858,13 @@ mod tests {
             )
             .unwrap();
 
-        let ok = WikiEvent::QueryServed {
-            query_fingerprint: "ok".into(),
-            top_doc_ids: vec!["doc:ok".into()],
-            at: OffsetDateTime::now_utc(),
-        };
-        let blocked = WikiEvent::QueryServed {
-            query_fingerprint: "blocked".into(),
-            top_doc_ids: vec!["doc:blocked".into()],
-            at: OffsetDateTime::now_utc(),
-        };
+        let ok =
+            WikiEvent::legacy_query_served("ok", vec!["doc:ok".into()], OffsetDateTime::now_utc());
+        let blocked = WikiEvent::legacy_query_served(
+            "blocked",
+            vec!["doc:blocked".into()],
+            OffsetDateTime::now_utc(),
+        );
 
         let err = repo.append_outbox_batch(&[ok, blocked]).unwrap_err();
 
