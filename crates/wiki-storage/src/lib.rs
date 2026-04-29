@@ -5,8 +5,8 @@ use time::{
     format_description, format_description::well_known::Rfc3339, OffsetDateTime, PrimitiveDateTime,
 };
 use wiki_core::{
-    AuditRecord, Claim, Entity, EntryType, PageId, RawArtifact, Scope, SourceId, TypedEdge,
-    WikiEvent, WikiPage,
+    document_visible_to_viewer, AuditRecord, Claim, Entity, EntryType, PageId, RawArtifact, Scope,
+    SearchPorts, SourceId, TypedEdge, WikiEvent, WikiPage,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -207,6 +207,104 @@ pub trait WikiRepository {
         &self,
         scope: &Scope,
     ) -> Result<Vec<CanonicalAliasMapping>, StorageError>;
+}
+
+#[derive(Debug, Clone)]
+pub struct SqliteSearchPorts {
+    snapshot: StorageSnapshot,
+    viewer_scope: Option<Scope>,
+}
+
+impl SqliteSearchPorts {
+    pub fn open(
+        repo: &SqliteRepository,
+        viewer_scope: Option<Scope>,
+    ) -> Result<Self, StorageError> {
+        Ok(Self {
+            snapshot: repo.load_snapshot()?,
+            viewer_scope,
+        })
+    }
+
+    fn scope_ok(&self, doc: &Scope) -> bool {
+        match &self.viewer_scope {
+            None => true,
+            Some(viewer) => document_visible_to_viewer(doc, viewer),
+        }
+    }
+
+    fn collect_doc_scores(&self, tokens: &[String]) -> Vec<(String, usize)> {
+        let mut scored = Vec::new();
+        for claim in &self.snapshot.claims {
+            if claim.stale || !self.scope_ok(&claim.scope) {
+                continue;
+            }
+            let text = claim.text.to_ascii_lowercase();
+            let score = score_text_lc(&text, tokens);
+            if score > 0 {
+                scored.push((format!("claim:{}", claim.id.0), score));
+            }
+        }
+        for page in &self.snapshot.pages {
+            if !self.scope_ok(&page.scope) {
+                continue;
+            }
+            let text = format!("{} {}", page.title, page.markdown).to_ascii_lowercase();
+            let score = score_text_lc(&text, tokens);
+            if score > 0 {
+                scored.push((format!("page:{}", page.id.0), score));
+            }
+        }
+        scored
+    }
+}
+
+impl SearchPorts for SqliteSearchPorts {
+    fn bm25_ranked_ids(&self, query: &str, limit: usize) -> Vec<String> {
+        let tokens = query_tokens(query);
+        let mut scored = self.collect_doc_scores(&tokens);
+        scored.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+        scored.into_iter().map(|(id, _)| id).take(limit).collect()
+    }
+
+    fn vector_ranked_ids(&self, query: &str, limit: usize) -> Vec<String> {
+        let tokens = query_tokens(query);
+        let mut scored = self.collect_doc_scores(&tokens);
+        scored.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| b.0.cmp(&a.0)));
+        scored.into_iter().map(|(id, _)| id).take(limit).collect()
+    }
+
+    fn graph_ranked_ids(&self, query: &str, limit: usize) -> Vec<String> {
+        let tokens = query_tokens(query);
+        let mut scored = Vec::new();
+        for entity in &self.snapshot.entities {
+            if !self.scope_ok(&entity.scope) {
+                continue;
+            }
+            let text = entity.label.to_ascii_lowercase();
+            let score = score_text_lc(&text, &tokens);
+            if score > 0 {
+                scored.push((format!("entity:{}", entity.id.0), score));
+            }
+        }
+        scored.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+        scored.into_iter().map(|(id, _)| id).take(limit).collect()
+    }
+}
+
+fn query_tokens(query: &str) -> Vec<String> {
+    query
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|s| s.len() > 1)
+        .map(|s| s.to_ascii_lowercase())
+        .collect()
+}
+
+fn score_text_lc(haystack_lc: &str, tokens: &[String]) -> usize {
+    tokens
+        .iter()
+        .filter(|token| haystack_lc.contains(token.as_str()))
+        .count()
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -2209,6 +2307,60 @@ mod tests {
         let hits = repo.search_embeddings_cosine(&[1.0_f32, 0.0], 1).unwrap();
 
         assert_eq!(hits[0].0, "doc:a");
+    }
+
+    #[test]
+    fn sqlite_search_ports_read_snapshot_rows_and_filter_scope() {
+        let dir = tempdir().unwrap();
+        let db = dir.path().join("wiki.db");
+        let repo = SqliteRepository::open(&db).unwrap();
+        let visible_scope = Scope::Shared {
+            team_id: "wiki".into(),
+        };
+        let hidden_scope = Scope::Private {
+            agent_id: "secret".into(),
+        };
+        let visible_claim = Claim::new(
+            "Rust storage backed retrieval",
+            visible_scope.clone(),
+            wiki_core::MemoryTier::Semantic,
+        );
+        let visible_claim_id = visible_claim.id;
+        let hidden_claim = Claim::new(
+            "Rust hidden retrieval",
+            hidden_scope,
+            wiki_core::MemoryTier::Semantic,
+        );
+        let hidden_claim_id = hidden_claim.id;
+        let page = WikiPage::new(
+            "Storage Search",
+            "Rust page body from persisted wiki_state_row",
+            visible_scope.clone(),
+        );
+        let page_id = page.id;
+        let entity = Entity {
+            id: wiki_core::EntityId(uuid::Uuid::new_v4()),
+            kind: wiki_core::EntityKind::Concept,
+            label: "Rust Search Entity".into(),
+            scope: visible_scope.clone(),
+        };
+        let entity_id = entity.id;
+        let snapshot = StorageSnapshot {
+            claims: vec![visible_claim, hidden_claim],
+            pages: vec![page],
+            entities: vec![entity],
+            ..StorageSnapshot::default()
+        };
+
+        repo.save_snapshot(&snapshot).unwrap();
+        let ports = SqliteSearchPorts::open(&repo, Some(visible_scope)).unwrap();
+
+        let bm25 = ports.bm25_ranked_ids("Rust storage", 10);
+        assert!(bm25.contains(&format!("claim:{}", visible_claim_id.0)));
+        assert!(bm25.contains(&format!("page:{}", page_id.0)));
+        assert!(!bm25.contains(&format!("claim:{}", hidden_claim_id.0)));
+        let graph = ports.graph_ranked_ids("Rust Search", 10);
+        assert_eq!(graph, vec![format!("entity:{}", entity_id.0)]);
     }
 
     #[test]
