@@ -763,17 +763,22 @@ fn call_tool(
             }
 
             let cfg = crate::llm::load_llm_config(llm_config_path).map_err(McpToolError::llm)?;
-            let user_msg = format!("Source URI:\n{uri}\n\nBody:\n{body}");
-            let reply = crate::llm::complete_chat(
+            let user_msg = crate::llm::build_ingest_llm_user_prompt(&cfg, uri, body)
+                .map_err(McpToolError::llm)?;
+            let reply = crate::llm::complete_chat_json_object(
                 &cfg,
                 crate::llm::ingest_llm_system_prompt(),
                 &user_msg,
-                8192,
+                cfg.max_output_tokens.min(8192),
             )
             .map_err(McpToolError::llm)?;
             let slice = crate::llm::parse_json_object_slice(&reply);
-            let plan: wiki_core::LlmIngestPlanV1 = serde_json::from_str(slice)
-                .map_err(|e| McpToolError::llm(format!("JSON parse error: {e}")))?;
+            let plan: wiki_core::LlmIngestPlanV1 = serde_json::from_str(slice).map_err(|e| {
+                McpToolError::llm(format!(
+                    "JSON parse error: {e}; raw={}",
+                    crate::llm::redact_for_llm_error(&reply)
+                ))
+            })?;
             plan.validate_bounds()
                 .map_err(|e| McpToolError::llm(format!("ingest plan validation error: {e}")))?;
             if dry_run {

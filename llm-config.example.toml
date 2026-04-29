@@ -5,18 +5,25 @@
 base_url = "https://api.deepseek.com/v1"
 
 # Fill your key locally. Do NOT commit real keys.
+# Prefer api_key_env. Inline api_key remains supported only as local fallback.
+api_key_env = "DEEPSEEK_API_KEY"
 api_key = "YOUR_API_KEY_HERE"
 
 # Example models (adjust to your account):
 model = "deepseek-chat"
 
-# Optional knobs (not used by code yet; reserved)
+# Optional governance knobs.
 timeout_seconds = 60
 max_retries = 2
+max_input_chars = 200000
+max_response_chars = 200000
+max_output_tokens = 16384
+allowed_base_urls = ["https://api.deepseek.com", "https://api.openai.com", "https://openrouter.ai"]
 
 # Optional: OpenAI-compatible embeddings (used with `wiki-cli query --vectors`).
 # If omitted, `--vectors` will error until you add this section.
 # [embed]
 # model = "text-embedding-3-small"
 # base_url = "https://api.openai.com/v1"   # optional; defaults to [llm].base_url
+# api_key_env = "OPENAI_API_KEY"           # optional; preferred over inline api_key
 # api_key = "YOUR_EMBED_KEY"               # optional; defaults to [llm].api_key

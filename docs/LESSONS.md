@@ -71,6 +71,15 @@
 - Tests or reviews that caught issues: focused tests 覆盖新事件不含 raw query、旧事件 serde、CLI query outbox、M12 scoped query-history filter。
 - Next plan note: 下一 PR 做 LLM governance，不混入 query/retrieval 改造。
 
+## 2026-04-29 / Audit v2 PR 06 LLM Governance
+
+- Scope: `wiki-cli` LLM 配置和调用边界治理：env key、provider allowlist、input/output limit、untrusted payload prompt、错误脱敏。
+- What worked: 把 `ingest-llm` user prompt 统一收敛到 helper，CLI/MCP 共用同一 untrusted/redacted 格式，避免两个入口漂移。
+- What caused rework: provider error body 不能只做 redaction；必须先按 `max_response_chars` 拒绝超大响应，避免异常 provider 把大 body 塞进错误路径。
+- Spec changes needed: inline `api_key` 保留为 fallback；`allowed_base_urls` 为空时保留旧配置兼容，非空才强制 provider allowlist。
+- Tests or reviews that caught issues: focused LLM tests 覆盖 env priority/fallback、allowlist reject、prompt redaction、oversized input、output token cap、provider error redaction/size limit；focused review 抓到 provider raw response size gap。
+- Next plan note: 下一 PR 做 CI required hardening，不混入 LLM 运行时行为。
+
 ## 2026-04-28 / PR #78 CLI Command Modularization phase 1
 
 - Scope: 先搬低风险命令域：`schema-validate`、`llm-smoke`、outbox export/ack。
