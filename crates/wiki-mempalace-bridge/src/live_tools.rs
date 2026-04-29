@@ -58,9 +58,10 @@ impl LiveMempalaceTools {
 }
 
 impl MempalaceTools for LiveMempalaceTools {
-    fn status(&self) -> Result<Value, MempalaceError> {
+    fn status(&self, bank_id: Option<&str>) -> Result<Value, MempalaceError> {
         self.with_conn(|conn| {
-            let s = service::status(conn).map_err(|e| MempalaceError::Backend(e.to_string()))?;
+            let s = service::status_for_bank(conn, bank_id)
+                .map_err(|e| MempalaceError::Backend(e.to_string()))?;
             Ok(json!({
                 "drawers": s.drawers,
                 "wings": s.wings,
@@ -166,9 +167,14 @@ impl MempalaceTools for LiveMempalaceTools {
         })
     }
 
-    fn kg_query(&self, subject: &str, as_of: Option<&str>) -> Result<Value, MempalaceError> {
+    fn kg_query(
+        &self,
+        subject: &str,
+        as_of: Option<&str>,
+        bank_id: Option<&str>,
+    ) -> Result<Value, MempalaceError> {
         self.with_conn(|conn| {
-            let rows = service::kg_query(conn, subject, as_of)
+            let rows = service::kg_query(conn, subject, as_of, bank_id)
                 .map_err(|e| MempalaceError::Backend(e.to_string()))?;
             Ok(json!({
                 "facts": rows.iter().map(|r| json!({
@@ -179,14 +185,15 @@ impl MempalaceTools for LiveMempalaceTools {
                     "valid_from": r.valid_from,
                     "valid_to": r.valid_to,
                     "source_drawer_id": r.source_drawer_id,
+                    "bank_id": r.bank_id,
                 })).collect::<Vec<_>>()
             }))
         })
     }
 
-    fn kg_timeline(&self, subject: &str) -> Result<Value, MempalaceError> {
+    fn kg_timeline(&self, subject: &str, bank_id: Option<&str>) -> Result<Value, MempalaceError> {
         self.with_conn(|conn| {
-            let rows = service::kg_timeline(conn, subject)
+            let rows = service::kg_timeline(conn, subject, bank_id)
                 .map_err(|e| MempalaceError::Backend(e.to_string()))?;
             Ok(json!({
                 "timeline": rows.iter().map(|r| json!({
@@ -197,14 +204,16 @@ impl MempalaceTools for LiveMempalaceTools {
                     "valid_from": r.valid_from,
                     "valid_to": r.valid_to,
                     "source_drawer_id": r.source_drawer_id,
+                    "bank_id": r.bank_id,
                 })).collect::<Vec<_>>()
             }))
         })
     }
 
-    fn kg_stats(&self) -> Result<Value, MempalaceError> {
+    fn kg_stats(&self, bank_id: Option<&str>) -> Result<Value, MempalaceError> {
         self.with_conn(|conn| {
-            let s = service::kg_stats(conn).map_err(|e| MempalaceError::Backend(e.to_string()))?;
+            let s = service::kg_stats(conn, bank_id)
+                .map_err(|e| MempalaceError::Backend(e.to_string()))?;
             Ok(json!({
                 "facts": s.facts,
                 "subjects": s.subjects,
@@ -234,11 +243,16 @@ impl MempalaceTools for LiveMempalaceTools {
         })
     }
 
-    fn extract(&self, text: Option<&str>, drawer_id: Option<i64>) -> Result<Value, MempalaceError> {
+    fn extract(
+        &self,
+        text: Option<&str>,
+        drawer_id: Option<i64>,
+        bank_id: Option<&str>,
+    ) -> Result<Value, MempalaceError> {
         self.with_conn(|conn| {
             let body = match (text, drawer_id) {
                 (Some(t), None) => t.to_string(),
-                (None, Some(id)) => service::drawer_content(conn, id)
+                (None, Some(id)) => service::drawer_content_for_bank(conn, id, bank_id)
                     .map_err(|e| MempalaceError::Backend(e.to_string()))?
                     .ok_or_else(|| MempalaceError::Backend("drawer id not found".into()))?,
                 (None, None) => {
@@ -250,7 +264,7 @@ impl MempalaceTools for LiveMempalaceTools {
                     ))
                 }
             };
-            let n = service::extract_to_kg(conn, &self.config.llm, &body)
+            let n = service::extract_to_kg(conn, &self.config.llm, &body, bank_id)
                 .map_err(|e| MempalaceError::Backend(e.to_string()))?;
             Ok(json!({"kg_facts_added": n}))
         })

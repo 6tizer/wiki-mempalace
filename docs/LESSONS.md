@@ -44,6 +44,15 @@
 - Tests or reviews that caught issues: security review 抓到 maintenance 全库 decay 和 query/crystallize 显式 scope mismatch；handler 级测试固定 cross-scope 写入不变更状态，hidden old claim supersede 不生成新 claim。
 - Next plan note: 下一 PR 做 mempalace bank capability，禁止 client 任意传 `bank_id`。
 
+## 2026-04-29 / Audit v2 PR 03 Mempalace Bank Capability
+
+- Scope: wiki MCP mempalace bank capability 和 KG bank 隔离。
+- What worked: 在 wiki MCP 边界拒绝 client `bank_id`，再把 server viewer scope 映射成 palace bank，避免 trusted service API 和 untrusted client input 混在一起。
+- What caused rework: KG 和显式 tunnel 原表没有 `bank_id`，只过滤 drawers 不够；必须迁移 `kg_facts` / `tunnels` 并同步 bridge live sink / graph ports。
+- Spec changes needed: standalone `rust-mempalace` MCP 没有 wiki viewer scope，因此保留 local `bank_id` filter，不纳入本 PR 的 capability 边界。
+- Tests or reviews that caught issues: focused tests 覆盖 MCP schema/拒绝 client bank，以及 KG query/timeline/stats/invalidate bank-scoped 行为；security review 抓到显式 tunnel traverse/status 泄漏和旧 schema bank index migration 顺序问题。
+- Next plan note: 下一 PR 做 cross-bank drawer dedupe，把 `drawers(content_hash)` 从全局唯一迁到 `(bank_id, content_hash)`。
+
 ## 2026-04-28 / PR #78 CLI Command Modularization phase 1
 
 - Scope: 先搬低风险命令域：`schema-validate`、`llm-smoke`、outbox export/ack。

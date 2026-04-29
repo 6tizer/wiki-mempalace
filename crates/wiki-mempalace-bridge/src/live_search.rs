@@ -123,7 +123,8 @@ impl SearchPorts for MempalaceSearchPorts {
             Ok(c) => c,
             Err(_) => return Vec::new(),
         };
-        let facts = service::kg_query(&conn, query, None).unwrap_or_default();
+        let facts =
+            service::kg_query(&conn, query, None, self.bank_id.as_deref()).unwrap_or_default();
         facts
             .iter()
             .take(limit)

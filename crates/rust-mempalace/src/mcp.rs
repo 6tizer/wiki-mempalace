@@ -1,6 +1,6 @@
 use crate::service::{
-    drawer_content, extract_to_kg, kg_query, kg_stats, kg_timeline, reflect_answer,
-    search_with_options, status, taxonomy, traverse, wake_up, AppConfig, Palace,
+    drawer_content_for_bank, extract_to_kg, kg_query, kg_stats, kg_timeline, reflect_answer,
+    search_with_options, status_for_bank, taxonomy, traverse, wake_up, AppConfig, Palace,
 };
 use anyhow::Result;
 use serde_json::{json, Value};
@@ -79,16 +79,16 @@ fn handle_request(
         })),
         "tools/list" => Ok(json!({
             "tools":[
-                {"name":"mempalace_status","description":"Palace overview","inputSchema":{"type":"object","properties":{}}},
+                {"name":"mempalace_status","description":"Palace overview","inputSchema":{"type":"object","properties":{"bank_id":{"type":"string"}}}},
                 {"name":"mempalace_search","description":"Search memories","inputSchema":{"type":"object","properties":{"query":{"type":"string"},"wing":{"type":"string"},"hall":{"type":"string"},"room":{"type":"string"},"bank_id":{"type":"string"},"limit":{"type":"integer","minimum":MCP_RESULT_LIMIT_MIN,"maximum":MCP_RESULT_LIMIT_MAX},"explain":{"type":"boolean"}},"required":["query"]}},
                 {"name":"mempalace_wake_up","description":"Get wake-up context","inputSchema":{"type":"object","properties":{"wing":{"type":"string"},"bank_id":{"type":"string"}}}},
-                {"name":"mempalace_kg_query","description":"Query knowledge graph","inputSchema":{"type":"object","properties":{"subject":{"type":"string"},"as_of":{"type":"string"}},"required":["subject"]}},
+                {"name":"mempalace_kg_query","description":"Query knowledge graph","inputSchema":{"type":"object","properties":{"subject":{"type":"string"},"as_of":{"type":"string"},"bank_id":{"type":"string"}},"required":["subject"]}},
                 {"name":"mempalace_taxonomy","description":"Get taxonomy (optional bank filter)","inputSchema":{"type":"object","properties":{"bank_id":{"type":"string"}}}},
                 {"name":"mempalace_traverse","description":"Traverse room links","inputSchema":{"type":"object","properties":{"wing":{"type":"string"},"room":{"type":"string"},"bank_id":{"type":"string"}},"required":["wing","room"]}},
-                {"name":"mempalace_kg_timeline","description":"KG timeline by subject","inputSchema":{"type":"object","properties":{"subject":{"type":"string"}},"required":["subject"]}},
-                {"name":"mempalace_kg_stats","description":"KG stats","inputSchema":{"type":"object","properties":{}}},
+                {"name":"mempalace_kg_timeline","description":"KG timeline by subject","inputSchema":{"type":"object","properties":{"subject":{"type":"string"},"bank_id":{"type":"string"}},"required":["subject"]}},
+                {"name":"mempalace_kg_stats","description":"KG stats","inputSchema":{"type":"object","properties":{"bank_id":{"type":"string"}}}},
                 {"name":"mempalace_reflect","description":"Reflect on memories via optional LLM","inputSchema":{"type":"object","properties":{"query":{"type":"string"},"search_limit":{"type":"integer","minimum":MCP_RESULT_LIMIT_MIN,"maximum":MCP_RESULT_LIMIT_MAX},"bank_id":{"type":"string"}},"required":["query"]}},
-                {"name":"mempalace_extract","description":"Extract KG triples from text via optional LLM","inputSchema":{"type":"object","properties":{"text":{"type":"string"},"drawer_id":{"type":"integer"}}}}
+                {"name":"mempalace_extract","description":"Extract KG triples from text via optional LLM","inputSchema":{"type":"object","properties":{"text":{"type":"string"},"drawer_id":{"type":"integer"},"bank_id":{"type":"string"}}}}
             ]
         })),
         "tools/call" => call_tool(palace, params, config),
@@ -110,7 +110,8 @@ fn call_tool(palace: &Palace, params: Value, config: &AppConfig) -> Result<Value
     let conn = palace.open()?;
     match name {
         "mempalace_status" => {
-            let s = status(&conn)?;
+            let bank_id = args.get("bank_id").and_then(Value::as_str);
+            let s = status_for_bank(&conn, bank_id)?;
             Ok(
                 json!({"drawers":s.drawers,"wings":s.wings,"tunnels":s.tunnels,"kg_facts":s.kg_facts}),
             )
@@ -164,7 +165,8 @@ fn call_tool(palace: &Palace, params: Value, config: &AppConfig) -> Result<Value
                 .and_then(Value::as_str)
                 .ok_or_else(|| anyhow::anyhow!("missing subject"))?;
             let as_of = args.get("as_of").and_then(Value::as_str);
-            let rows = kg_query(&conn, subject, as_of)?;
+            let bank_id = args.get("bank_id").and_then(Value::as_str);
+            let rows = kg_query(&conn, subject, as_of, bank_id)?;
             Ok(json!({"facts": rows.into_iter().map(|r| json!({
                 "id": r.id,
                 "subject": r.subject,
@@ -172,7 +174,8 @@ fn call_tool(palace: &Palace, params: Value, config: &AppConfig) -> Result<Value
                 "object": r.object,
                 "valid_from": r.valid_from,
                 "valid_to": r.valid_to,
-                "source_drawer_id": r.source_drawer_id
+                "source_drawer_id": r.source_drawer_id,
+                "bank_id": r.bank_id
             })).collect::<Vec<_>>()}))
         }
         "mempalace_taxonomy" => {
@@ -202,7 +205,8 @@ fn call_tool(palace: &Palace, params: Value, config: &AppConfig) -> Result<Value
                 .get("subject")
                 .and_then(Value::as_str)
                 .ok_or_else(|| anyhow::anyhow!("missing subject"))?;
-            let rows = kg_timeline(&conn, subject)?;
+            let bank_id = args.get("bank_id").and_then(Value::as_str);
+            let rows = kg_timeline(&conn, subject, bank_id)?;
             Ok(json!({"timeline": rows.into_iter().map(|r| json!({
                 "id": r.id,
                 "subject": r.subject,
@@ -210,11 +214,13 @@ fn call_tool(palace: &Palace, params: Value, config: &AppConfig) -> Result<Value
                 "object": r.object,
                 "valid_from": r.valid_from,
                 "valid_to": r.valid_to,
-                "source_drawer_id": r.source_drawer_id
+                "source_drawer_id": r.source_drawer_id,
+                "bank_id": r.bank_id
             })).collect::<Vec<_>>()}))
         }
         "mempalace_kg_stats" => {
-            let s = kg_stats(&conn)?;
+            let bank_id = args.get("bank_id").and_then(Value::as_str);
+            let s = kg_stats(&conn, bank_id)?;
             Ok(
                 json!({"facts":s.facts,"subjects":s.subjects,"predicates":s.predicates,"active_facts":s.active_facts}),
             )
@@ -237,17 +243,18 @@ fn call_tool(palace: &Palace, params: Value, config: &AppConfig) -> Result<Value
             Ok(json!({"text": text}))
         }
         "mempalace_extract" => {
+            let bank_id = args.get("bank_id").and_then(Value::as_str);
             let body = match (
                 args.get("text").and_then(Value::as_str),
                 args.get("drawer_id").and_then(Value::as_i64),
             ) {
                 (Some(t), None) => t.to_string(),
-                (None, Some(id)) => drawer_content(&conn, id)?
+                (None, Some(id)) => drawer_content_for_bank(&conn, id, bank_id)?
                     .ok_or_else(|| anyhow::anyhow!("drawer id not found"))?,
                 (None, None) => anyhow::bail!("provide text or drawer_id"),
                 (Some(_), Some(_)) => anyhow::bail!("use only one of text or drawer_id"),
             };
-            let n = extract_to_kg(&conn, &config.llm, &body)?;
+            let n = extract_to_kg(&conn, &config.llm, &body, bank_id)?;
             Ok(json!({"kg_facts_added": n}))
         }
         _ => Err(anyhow::anyhow!("unknown tool: {name}")),

@@ -357,7 +357,6 @@ fn tools_list() -> Value {
                     "wing":{"type":"string"},
                     "hall":{"type":"string"},
                     "room":{"type":"string"},
-                    "bank_id":{"type":"string"},
                     "limit":{"type":"integer","minimum":MCP_RESULT_LIMIT_MIN,"maximum":MCP_RESULT_LIMIT_MAX},
                     "explain":{"type":"boolean"}
                 },"required":["query"]}
@@ -365,20 +364,19 @@ fn tools_list() -> Value {
             {
                 "name": "mempalace_wake_up",
                 "description": "Get L0 identity + L1 critical facts wake-up context",
-                "inputSchema": {"type":"object","properties":{"wing":{"type":"string"},"bank_id":{"type":"string"}}}
+                "inputSchema": {"type":"object","properties":{"wing":{"type":"string"}}}
             },
             {
                 "name": "mempalace_taxonomy",
                 "description": "Wing/hall/room tree with drawer counts",
-                "inputSchema": {"type":"object","properties":{"bank_id":{"type":"string"}}}
+                "inputSchema": {"type":"object","properties":{}}
             },
             {
                 "name": "mempalace_traverse",
                 "description": "Follow tunnels (explicit + implicit connections) from a room",
                 "inputSchema": {"type":"object","properties":{
                     "wing":{"type":"string"},
-                    "room":{"type":"string"},
-                    "bank_id":{"type":"string"}
+                    "room":{"type":"string"}
                 },"required":["wing","room"]}
             },
             {
@@ -404,8 +402,7 @@ fn tools_list() -> Value {
                 "description": "RAG: search palace + LLM synthesis",
                 "inputSchema": {"type":"object","properties":{
                     "query":{"type":"string"},
-                    "search_limit":{"type":"integer","minimum":MCP_RESULT_LIMIT_MIN,"maximum":MCP_RESULT_LIMIT_MAX},
-                    "bank_id":{"type":"string"}
+                    "search_limit":{"type":"integer","minimum":MCP_RESULT_LIMIT_MIN,"maximum":MCP_RESULT_LIMIT_MAX}
                 },"required":["query"]}
             },
             {
@@ -848,7 +845,7 @@ fn call_tool(
         }
 
         // ──── Mempalace passthrough tools ────
-        n if n.starts_with("mempalace_") => call_mempalace_tool(n, &args, palace_path),
+        n if n.starts_with("mempalace_") => call_mempalace_tool(n, &args, palace_path, viewer),
 
         _ => Err(McpToolError::tool_not_found(name)),
     }
@@ -974,6 +971,23 @@ fn scope_label(scope: &Scope) -> String {
     }
 }
 
+fn mempalace_bank_from_scope(scope: &Scope) -> String {
+    match scope {
+        Scope::Private { agent_id } => agent_id.clone(),
+        Scope::Shared { team_id } => team_id.clone(),
+    }
+}
+
+fn reject_client_bank_id(args: &Value) -> Result<(), McpToolError> {
+    if args.get("bank_id").is_some() {
+        Err(McpToolError::scope_denied(
+            "bank_id is derived from server viewer scope",
+        ))
+    } else {
+        Ok(())
+    }
+}
+
 fn preflight_llm_plan_tags(
     plan: &wiki_core::LlmIngestPlanV1,
     source_tags: &[String],
@@ -990,18 +1004,21 @@ fn call_mempalace_tool(
     name: &str,
     args: &Value,
     palace_path: Option<&str>,
+    viewer: &Scope,
 ) -> Result<Value, McpToolError> {
+    reject_client_bank_id(args)?;
+    let bank = mempalace_bank_from_scope(viewer);
+    let bank_id = Some(bank.as_str());
     let tools = wiki_mempalace_bridge::make_tools(palace_path).map_err(McpToolError::mempalace)?;
 
     match name {
-        "mempalace_status" => tools.status().map_err(McpToolError::mempalace),
+        "mempalace_status" => tools.status(bank_id).map_err(McpToolError::mempalace),
 
         "mempalace_search" => {
             let query = required_str(args, "query")?;
             let wing = args.get("wing").and_then(Value::as_str);
             let hall = args.get("hall").and_then(Value::as_str);
             let room = args.get("room").and_then(Value::as_str);
-            let bank_id = args.get("bank_id").and_then(Value::as_str);
             let limit = optional_limit(args, "limit", 8)?;
             let explain = args
                 .get("explain")
@@ -1014,21 +1031,16 @@ fn call_mempalace_tool(
 
         "mempalace_wake_up" => {
             let wing = args.get("wing").and_then(Value::as_str);
-            let bank_id = args.get("bank_id").and_then(Value::as_str);
             tools
                 .wake_up(wing, bank_id)
                 .map_err(McpToolError::mempalace)
         }
 
-        "mempalace_taxonomy" => {
-            let bank_id = args.get("bank_id").and_then(Value::as_str);
-            tools.taxonomy(bank_id).map_err(McpToolError::mempalace)
-        }
+        "mempalace_taxonomy" => tools.taxonomy(bank_id).map_err(McpToolError::mempalace),
 
         "mempalace_traverse" => {
             let wing = required_str(args, "wing")?;
             let room = required_str(args, "room")?;
-            let bank_id = args.get("bank_id").and_then(Value::as_str);
             tools
                 .traverse(wing, room, bank_id)
                 .map_err(McpToolError::mempalace)
@@ -1038,21 +1050,22 @@ fn call_mempalace_tool(
             let subject = required_str(args, "subject")?;
             let as_of = args.get("as_of").and_then(Value::as_str);
             tools
-                .kg_query(subject, as_of)
+                .kg_query(subject, as_of, bank_id)
                 .map_err(McpToolError::mempalace)
         }
 
         "mempalace_kg_timeline" => {
             let subject = required_str(args, "subject")?;
-            tools.kg_timeline(subject).map_err(McpToolError::mempalace)
+            tools
+                .kg_timeline(subject, bank_id)
+                .map_err(McpToolError::mempalace)
         }
 
-        "mempalace_kg_stats" => tools.kg_stats().map_err(McpToolError::mempalace),
+        "mempalace_kg_stats" => tools.kg_stats(bank_id).map_err(McpToolError::mempalace),
 
         "mempalace_reflect" => {
             let query = required_str(args, "query")?;
             let search_limit = optional_limit(args, "search_limit", 8)?;
-            let bank_id = args.get("bank_id").and_then(Value::as_str);
             tools
                 .reflect(query, search_limit, bank_id)
                 .map_err(McpToolError::mempalace)
@@ -1062,7 +1075,7 @@ fn call_mempalace_tool(
             let text = args.get("text").and_then(Value::as_str);
             let drawer_id = args.get("drawer_id").and_then(Value::as_i64);
             tools
-                .extract(text, drawer_id)
+                .extract(text, drawer_id, bank_id)
                 .map_err(McpToolError::mempalace)
         }
 
@@ -1194,6 +1207,85 @@ mod tests {
                 .pointer("/inputSchema/properties/limit/minimum")
                 .and_then(Value::as_u64),
             Some(1)
+        );
+    }
+
+    #[test]
+    fn mempalace_tools_do_not_expose_client_bank_id() {
+        let v = tools_list();
+        let tools = v.get("tools").and_then(Value::as_array).expect("tools[]");
+
+        for name in [
+            "mempalace_status",
+            "mempalace_search",
+            "mempalace_wake_up",
+            "mempalace_taxonomy",
+            "mempalace_traverse",
+            "mempalace_kg_query",
+            "mempalace_kg_timeline",
+            "mempalace_kg_stats",
+            "mempalace_reflect",
+            "mempalace_extract",
+        ] {
+            let tool = tools
+                .iter()
+                .find(|t| t.get("name").and_then(Value::as_str) == Some(name))
+                .expect("mempalace tool");
+            assert!(
+                tool.pointer("/inputSchema/properties/bank_id").is_none(),
+                "{name} should derive bank_id from viewer scope"
+            );
+        }
+    }
+
+    #[test]
+    fn mempalace_bank_is_derived_from_viewer_scope() {
+        assert_eq!(
+            mempalace_bank_from_scope(&Scope::Shared {
+                team_id: "wiki".into()
+            }),
+            "wiki"
+        );
+        assert_eq!(
+            mempalace_bank_from_scope(&Scope::Private {
+                agent_id: "agent-a".into()
+            }),
+            "agent-a"
+        );
+    }
+
+    #[test]
+    fn mempalace_client_bank_id_is_rejected() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let repo = SqliteRepository::open(tmp.path().join("wiki.db")).expect("repo");
+        let schema = DomainSchema::permissive_default();
+        let mut eng = LlmWikiEngine::load_from_repo(schema, &repo, NoopWikiHook).expect("engine");
+        let viewer = Scope::Shared {
+            team_id: "wiki".into(),
+        };
+
+        let resp = handle_request(
+            "tools/call",
+            json!({
+                "name": "mempalace_search",
+                "arguments": {
+                    "query": "scope leak",
+                    "bank_id": "other"
+                }
+            }),
+            json!(1),
+            &mut eng,
+            &repo,
+            &viewer,
+            std::path::Path::new("llm-config.toml"),
+            false,
+            None,
+            None,
+        );
+
+        assert_eq!(
+            resp.pointer("/error/data/kind").and_then(Value::as_str),
+            Some("scope_denied")
         );
     }
 
