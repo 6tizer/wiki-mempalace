@@ -31,13 +31,16 @@
 `acked_up_to_id`，所以多个消费者可以各自 ack 同一批事件，不会互相阻塞或导致 replay 循环。
 
 `wiki_outbox.processed_at` / `wiki_outbox.consumer_tag` 仍保留作 legacy 观测字段；它们不是多消费者语义的真源。
+因此 ack 返回值、consumer cursor 和 backlog 都不能依赖这些 legacy 字段。
 
 `mark_outbox_processed(up_to_id, consumer_tag)` 的语义：
 
 - 若该 consumer 第一次 ack，新增 progress 行。
 - 若 `up_to_id` 大于旧 progress，推进到新值。
 - 若 `up_to_id` 小于或等于旧 progress，不回退。
-- 返回值是该 consumer 自己本次新 ack 的事件数。
+- 若 `up_to_id` 大于当前 outbox head，只推进到当前 head，避免 cursor 跳到未来。
+- 返回值是该 consumer 自己本次新 ack 的事件数：`id > previous_ack AND id <= effective_up_to_id`。
+  即使这些事件已经被其他 consumer 写过 `processed_at`，也仍计入当前 consumer 的新增 ack。
 
 `export_outbox_ndjson_for_consumer(consumer_tag)` 的语义：
 
@@ -69,3 +72,8 @@ live bank 由 `--viewer-scope` 派生：
 
 消费端应以 `wiki_outbox.id` 或事件 payload 的稳定 key 做幂等，不应假设事件只投递一次。
 外部消费者应使用独立 `consumer_tag`，不要复用 mempalace 的 tag。
+
+## SQLite 写入可靠性
+
+`SqliteRepository::open` 统一设置 SQLite `busy_timeout`，短暂 write lock 会等待而不是立即失败。
+storage 层多步骤写事务统一通过 `BEGIN IMMEDIATE` wrapper 进入；成功 commit，失败 rollback。
