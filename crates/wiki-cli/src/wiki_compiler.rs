@@ -975,10 +975,11 @@ fn render_summary_markdown(
 
 fn parse_compiler_plan_json(reply: &str) -> Result<LlmIngestPlanV1, Box<dyn std::error::Error>> {
     let slice = llm::parse_json_object_slice(reply);
+    let raw = llm::redact_for_llm_error(reply);
     let value: serde_json::Value =
-        serde_json::from_str(slice).map_err(|e| format!("JSON parse error: {e}; raw={reply}"))?;
+        serde_json::from_str(slice).map_err(|e| format!("JSON parse error: {e}; raw={raw}"))?;
     let plan: LlmIngestPlanV1 =
-        serde_json::from_value(value).map_err(|e| format!("JSON parse error: {e}; raw={reply}"))?;
+        serde_json::from_value(value).map_err(|e| format!("JSON parse error: {e}; raw={raw}"))?;
     Ok(plan)
 }
 

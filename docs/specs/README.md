@@ -59,4 +59,5 @@
 - [audit-v2-02-mcp-scope-capability/](audit-v2-02-mcp-scope-capability/) — Audit Report Follow-up v2 PR 02: MCP write scope capability and supersede visibility guard。已合入 PR #84。
 - [audit-v2-03-mempalace-bank-capability/](audit-v2-03-mempalace-bank-capability/) — Audit Report Follow-up v2 PR 03: derive mempalace bank from MCP viewer scope and scope KG reads。已合入 PR #85。
 - [audit-v2-04-cross-bank-dedupe/](audit-v2-04-cross-bank-dedupe/) — Audit Report Follow-up v2 PR 04: drawer dedupe by `(bank_id, content_hash)`。已合入 PR #86。
-- [audit-v2-05-queryserved-privacy/](audit-v2-05-queryserved-privacy/) — Audit Report Follow-up v2 PR 05: QueryServed hash/scope/schema privacy。Active branch `codex/audit-v2-05-queryserved-privacy`。
+- [audit-v2-05-queryserved-privacy/](audit-v2-05-queryserved-privacy/) — Audit Report Follow-up v2 PR 05: QueryServed hash/scope/schema privacy。已合入 PR #87。
+- [audit-v2-06-llm-governance/](audit-v2-06-llm-governance/) — Audit Report Follow-up v2 PR 06: wiki-cli LLM env keys, untrusted prompt boundary, limits, redaction, and provider allowlist。Active branch `codex/audit-v2-06-llm-governance`。

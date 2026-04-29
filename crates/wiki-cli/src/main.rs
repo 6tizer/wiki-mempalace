@@ -2481,11 +2481,20 @@ fn run_with_engine(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                 );
             }
             let cfg = llm::load_llm_config(&cli.llm_config)?;
-            let user = format!("Source URI:\n{uri}\n\nBody:\n{body}");
-            let reply = llm::complete_chat(&cfg, llm::ingest_llm_system_prompt(), &user, 8192)?;
+            let user = llm::build_ingest_llm_user_prompt(&cfg, &uri, &body)?;
+            let reply = llm::complete_chat_json_object(
+                &cfg,
+                llm::ingest_llm_system_prompt(),
+                &user,
+                cfg.max_output_tokens.min(8192),
+            )?;
             let slice = llm::parse_json_object_slice(&reply);
-            let plan: LlmIngestPlanV1 = serde_json::from_str(slice)
-                .map_err(|e| format!("ingest-llm JSON parse error: {e}; raw={reply}"))?;
+            let plan: LlmIngestPlanV1 = serde_json::from_str(slice).map_err(|e| {
+                format!(
+                    "ingest-llm JSON parse error: {e}; raw={}",
+                    llm::redact_for_llm_error(&reply)
+                )
+            })?;
             plan.validate_bounds()
                 .map_err(|e| format!("ingest-llm plan validation error: {e}"))?;
             if dry_run {
