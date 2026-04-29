@@ -52,6 +52,49 @@ fn page_written_creates_drawer_and_rerun_does_not_duplicate() {
 }
 
 #[test]
+fn same_page_content_can_exist_in_different_banks() {
+    let path = temp_db_path("cross-bank-page-written");
+    let sink_a = LiveMempalaceSink::open(&path, "bank_a").unwrap();
+    let sink_b = LiveMempalaceSink::open(&path, "bank_b").unwrap();
+    let mut page = WikiPage::new(
+        "Shared Coordinates",
+        "# Shared Coordinates\n\nsame body",
+        Scope::Shared {
+            team_id: "bank_a".into(),
+        },
+    );
+    page.entry_type = Some(EntryType::Concept);
+
+    sink_a.on_page_written(&page).unwrap();
+    sink_b.on_page_written(&page).unwrap();
+    sink_a.on_page_written(&page).unwrap();
+
+    let conn = rusqlite::Connection::open(&path).unwrap();
+    let total: i64 = conn
+        .query_row("SELECT COUNT(*) FROM drawers", [], |row| row.get(0))
+        .unwrap();
+    let bank_a: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM drawers WHERE bank_id = 'bank_a'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let bank_b: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM drawers WHERE bank_id = 'bank_b'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(total, 2);
+    assert_eq!(bank_a, 1);
+    assert_eq!(bank_b, 1);
+
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
 fn source_ingested_does_not_create_source_drawer() {
     let path = temp_db_path("source-ingested");
     let sink = LiveMempalaceSink::open(&path, "wiki").unwrap();
