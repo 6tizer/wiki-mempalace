@@ -19,7 +19,7 @@
 - [m12-strategy/](m12-strategy/) — M12 strategy suggestions. Merged PR #16。
 - [schema-t2-tags/](schema-t2-tags/) — Schema T2 tag governance. Merged PR #13。
 - [longmemeval-auto/](longmemeval-auto/) — J13 LongMemEval `rust-mempalace` local retrieval baseline artifacts. Merged PR #19。
-- [vault-report-paths/](vault-report-paths/) — Vault-relative report output paths for dashboard, suggest, metrics, and automation health. Active branch `codex/vault-report-paths`。
+- [vault-report-paths/](vault-report-paths/) — Vault-relative report output paths for dashboard, suggest, metrics, and automation health. Merged PR #22。
 - [vault-audit/](vault-audit/) — B1 read-only vault audit and report model. Merged PR #23。
 - [vault-backfill/](vault-backfill/) — B2 stable IDs and vault-to-`wiki.db` backfill. Merged PR #23。
 - [palace-init/](palace-init/) — B3 `palace.db` initialization from wiki outbox and fusion validation. Merged PR #23。
@@ -69,3 +69,4 @@
 - [audit-disposition-01-mcp-query-storage-ports/](audit-disposition-01-mcp-query-storage-ports/) — Audit Disposition PR 01: MCP `wiki_query` defaults to storage-backed wiki search ports。已合入 PR #95。
 - [audit-disposition-02-doc-consistency/](audit-disposition-02-doc-consistency/) — Audit Disposition PR 02: active docs edition / Notion sync consistency cleanup。已合入 PR #96。
 - [audit-disposition-03-mcp-api-reference/](audit-disposition-03-mcp-api-reference/) — Audit Disposition PR 03: MCP API reference refresh plus docs sync tests。已合入 PR #97。
+- [next-three-closeout-2026-04-30/](next-three-closeout-2026-04-30/) — Stale branch/docs cleanup, read-only row-state production validation, and scheduled hardening observation。PR #99。

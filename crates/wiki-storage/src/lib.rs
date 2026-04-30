@@ -1,4 +1,4 @@
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{params, Connection, OpenFlags, OptionalExtension};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use std::io::Write;
 use std::time::Duration as StdDuration;
@@ -584,6 +584,13 @@ CREATE INDEX IF NOT EXISTS wiki_canonical_alias_page_idx
             repo.ensure_embedding_ann_index_current()?;
         }
         Ok(repo)
+    }
+
+    pub fn open_read_only(path: impl AsRef<std::path::Path>) -> Result<Self, StorageError> {
+        let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+        conn.busy_timeout(StdDuration::from_millis(SQLITE_BUSY_TIMEOUT_MS))?;
+        conn.pragma_update(None, "query_only", true)?;
+        Ok(Self { conn })
     }
 
     pub fn start_automation_run(&self, job_name: &str) -> Result<i64, StorageError> {
@@ -1340,6 +1347,9 @@ CREATE INDEX IF NOT EXISTS wiki_canonical_alias_page_idx
     }
 
     fn state_row_count(&self) -> Result<i64, StorageError> {
+        if !self.table_exists("wiki_state_row")? {
+            return Ok(0);
+        }
         Ok(self
             .conn
             .query_row("SELECT COUNT(*) FROM wiki_state_row", [], |row| row.get(0))?)
@@ -1348,6 +1358,9 @@ CREATE INDEX IF NOT EXISTS wiki_canonical_alias_page_idx
     fn state_row_collection_counts(
         &self,
     ) -> Result<Vec<WikiStateRowCollectionCount>, StorageError> {
+        if !self.table_exists("wiki_state_row")? {
+            return Ok(Vec::new());
+        }
         let mut stmt = self.conn.prepare(
             "SELECT collection, COUNT(*)
              FROM wiki_state_row
@@ -1368,6 +1381,9 @@ CREATE INDEX IF NOT EXISTS wiki_canonical_alias_page_idx
     }
 
     fn load_snapshot_blob(&self) -> Result<Option<StorageSnapshot>, StorageError> {
+        if !self.table_exists("wiki_state")? {
+            return Ok(None);
+        }
         let row = self
             .conn
             .query_row("SELECT payload_json FROM wiki_state WHERE id=1", [], |r| {
@@ -1378,6 +1394,18 @@ CREATE INDEX IF NOT EXISTS wiki_canonical_alias_page_idx
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
             Err(e) => Err(StorageError::Db(e)),
         }
+    }
+
+    fn table_exists(&self, table_name: &str) -> Result<bool, StorageError> {
+        let exists: i64 = self.conn.query_row(
+            "SELECT EXISTS(
+                SELECT 1 FROM sqlite_master
+                WHERE type = 'table' AND name = ?1
+            )",
+            [table_name],
+            |row| row.get(0),
+        )?;
+        Ok(exists != 0)
     }
 
     fn write_snapshot_rows(&self, snapshot: &StorageSnapshot) -> Result<(), StorageError> {

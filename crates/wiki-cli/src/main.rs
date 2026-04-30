@@ -30,7 +30,7 @@ use wiki_mempalace_bridge::{
 use wiki_storage::{
     canonical_notion_page_id, AutomationJobFailureSummary, AutomationRunRecord,
     AutomationRunStatus, EmbeddingWrite, OutboxConsumerProgress, OutboxStats, SqliteRepository,
-    SqliteSearchPorts, SqliteWriterLease, WikiRepository,
+    SqliteSearchPorts, SqliteWriterLease, WikiRepository, WikiStateRowVerification,
 };
 
 mod banner;
@@ -255,6 +255,12 @@ enum Cmd {
         body: Option<String>,
     },
     ExportOutboxNdjson,
+    /// Verify row-level wiki_state rows against the legacy snapshot blob using a read-only DB handle.
+    VerifyRowState {
+        /// Emit machine-readable JSON instead of text lines.
+        #[arg(long, default_value_t = false)]
+        json: bool,
+    },
     ExportOutboxNdjsonFrom {
         /// Consumer cursor to export from. Defaults to mempalace.
         #[arg(long, default_value = "mempalace")]
@@ -2336,6 +2342,75 @@ fn automation_job_needs_writer_lease(job: AutomationJob) -> bool {
     )
 }
 
+#[derive(Serialize)]
+struct RowStateVerificationOutput<'a> {
+    status: &'a str,
+    #[serde(flatten)]
+    verification: &'a WikiStateRowVerification,
+}
+
+pub(crate) fn run_verify_row_state(
+    db_path: &Path,
+    json: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let repo = SqliteRepository::open_read_only(db_path)?;
+    let verification = repo.verify_row_state_matches_blob()?;
+    let status = if row_state_verification_error(&verification).is_none() {
+        "ok"
+    } else {
+        "error"
+    };
+
+    if json {
+        let output = RowStateVerificationOutput {
+            status,
+            verification: &verification,
+        };
+        println!("{}", serde_json::to_string_pretty(&output)?);
+    } else {
+        print_row_state_verification(&verification, status);
+    }
+
+    if let Some(error) = row_state_verification_error(&verification) {
+        return Err(error.into());
+    }
+    Ok(())
+}
+
+fn print_row_state_verification(verification: &WikiStateRowVerification, status: &str) {
+    let matches_blob = match verification.matches_blob {
+        Some(true) => "true",
+        Some(false) => "false",
+        None => "n/a",
+    };
+    println!(
+        "row_state status={} rows={} blob_present={} matches_blob={}",
+        status, verification.row_count, verification.blob_present, matches_blob
+    );
+    for count in &verification.collection_counts {
+        println!(
+            "row_state_collection collection={} rows={}",
+            count.collection, count.row_count
+        );
+    }
+}
+
+fn row_state_verification_error(verification: &WikiStateRowVerification) -> Option<String> {
+    if verification.row_count == 0 {
+        return Some("row-level state has no rows; blob fallback is still required".to_string());
+    }
+    if !verification.blob_present {
+        return Some(
+            "legacy snapshot blob is missing; fallback compatibility cannot be verified"
+                .to_string(),
+        );
+    }
+    if verification.matches_blob != Some(true) {
+        return Some("row-level state does not match legacy snapshot blob".to_string());
+    }
+    None
+}
+
 fn cmd_writer_lease_label(cmd: &Cmd) -> &'static str {
     match cmd {
         Cmd::Automation {
@@ -2399,6 +2474,7 @@ fn cmd_needs_writer_lease(cmd: &Cmd) -> bool {
             command: NotionArchivedRetirementCmd::Plan { .. },
         }
         | Cmd::ExportOutboxNdjson
+        | Cmd::VerifyRowState { .. }
         | Cmd::ExportOutboxNdjsonFrom { .. }
         | Cmd::Explain { .. }
         | Cmd::VaultAudit { .. }
@@ -2438,6 +2514,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             | Cmd::Dashboard { .. }
             | Cmd::Suggest { .. }
             | Cmd::SuggestExecutorApply { .. }
+            | Cmd::VerifyRowState { .. }
     ) {
         banner::print_startup_banner();
     }
@@ -3103,6 +3180,7 @@ fn run_with_engine(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         Cmd::ExportOutboxNdjson => {
             commands::outbox::run_export_all(&repo)?;
         }
+        Cmd::VerifyRowState { .. } => unreachable!(),
         Cmd::ExportOutboxNdjsonFrom {
             consumer_tag,
             last_id,
@@ -4501,6 +4579,9 @@ mod tests {
         assert!(!cmd_needs_writer_lease(&Cmd::ExportOutboxNdjsonFrom {
             consumer_tag: DEFAULT_MEMPALACE_CONSUMER_TAG.into(),
             last_id: 0,
+        }));
+        assert!(!cmd_needs_writer_lease(&Cmd::VerifyRowState {
+            json: false
         }));
         assert!(!cmd_needs_writer_lease(&Cmd::NotionArchivedRetirement {
             command: NotionArchivedRetirementCmd::Plan {
