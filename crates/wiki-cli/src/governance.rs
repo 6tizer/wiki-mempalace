@@ -1,11 +1,20 @@
 use std::path::{Path, PathBuf};
 
 use time::OffsetDateTime;
-use wiki_core::{EvidenceFixActionStatus, EvidenceFixerPlan, GovernanceScanReport};
+use wiki_core::{
+    EvidenceFixActionStatus, EvidenceFixerApplyReport, EvidenceFixerPlan,
+    EvidenceFixerRestoreReport, GovernanceScanReport,
+};
 
 pub struct GovernanceScanFiles {
     pub json_path: PathBuf,
     pub markdown_path: PathBuf,
+}
+
+pub struct EvidenceFixerApplyFiles {
+    pub json_path: PathBuf,
+    pub markdown_path: PathBuf,
+    pub tombstone_paths: Vec<PathBuf>,
 }
 
 pub fn governance_report_prefix(generated_at: OffsetDateTime) -> String {
@@ -24,6 +33,32 @@ pub fn governance_report_prefix(generated_at: OffsetDateTime) -> String {
 pub fn fixer_plan_prefix(generated_at: OffsetDateTime) -> String {
     format!(
         "{:04}-{:02}-{:02}T{:02}{:02}{:02}.{:09}Z-evidence-fixer-plan",
+        generated_at.year(),
+        generated_at.month() as u8,
+        generated_at.day(),
+        generated_at.hour(),
+        generated_at.minute(),
+        generated_at.second(),
+        generated_at.nanosecond()
+    )
+}
+
+pub fn fixer_apply_report_prefix(generated_at: OffsetDateTime) -> String {
+    format!(
+        "{:04}-{:02}-{:02}T{:02}{:02}{:02}.{:09}Z-evidence-fixer-apply",
+        generated_at.year(),
+        generated_at.month() as u8,
+        generated_at.day(),
+        generated_at.hour(),
+        generated_at.minute(),
+        generated_at.second(),
+        generated_at.nanosecond()
+    )
+}
+
+pub fn fixer_restore_report_prefix(generated_at: OffsetDateTime) -> String {
+    format!(
+        "{:04}-{:02}-{:02}T{:02}{:02}{:02}.{:09}Z-evidence-fixer-restore",
         generated_at.year(),
         generated_at.month() as u8,
         generated_at.day(),
@@ -69,6 +104,36 @@ pub fn render_fixer_plan_text(plan: &EvidenceFixerPlan) -> String {
     )
 }
 
+pub fn render_fixer_apply_text(report: &EvidenceFixerApplyReport) -> String {
+    format!(
+        concat!(
+            "evidence fixer apply: report_id={} plan_id={} mode={:?} total={} ",
+            "would_apply={} applied={} blocked={} skipped={} tombstones={}\n"
+        ),
+        report.report_id,
+        report.plan_id,
+        report.mode,
+        report.summary.total,
+        report.summary.would_apply,
+        report.summary.applied,
+        report.summary.blocked,
+        report.summary.skipped,
+        report.tombstones.len(),
+    )
+}
+
+pub fn render_fixer_restore_text(report: &EvidenceFixerRestoreReport) -> String {
+    format!(
+        "evidence fixer restore: report_id={} tombstone_id={} mode={:?} status={:?} subject={}:{}\n",
+        report.report_id,
+        report.tombstone_id,
+        report.mode,
+        report.status,
+        report.restored_subject_type,
+        report.restored_subject_id,
+    )
+}
+
 pub fn write_scan_files(
     report: &GovernanceScanReport,
     report_dir: &Path,
@@ -97,6 +162,53 @@ pub fn write_fixer_plan_files(
     let markdown_path = report_dir.join(&markdown_name);
     std::fs::write(&json_path, serde_json::to_string_pretty(plan)?)?;
     std::fs::write(&markdown_path, render_fixer_plan_markdown(plan, &json_name))?;
+    Ok(GovernanceScanFiles {
+        json_path,
+        markdown_path,
+    })
+}
+
+pub fn write_fixer_apply_files(
+    report: &EvidenceFixerApplyReport,
+    report_dir: &Path,
+) -> Result<EvidenceFixerApplyFiles, Box<dyn std::error::Error>> {
+    std::fs::create_dir_all(report_dir)?;
+    let json_name = format!("{}.json", report.report_id);
+    let markdown_name = format!("{}.md", report.report_id);
+    let json_path = report_dir.join(&json_name);
+    let markdown_path = report_dir.join(&markdown_name);
+    std::fs::write(&json_path, serde_json::to_string_pretty(report)?)?;
+    std::fs::write(
+        &markdown_path,
+        render_fixer_apply_markdown(report, &json_name),
+    )?;
+    let mut tombstone_paths = Vec::new();
+    for tombstone in &report.tombstones {
+        let path = report_dir.join(format!("{}.json", tombstone.tombstone_id));
+        std::fs::write(&path, serde_json::to_string_pretty(tombstone)?)?;
+        tombstone_paths.push(path);
+    }
+    Ok(EvidenceFixerApplyFiles {
+        json_path,
+        markdown_path,
+        tombstone_paths,
+    })
+}
+
+pub fn write_fixer_restore_files(
+    report: &EvidenceFixerRestoreReport,
+    report_dir: &Path,
+) -> Result<GovernanceScanFiles, Box<dyn std::error::Error>> {
+    std::fs::create_dir_all(report_dir)?;
+    let json_name = format!("{}.json", report.report_id);
+    let markdown_name = format!("{}.md", report.report_id);
+    let json_path = report_dir.join(&json_name);
+    let markdown_path = report_dir.join(&markdown_name);
+    std::fs::write(&json_path, serde_json::to_string_pretty(report)?)?;
+    std::fs::write(
+        &markdown_path,
+        render_fixer_restore_markdown(report, &json_name),
+    )?;
     Ok(GovernanceScanFiles {
         json_path,
         markdown_path,
@@ -278,6 +390,78 @@ pub fn render_fixer_plan_markdown(plan: &EvidenceFixerPlan, sibling_json: &str) 
         out.push_str("No blocked actions.\n");
     }
     out
+}
+
+pub fn render_fixer_apply_markdown(
+    report: &EvidenceFixerApplyReport,
+    sibling_json: &str,
+) -> String {
+    let mut out = format!(
+        concat!(
+            "# Evidence Fixer Apply\n\n",
+            "- report_id: `{}`\n",
+            "- plan_id: `{}`\n",
+            "- mode: `{:?}`\n",
+            "- source_of_truth: `{}`\n\n",
+            "> Sibling JSON `{}` is the source of truth.\n\n",
+            "## Summary\n\n",
+            "- total: `{}`\n",
+            "- would_apply: `{}`\n",
+            "- applied: `{}`\n",
+            "- blocked: `{}`\n",
+            "- skipped: `{}`\n",
+            "- tombstones: `{}`\n\n",
+        ),
+        report.report_id,
+        report.plan_id,
+        report.mode,
+        sibling_json,
+        sibling_json,
+        report.summary.total,
+        report.summary.would_apply,
+        report.summary.applied,
+        report.summary.blocked,
+        report.summary.skipped,
+        report.tombstones.len(),
+    );
+    out.push_str("## Actions\n\n");
+    for action in report.actions.iter().take(80) {
+        out.push_str(&format!(
+            "- `{}` {:?} status={:?} reason={} tombstone={}\n",
+            action.action_id,
+            action.kind,
+            action.status,
+            action.reason,
+            action.tombstone_id.as_deref().unwrap_or("none")
+        ));
+    }
+    out
+}
+
+pub fn render_fixer_restore_markdown(
+    report: &EvidenceFixerRestoreReport,
+    sibling_json: &str,
+) -> String {
+    format!(
+        concat!(
+            "# Evidence Fixer Restore\n\n",
+            "- report_id: `{}`\n",
+            "- tombstone_id: `{}`\n",
+            "- mode: `{:?}`\n",
+            "- status: `{:?}`\n",
+            "- subject: `{}:{}`\n",
+            "- source_of_truth: `{}`\n\n",
+            "> Sibling JSON `{}` is the source of truth.\n"
+        ),
+        report.report_id,
+        report.tombstone_id,
+        report.mode,
+        report.status,
+        report.restored_subject_type,
+        report.restored_subject_id,
+        sibling_json,
+        sibling_json,
+    )
 }
 
 #[cfg(test)]

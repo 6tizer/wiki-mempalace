@@ -18,10 +18,11 @@ use wiki_core::{
     WikiMetricsReport, WikiPage,
 };
 use wiki_kernel::{
-    collect_wiki_metrics, finalize_consumed_page, format_claim_doc_id, initial_status_for,
-    map_findings_to_fixes, merge_graph_rankings, run_governance_scan, run_strategy_scan,
-    write_lint_report, write_projection, GovernanceScanOptions, InMemorySearchPorts, InMemoryStore,
-    LlmWikiEngine, NoopWikiHook, SearchPorts, StrategyScanOptions,
+    apply_evidence_fixer_plan, collect_wiki_metrics, finalize_consumed_page, format_claim_doc_id,
+    initial_status_for, map_findings_to_fixes, merge_graph_rankings,
+    restore_evidence_fixer_tombstone, run_governance_scan, run_strategy_scan, write_lint_report,
+    write_projection, EvidenceFixerApplyOptions, GovernanceScanOptions, InMemorySearchPorts,
+    InMemoryStore, LlmWikiEngine, NoopWikiHook, SearchPorts, StrategyScanOptions,
 };
 use wiki_mempalace_bridge::{
     consume_outbox_ndjson_with_resolver_and_stats, LiveMempalaceSink, MempalaceError,
@@ -627,6 +628,54 @@ enum GovernanceCmd {
         #[arg(long, default_value_t = 5)]
         max_web_checks: usize,
     },
+    /// Apply a typed evidence fixer plan. Defaults to preflight unless --apply is passed.
+    FixerApply {
+        /// Evidence fixer plan JSON path.
+        #[arg(long)]
+        plan: PathBuf,
+        /// Apply policy. First supported policy is evidence-auto.
+        #[arg(long, value_enum, default_value_t = EvidenceFixerPolicyArg::EvidenceAuto)]
+        policy: EvidenceFixerPolicyArg,
+        /// Execute mutations. Without this flag the command only preflights.
+        #[arg(long, default_value_t = false)]
+        apply: bool,
+        /// Print pretty JSON to stdout.
+        #[arg(long, default_value_t = false)]
+        json: bool,
+        /// Write sibling JSON + Markdown reports and tombstone files to this directory.
+        #[arg(long)]
+        report_dir: Option<PathBuf>,
+    },
+    /// Restore one evidence fixer tombstone. Defaults to preflight unless --apply is passed.
+    Restore {
+        /// Evidence fixer tombstone JSON path.
+        #[arg(long)]
+        tombstone: PathBuf,
+        /// Execute restore. Without this flag the command only preflights.
+        #[arg(long, default_value_t = false)]
+        apply: bool,
+        /// Print pretty JSON to stdout.
+        #[arg(long, default_value_t = false)]
+        json: bool,
+        /// Write sibling JSON + Markdown restore report to this directory.
+        #[arg(long)]
+        report_dir: Option<PathBuf>,
+    },
+}
+
+#[derive(Clone, Copy, Debug, ValueEnum)]
+enum EvidenceFixerPolicyArg {
+    EvidenceAuto,
+}
+
+impl From<EvidenceFixerPolicyArg> for wiki_core::EvidenceFixerApplyPolicy {
+    fn from(value: EvidenceFixerPolicyArg) -> Self {
+        match value {
+            EvidenceFixerPolicyArg::EvidenceAuto => {
+                wiki_core::EvidenceFixerApplyPolicy::EvidenceAuto
+            }
+        }
+    }
 }
 
 #[derive(Subcommand)]
@@ -2511,6 +2560,12 @@ fn cmd_writer_lease_label(cmd: &Cmd) -> &'static str {
         Cmd::NotionSync { .. } => "notion-sync",
         Cmd::NotionSyncIndexBackfill { .. } => "notion-sync-index-backfill",
         Cmd::SuggestExecutorApply { .. } => "suggest-executor-apply",
+        Cmd::Governance {
+            cmd: GovernanceCmd::FixerApply { .. },
+        } => "governance-fixer-apply",
+        Cmd::Governance {
+            cmd: GovernanceCmd::Restore { .. },
+        } => "governance-restore",
         Cmd::VaultBackfill { .. } => "vault-backfill",
         _ => "wiki-cli",
     }
@@ -2537,6 +2592,12 @@ fn cmd_needs_writer_lease(cmd: &Cmd) -> bool {
         Cmd::IngestLlm { dry_run, .. } => !dry_run,
         Cmd::Fix { dry_run, write, .. } => *write && !dry_run,
         Cmd::SuggestExecutorApply { apply, .. } => *apply,
+        Cmd::Governance {
+            cmd: GovernanceCmd::FixerApply { apply, .. },
+        } => *apply,
+        Cmd::Governance {
+            cmd: GovernanceCmd::Restore { apply, .. },
+        } => *apply,
         Cmd::VaultBackfill { apply, .. } => *apply,
         Cmd::ConsistencyApply { apply, .. } => *apply,
         Cmd::BatchIngest { dry_run, .. } => !dry_run,
@@ -2568,7 +2629,9 @@ fn cmd_needs_writer_lease(cmd: &Cmd) -> bool {
         | Cmd::Metrics { .. }
         | Cmd::Dashboard { .. }
         | Cmd::Suggest { .. }
-        | Cmd::Governance { .. }
+        | Cmd::Governance {
+            cmd: GovernanceCmd::Scan { .. } | GovernanceCmd::FixerPlan { .. },
+        }
         | Cmd::AiProfile { .. }
         | Cmd::WebSearch { .. }
         | Cmd::LlmSmoke { .. }
@@ -3390,6 +3453,91 @@ fn run_with_engine(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                 println!("{}", serde_json::to_string_pretty(&report)?);
             } else {
                 print!("{}", governance::render_scan_text(&report));
+                if let Some(files) = files {
+                    println!("json_report_file={}", files.json_path.display());
+                    println!("markdown_report_file={}", files.markdown_path.display());
+                }
+            }
+        }
+        Cmd::Governance {
+            cmd:
+                GovernanceCmd::FixerApply {
+                    plan,
+                    policy,
+                    apply,
+                    json,
+                    report_dir,
+                },
+        } => {
+            let plan_path = resolve_wiki_relative_path(wiki_root.as_deref(), plan);
+            let plan: wiki_core::EvidenceFixerPlan =
+                serde_json::from_str(&std::fs::read_to_string(&plan_path)?)?;
+            let now = OffsetDateTime::now_utc();
+            let report = apply_evidence_fixer_plan(
+                &mut eng,
+                &viewer,
+                &plan,
+                EvidenceFixerApplyOptions {
+                    generated_at: now,
+                    report_id: governance::fixer_apply_report_prefix(now),
+                    policy: policy.into(),
+                    apply,
+                },
+            );
+            if apply && report.summary.applied > 0 {
+                eng.save_to_repo_and_flush_outbox_with_policy(&repo, 128, 3)?;
+                maybe_sync_projection(sync_wiki, wiki_root.as_deref(), &eng)?;
+            }
+            let files = report_dir
+                .map(|dir| resolve_wiki_relative_path(wiki_root.as_deref(), dir))
+                .map(|dir| governance::write_fixer_apply_files(&report, &dir))
+                .transpose()?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&report)?);
+            } else {
+                print!("{}", governance::render_fixer_apply_text(&report));
+                if let Some(files) = files {
+                    println!("json_report_file={}", files.json_path.display());
+                    println!("markdown_report_file={}", files.markdown_path.display());
+                    for path in files.tombstone_paths {
+                        println!("tombstone_file={}", path.display());
+                    }
+                }
+            }
+        }
+        Cmd::Governance {
+            cmd:
+                GovernanceCmd::Restore {
+                    tombstone,
+                    apply,
+                    json,
+                    report_dir,
+                },
+        } => {
+            let tombstone_path = resolve_wiki_relative_path(wiki_root.as_deref(), tombstone);
+            let tombstone: wiki_core::EvidenceFixerTombstone =
+                serde_json::from_str(&std::fs::read_to_string(&tombstone_path)?)?;
+            let now = OffsetDateTime::now_utc();
+            let report = restore_evidence_fixer_tombstone(
+                &mut eng,
+                &viewer,
+                &tombstone,
+                apply,
+                now,
+                governance::fixer_restore_report_prefix(now),
+            );
+            if apply && report.status == wiki_core::EvidenceFixerApplyActionStatus::Applied {
+                eng.save_to_repo_and_flush_outbox_with_policy(&repo, 128, 3)?;
+                maybe_sync_projection(sync_wiki, wiki_root.as_deref(), &eng)?;
+            }
+            let files = report_dir
+                .map(|dir| resolve_wiki_relative_path(wiki_root.as_deref(), dir))
+                .map(|dir| governance::write_fixer_restore_files(&report, &dir))
+                .transpose()?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&report)?);
+            } else {
+                print!("{}", governance::render_fixer_restore_text(&report));
                 if let Some(files) = files {
                     println!("json_report_file={}", files.json_path.display());
                     println!("markdown_report_file={}", files.markdown_path.display());

@@ -1,6 +1,10 @@
 //! Evidence Fixer typed dry-run plan.
 
-use crate::schema::{EntryStatus, EntryType};
+use crate::{
+    model::Claim,
+    page::WikiPage,
+    schema::{EntryStatus, EntryType},
+};
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
@@ -154,6 +158,115 @@ pub fn parse_semantic_patch_proposals_json(
     serde_json::from_str::<SemanticPatchProposalSet>(raw).map(|set| set.proposals)
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EvidenceFixerApplyPolicy {
+    EvidenceAuto,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EvidenceFixerRunMode {
+    Preflight,
+    Apply,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EvidenceFixerApplyActionStatus {
+    WouldApply,
+    Applied,
+    Blocked,
+    Skipped,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct EvidenceFixerApplySummary {
+    pub total: u64,
+    pub would_apply: u64,
+    pub applied: u64,
+    pub blocked: u64,
+    pub skipped: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EvidenceFixerApplyActionReport {
+    pub action_id: String,
+    pub kind: EvidenceFixActionKind,
+    pub subject_type: String,
+    pub subject_id: Option<String>,
+    pub status: EvidenceFixerApplyActionStatus,
+    pub reason: String,
+    pub tombstone_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EvidenceFixerApplyReport {
+    pub report_id: String,
+    pub plan_id: String,
+    pub generated_at: Option<OffsetDateTime>,
+    pub mode: EvidenceFixerRunMode,
+    pub policy: EvidenceFixerApplyPolicy,
+    pub summary: EvidenceFixerApplySummary,
+    pub actions: Vec<EvidenceFixerApplyActionReport>,
+    pub tombstones: Vec<EvidenceFixerTombstone>,
+}
+
+impl EvidenceFixerApplyReport {
+    pub fn refresh_summary(&mut self) {
+        self.summary.total = self.actions.len() as u64;
+        self.summary.would_apply = self
+            .actions
+            .iter()
+            .filter(|action| action.status == EvidenceFixerApplyActionStatus::WouldApply)
+            .count() as u64;
+        self.summary.applied = self
+            .actions
+            .iter()
+            .filter(|action| action.status == EvidenceFixerApplyActionStatus::Applied)
+            .count() as u64;
+        self.summary.blocked = self
+            .actions
+            .iter()
+            .filter(|action| action.status == EvidenceFixerApplyActionStatus::Blocked)
+            .count() as u64;
+        self.summary.skipped = self
+            .actions
+            .iter()
+            .filter(|action| action.status == EvidenceFixerApplyActionStatus::Skipped)
+            .count() as u64;
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EvidenceFixerTombstone {
+    pub tombstone_id: String,
+    pub action_id: String,
+    pub subject_type: String,
+    pub subject_id: String,
+    pub created_at: Option<OffsetDateTime>,
+    pub snapshot: EvidenceFixerSnapshot,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum EvidenceFixerSnapshot {
+    Page { page: WikiPage },
+    Claim { claim: Claim },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EvidenceFixerRestoreReport {
+    pub report_id: String,
+    pub tombstone_id: String,
+    pub generated_at: Option<OffsetDateTime>,
+    pub mode: EvidenceFixerRunMode,
+    pub status: EvidenceFixerApplyActionStatus,
+    pub reason: String,
+    pub restored_subject_type: String,
+    pub restored_subject_id: String,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -170,5 +283,30 @@ mod tests {
         let proposals = parse_semantic_patch_proposals_json(raw).unwrap();
         assert_eq!(proposals.len(), 1);
         assert_eq!(proposals[0].source_ids, vec!["s1"]);
+    }
+
+    #[test]
+    fn apply_report_summarizes_statuses() {
+        let mut report = EvidenceFixerApplyReport {
+            report_id: "r1".into(),
+            plan_id: "p1".into(),
+            generated_at: None,
+            mode: EvidenceFixerRunMode::Preflight,
+            policy: EvidenceFixerApplyPolicy::EvidenceAuto,
+            summary: EvidenceFixerApplySummary::default(),
+            actions: vec![EvidenceFixerApplyActionReport {
+                action_id: "a1".into(),
+                kind: EvidenceFixActionKind::RetirePage,
+                subject_type: "page".into(),
+                subject_id: None,
+                status: EvidenceFixerApplyActionStatus::WouldApply,
+                reason: "ok".into(),
+                tombstone_id: None,
+            }],
+            tombstones: Vec::new(),
+        };
+        report.refresh_summary();
+        assert_eq!(report.summary.total, 1);
+        assert_eq!(report.summary.would_apply, 1);
     }
 }

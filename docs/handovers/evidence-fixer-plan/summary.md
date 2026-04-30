@@ -1,6 +1,6 @@
 # Handoff: Evidence Fixer Plan
 
-Implementation complete on branch `codex/evidence-fixer-plan`.
+Implementation complete and merged as PR #103 from branch `codex/evidence-fixer-plan`.
 
 PR3 of Wiki Governance + Evidence Fixer + Multi-provider Synthesis v3.
 

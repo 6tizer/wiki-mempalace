@@ -7,7 +7,7 @@
 | Pure planner | Main | `crates/wiki-kernel/src/evidence_fixer_plan.rs` | Complete |
 | CLI command + report writing | Main | `crates/wiki-cli/src/main.rs`, `crates/wiki-cli/src/governance.rs`, `crates/wiki-cli/src/commands/dispatch.rs` | Complete |
 | Privacy/web guard tests | Main | kernel + CLI tests | Complete |
-| Focused review + gates | Main | local commands / GitHub CI | Local complete; PR CI pending |
+| Focused review + gates | Main | local commands / GitHub CI | Complete; merged PR #103 |
 
 ## Verification
 

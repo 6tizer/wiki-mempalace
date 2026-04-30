@@ -52,6 +52,14 @@
 - Test gate: focused `wiki-core evidence_fixer`, `wiki-kernel evidence_fixer_plan`, `wiki-cli --test governance_fixer_plan`, workspace fmt/test/clippy, and `cargo deny` all pass locally before PR.
 - Next plan note: PR4 should consume this typed plan, recheck current state before each apply, and write tombstones before merge/retire/semantic patch actions.
 
+## 2026-04-30 / Evidence Fixer Apply + Restore
+
+- Scope: PR4 of Wiki Governance + Evidence Fixer + Multi-provider Synthesis v3; evidence-auto apply, tombstones, and restore.
+- What worked: Keeping tombstones as typed JSON artifacts makes retire/semantic patch reversible without direct Palace writes.
+- Pitfall avoided: Apply must recheck the live DB before mutation; missing subjects are skipped, and semantic patch line ranges must still match old text.
+- Test gate: focused `wiki-core evidence_fixer`, `wiki-kernel evidence_fixer_apply`, `wiki-cli --test governance_fixer_apply`, `wiki-cli --bin wiki-cli governance`, workspace fmt/test/clippy, and `cargo deny` all pass locally before PR.
+- Next plan note: PR5 should consume governance scan synthesis signals and avoid duplicate candidate topics.
+
 ## 2026-04-30 / Audit Disposition PR 1 MCP Query Storage Ports
 
 - Scope: MCP `wiki_query` default path now follows storage-backed query behavior instead of in-memory-only search.
