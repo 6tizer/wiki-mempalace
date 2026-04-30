@@ -3,7 +3,7 @@
 ## Scope
 
 L-4 from the 2026-04-30 audit disposition: active docs now align with current
-Rust edition and Notion sync state.
+Rust edition and Notion sync state. GitHub PR: #96.
 
 ## Changed Files
 

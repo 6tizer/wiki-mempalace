@@ -51,7 +51,7 @@
 - What caused rework: Mempalace `bank_id` must still be mentioned as a rejected field, but never in tool client arg columns.
 - Spec changes needed: API docs specs should separate unified `wiki-cli mcp` from standalone `rust-mempalace mcp`.
 - Tests or reviews that caught issues: Focused docs tests cover all tool names, error kinds, and mempalace bank arg table columns.
-- Next plan note: After PR3 merge, close the 2026-04-30 disposition roadmap batch as complete.
+- Next plan note: 2026-04-30 disposition batch is closed; next work should start from a fresh PRD/spec if user selects a new target.
 
 ## 2026-04-29 / Audit v2 PR 01 MCP Input Boundary
 

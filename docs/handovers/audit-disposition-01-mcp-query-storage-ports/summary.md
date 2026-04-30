@@ -3,7 +3,7 @@
 ## Scope
 
 M-5 from the 2026-04-30 audit disposition: MCP `wiki_query` now prefers
-SQLite-backed search ports.
+SQLite-backed search ports. GitHub PR: #95.
 
 ## Changed Files
 

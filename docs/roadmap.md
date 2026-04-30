@@ -12,10 +12,10 @@
 | Audit / hardening | 处置决策完成 | PR #58 + PR #60-#67 + PR #83-#93 已覆盖上一轮；M-5/L-4/I-8 已由 PR #95/#96/#97 完成 |
 | Docs state | 本页为总入口 | spec 状态见 [specs/README.md](specs/README.md)，经验见 [LESSONS.md](LESSONS.md)，历史计划见 [archive/](archive/README.md) |
 
-## 待修复 PR 计划（2026-04-30 处置决策）
+## 已完成 PR 计划（2026-04-30 处置决策）
 
 来源：Notion《wiki-mempalace 全方位代码审计报告》“处置决策（2026-04-30 产品负责人确认）”。
-当前只记录和拆 PR；实现前仍按 [dev-workflow.md](dev-workflow.md) 补 PRD / spec 三件套。
+本批 3 个待修复项已按 [dev-workflow.md](dev-workflow.md) 完成 PRD / spec 三件套 / handoff / LESSONS / CI / merge。
 
 | 顺序 | PR 主题 | 状态 | 优先级 | 覆盖项 | 范围边界 | 验收条件 | 建议分支 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -28,12 +28,12 @@
 | ID | 问题 | 决策 | Roadmap 处理 |
 | --- | --- | --- | --- |
 | M-2 | LLM Prompt Injection | 接受风险 | 个人使用、无不可信外部输入；已有 UNTRUSTED 标记、redact、validate_bounds。多用户或自动爬外部内容时再重评估。 |
-| M-5 | 默认搜索走 InMemorySearchPorts | 待修复 | 拆为 PR 1。 |
-| L-4 | 文档 edition / 增量同步矛盾 | 待修复 | 拆为 PR 2。 |
+| M-5 | 默认搜索走 InMemorySearchPorts | 已完成 | PR #95：MCP `wiki_query` 默认 storage-backed ports。 |
+| L-4 | 文档 edition / 增量同步矛盾 | 已完成 | PR #96：active docs edition / Notion sync 状态一致性。 |
 | L-5 | chrono vs time 双时间库 | 暂缓 | 依赖升级或兼容问题出现时再处理。 |
 | I-5 | 性能基准测试 | 暂缓 | 数据量超过 1 万或明显变慢时再建立 wiki pipeline benchmark。 |
 | I-6 | 并发/故障注入/压力测试 | 暂缓 | 产品闭环跑完、功能稳定后再做。 |
-| I-8 | MCP 工具 API 文档 | 待修复 | 拆为 PR 3。 |
+| I-8 | MCP 工具 API 文档 | 已完成 | PR #97：刷新 MCP API reference 并加 docs sync tests。 |
 
 ## 后续候选
 
@@ -58,9 +58,9 @@ PRD -> 白话架构 -> spec 三件套 -> branch -> Plan/review/PR。
 | Production compiler | ✅ 完成并跑完 scale-up | Compiler PR #44/#46/#47/#54/#56；生产执行后 `remaining uncompiled = 0` |
 | Retrieval / benchmark | ✅ 完成 | M9 query fusion、J13 LongMemEval PR #19、J14 PR #75、C16B ANN PR #72/#73、SearchPorts PR #90、CJK PR #91 |
 | Storage / reliability | ✅ 完成 | C16A PR #25、row-level state PR #76/#77、embedding tx PR #71、outbox reliability PR #92 |
-| MCP / API hardening | ✅ 完成 | Typed errors PR #60、Vault sync PR #61、consumer cursors PR #62/#63、scope/bank/input hardening PR #83-#85 |
+| MCP / API hardening | ✅ 完成 | Typed errors PR #60、Vault sync PR #61、consumer cursors PR #62/#63、scope/bank/input hardening PR #83-#85、MCP query/API docs PR #95/#97 |
 | CI / hardening | ✅ 完成 | Reliability matrix PR #65、dependency audit PR #66、required CI PR #89、hardening lane PR #93 |
-| DX / maintainability | ✅ 完成 | CLI modularization PR #78/#79、time unification PR #80、MCP API reference PR #58 |
+| DX / maintainability | ✅ 完成 | CLI modularization PR #78/#79、time unification PR #80、MCP API reference PR #58/#97 |
 
 ## Audit Report Follow-up v2 Closeout
 
