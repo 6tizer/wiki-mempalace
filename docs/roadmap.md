@@ -7,12 +7,35 @@
 
 | 轨道 | 状态 | 当前事实 |
 | --- | --- | --- |
-| Active implementation | 无 | Audit Report Follow-up v2 已由 PR #83-#93 全部合入；当前没有已确认的新功能批次 |
+| Active implementation | 待规划 | Audit Report Follow-up v2 已由 PR #83-#93 全部合入；2026-04-30 处置决策新增 3 个待修复 PR，见下方 |
 | Production data ops | 稳定 | 最近生产 backfill、consistency、compiler scale-up 都已闭环；新生产写入仍必须 dry-run first |
-| Audit / hardening | 完成一轮 | PR #58 + PR #60-#67 + PR #83-#93 已覆盖当前审计报告拆分项 |
+| Audit / hardening | 第二轮处置中 | PR #58 + PR #60-#67 + PR #83-#93 已覆盖上一轮；M-5/L-4/I-8 按产品负责人 2026-04-30 处置决策进入下一批 |
 | Docs state | 本页为总入口 | spec 状态见 [specs/README.md](specs/README.md)，经验见 [LESSONS.md](LESSONS.md)，历史计划见 [archive/](archive/README.md) |
 
-## 下一步候选
+## 待修复 PR 计划（2026-04-30 处置决策）
+
+来源：Notion《wiki-mempalace 全方位代码审计报告》“处置决策（2026-04-30 产品负责人确认）”。
+当前只记录和拆 PR；实现前仍按 [dev-workflow.md](dev-workflow.md) 补 PRD / spec 三件套。
+
+| 顺序 | PR 主题 | 状态 | 优先级 | 覆盖项 | 范围边界 | 验收条件 | 建议分支 |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 1 | MCP `wiki_query` storage-backed default | Planned | P0 | M-5 | MCP `wiki_query` 默认搜索从 `query_pipeline_memory` 切到 SQLite-backed `SqliteSearchPorts`，必要时组合 palace ports；`InMemorySearchPorts` 只保留测试/显式 fallback。 | MCP `wiki_query` 能检索 repo 中已持久化但不在当前 in-memory store 的内容；无 storage 时明确 fallback；write_page 结果仍可写入 page；相关 MCP tests 过。 | `codex/audit-disposition-01-mcp-query-storage-ports` |
+| 2 | Docs consistency cleanup | Planned | P1 | L-4 | 统一 Rust edition 描述和 Notion 增量同步状态；修 `docs/architecture.md`、`crates/rust-mempalace/README.md` 等明显矛盾。 | `rg` 不再命中 rust-mempalace edition 2024 旧说法；不再出现 Notion 增量同步未实现旧债；docs-only `git diff --check` 过。 | `codex/audit-disposition-02-doc-consistency` |
+| 3 | MCP API reference refresh | Planned | P1 | I-8 | 刷新独立 MCP API 文档，覆盖 wiki + mempalace 全工具参数、返回形状、错误类型、副作用、scope/bank 规则；同步 PR #84/#85 后 bank_id 不可由 client 注入的事实。 | 文档列全当前 `tools_list()` 工具；每个工具有 required/optional/returns/writes/notes；`mempalace_*` 不再把 `bank_id` 写成可越权参数；docs index 链接完整。 | `codex/audit-disposition-03-mcp-api-reference` |
+
+## 处置决策记录
+
+| ID | 问题 | 决策 | Roadmap 处理 |
+| --- | --- | --- | --- |
+| M-2 | LLM Prompt Injection | 接受风险 | 个人使用、无不可信外部输入；已有 UNTRUSTED 标记、redact、validate_bounds。多用户或自动爬外部内容时再重评估。 |
+| M-5 | 默认搜索走 InMemorySearchPorts | 待修复 | 拆为 PR 1。 |
+| L-4 | 文档 edition / 增量同步矛盾 | 待修复 | 拆为 PR 2。 |
+| L-5 | chrono vs time 双时间库 | 暂缓 | 依赖升级或兼容问题出现时再处理。 |
+| I-5 | 性能基准测试 | 暂缓 | 数据量超过 1 万或明显变慢时再建立 wiki pipeline benchmark。 |
+| I-6 | 并发/故障注入/压力测试 | 暂缓 | 产品闭环跑完、功能稳定后再做。 |
+| I-8 | MCP 工具 API 文档 | 待修复 | 拆为 PR 3。 |
+
+## 后续候选
 
 这些不是已启动任务。启动任一项前仍按 [dev-workflow.md](dev-workflow.md)：
 PRD -> 白话架构 -> spec 三件套 -> branch -> Plan/review/PR。
