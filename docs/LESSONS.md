@@ -26,6 +26,15 @@
 - Agent-facing CLI 默认值不要依赖 cwd；只要语义属于 vault 输出，相对路径应在
   `--wiki-dir` 存在时解析为 vault-relative，并用测试固定。
 
+## 2026-04-30 / AI Provider Profiles
+
+- Scope: PR1 of Wiki Governance + Evidence Fixer + Multi-provider Synthesis v3; task-level LLM profiles and Exa/Tavily web search evidence runtime.
+- What worked: Keeping `[llm]` as default preserved existing ingest/query/MCP paths while future Fixer/Synthesis can opt into named profiles.
+- What caused rework: Parallel `cargo test` commands only created Cargo lock contention; use `cargo test -p wiki-cli --bin wiki-cli <filter>` for focused unit checks.
+- Spec changes needed: Future Fixer/Synthesis specs should reference profile names instead of embedding provider/model choices in feature logic.
+- Tests or reviews that caught issues: Focused LLM/web_search tests caught config behavior; workspace test/clippy/deny stayed green.
+- Next plan note: Continue with `codex/wiki-governance-scan` after PR1 merge.
+
 ## 2026-04-30 / Audit Disposition PR 1 MCP Query Storage Ports
 
 - Scope: MCP `wiki_query` default path now follows storage-backed query behavior instead of in-memory-only search.

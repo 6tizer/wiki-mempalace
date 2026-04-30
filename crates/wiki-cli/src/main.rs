@@ -50,6 +50,7 @@ mod orphan_governance;
 mod palace_init;
 mod vault_audit;
 mod vault_backfill;
+mod web_search;
 mod wiki_compiler;
 
 use wiki_compiler::preflight_llm_plan_tags;
@@ -118,6 +119,16 @@ impl ExecutorAllow {
 
 #[derive(Subcommand)]
 enum Cmd {
+    /// Inspect or smoke-test configured LLM profiles.
+    AiProfile {
+        #[command(subcommand)]
+        cmd: AiProfileCmd,
+    },
+    /// Inspect or smoke-test configured web search providers.
+    WebSearch {
+        #[command(subcommand)]
+        cmd: WebSearchCmd,
+    },
     Ingest {
         uri: String,
         body: String,
@@ -542,6 +553,30 @@ enum Cmd {
     NotionArchivedRetirement {
         #[command(subcommand)]
         command: NotionArchivedRetirementCmd,
+    },
+}
+
+#[derive(Subcommand)]
+enum AiProfileCmd {
+    /// Run a minimal chat completion through a named LLM profile.
+    Smoke {
+        #[arg(long, default_value = "default")]
+        profile: String,
+        #[arg(long, default_value = "Say 'ok' only.")]
+        prompt: String,
+    },
+}
+
+#[derive(Subcommand)]
+enum WebSearchCmd {
+    /// Run one query through one or more configured web search providers.
+    Smoke {
+        #[arg(long, value_delimiter = ',', num_args = 1..)]
+        providers: Vec<String>,
+        #[arg(long)]
+        query: String,
+        #[arg(long, default_value_t = false)]
+        json: bool,
     },
 }
 
@@ -2484,6 +2519,8 @@ fn cmd_needs_writer_lease(cmd: &Cmd) -> bool {
         | Cmd::Metrics { .. }
         | Cmd::Dashboard { .. }
         | Cmd::Suggest { .. }
+        | Cmd::AiProfile { .. }
+        | Cmd::WebSearch { .. }
         | Cmd::LlmSmoke { .. }
         | Cmd::SchemaValidate { .. } => false,
     }
@@ -2514,6 +2551,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             | Cmd::Dashboard { .. }
             | Cmd::Suggest { .. }
             | Cmd::SuggestExecutorApply { .. }
+            | Cmd::AiProfile { .. }
+            | Cmd::WebSearch { .. }
             | Cmd::VerifyRowState { .. }
     ) {
         banner::print_startup_banner();
@@ -2544,6 +2583,9 @@ fn run_with_engine(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
     } = commands::runtime::open(&cli)?;
 
     match cli.cmd {
+        Cmd::AiProfile { .. } | Cmd::WebSearch { .. } => {
+            unreachable!("no-engine command should be handled before opening wiki runtime")
+        }
         Cmd::IngestLlm {
             uri,
             body,
