@@ -9,6 +9,7 @@ pub mod audit;
 pub mod collab;
 pub mod crystallize;
 pub mod events;
+pub mod evidence_fixer;
 pub mod fix;
 pub mod gap;
 pub mod governance;
@@ -34,6 +35,11 @@ pub use audit::{AuditOperation, AuditRecord};
 pub use collab::{WorkItem, WorkState};
 pub use crystallize::{draft_from_session, CrystallizationDraft, SessionCrystallizationInput};
 pub use events::WikiEvent;
+pub use evidence_fixer::{
+    parse_semantic_patch_proposals_json, EvidenceFixAction, EvidenceFixActionKind,
+    EvidenceFixActionStatus, EvidenceFixEvidence, EvidenceFixPayload, EvidenceFixerPlan,
+    EvidenceFixerPlanSummary, SemanticPatchProposal, SemanticPatchProposalSet,
+};
 pub use fix::{FixAction, FixActionType, FixPatch};
 pub use gap::{GapFinding, GapSeverity};
 pub use governance::{

@@ -2,6 +2,7 @@
 
 mod auto_hooks;
 mod engine;
+mod evidence_fixer_plan;
 mod fix;
 mod gap;
 mod governance_scan;
@@ -16,6 +17,9 @@ pub mod page_contract;
 pub use auto_hooks::AutoWikiHook;
 pub use engine::{
     collect_basic_lint_findings, initial_status_for, EngineError, LlmWikiEngine, PromotePageError,
+};
+pub use evidence_fixer_plan::{
+    build_evidence_fixer_plan, duplicate_web_verification_key, EvidenceFixerPlanOptions,
 };
 pub use fix::{map_findings_to_fixes, map_gap_finding, map_lint_finding};
 pub use gap::run_gap_scan;

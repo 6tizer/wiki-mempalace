@@ -2,7 +2,8 @@
 
 ## Scope
 
-PR2 of Wiki Governance + Evidence Fixer + Multi-provider Synthesis v3.
+PR2 of Wiki Governance + Evidence Fixer + Multi-provider Synthesis v3. Merged
+as PR #102.
 
 Implemented a read-only `wiki-cli governance scan` that produces typed JSON and
 rendered Markdown for downstream Fixer/Synthesis work.
@@ -34,4 +35,4 @@ rendered Markdown for downstream Fixer/Synthesis work.
 - `cargo clippy --workspace --all-targets -- -D warnings`
 - `cargo deny --all-features check advisories bans licenses sources`
 
-All local gates passed before PR.
+All local gates passed before PR. GitHub quick passed before merge.
