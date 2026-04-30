@@ -68,4 +68,4 @@
 - [audit-v2-11-vault-docs-hardening/](audit-v2-11-vault-docs-hardening/) — Audit Report Follow-up v2 PR 11: Vault projection managed marker/quarantine, docs consistency, and scheduled hardening lane。已合入 PR #93。
 - [audit-disposition-01-mcp-query-storage-ports/](audit-disposition-01-mcp-query-storage-ports/) — Audit Disposition PR 01: MCP `wiki_query` defaults to storage-backed wiki search ports。已合入 PR #95。
 - [audit-disposition-02-doc-consistency/](audit-disposition-02-doc-consistency/) — Audit Disposition PR 02: active docs edition / Notion sync consistency cleanup。已合入 PR #96。
-- [audit-disposition-03-mcp-api-reference/](audit-disposition-03-mcp-api-reference/) — Audit Disposition PR 03: MCP API reference refresh plus docs sync tests。Active branch `codex/audit-disposition-03-mcp-api-reference`。
+- [audit-disposition-03-mcp-api-reference/](audit-disposition-03-mcp-api-reference/) — Audit Disposition PR 03: MCP API reference refresh plus docs sync tests。已合入 PR #97。

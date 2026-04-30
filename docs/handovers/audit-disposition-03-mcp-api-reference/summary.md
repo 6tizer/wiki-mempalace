@@ -3,7 +3,7 @@
 ## Scope
 
 I-8 from the 2026-04-30 audit disposition: refresh MCP API reference and add
-docs sync tests.
+docs sync tests. GitHub PR: #97.
 
 ## Changed Files
 
