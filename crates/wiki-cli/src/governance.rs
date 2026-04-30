@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use time::OffsetDateTime;
-use wiki_core::GovernanceScanReport;
+use wiki_core::{EvidenceFixActionStatus, EvidenceFixerPlan, GovernanceScanReport};
 
 pub struct GovernanceScanFiles {
     pub json_path: PathBuf,
@@ -11,6 +11,19 @@ pub struct GovernanceScanFiles {
 pub fn governance_report_prefix(generated_at: OffsetDateTime) -> String {
     format!(
         "{:04}-{:02}-{:02}T{:02}{:02}{:02}.{:09}Z-governance-scan",
+        generated_at.year(),
+        generated_at.month() as u8,
+        generated_at.day(),
+        generated_at.hour(),
+        generated_at.minute(),
+        generated_at.second(),
+        generated_at.nanosecond()
+    )
+}
+
+pub fn fixer_plan_prefix(generated_at: OffsetDateTime) -> String {
+    format!(
+        "{:04}-{:02}-{:02}T{:02}{:02}{:02}.{:09}Z-evidence-fixer-plan",
         generated_at.year(),
         generated_at.month() as u8,
         generated_at.day(),
@@ -42,6 +55,20 @@ pub fn render_scan_text(report: &GovernanceScanReport) -> String {
     )
 }
 
+pub fn render_fixer_plan_text(plan: &EvidenceFixerPlan) -> String {
+    format!(
+        concat!(
+            "evidence fixer plan: plan_id={} scan={} viewer_scope={} total={} ready={} blocked={}\n"
+        ),
+        plan.plan_id,
+        plan.source_scan_report_id,
+        plan.viewer_scope.as_deref().unwrap_or("none"),
+        plan.summary.total,
+        plan.summary.ready,
+        plan.summary.blocked,
+    )
+}
+
 pub fn write_scan_files(
     report: &GovernanceScanReport,
     report_dir: &Path,
@@ -53,6 +80,23 @@ pub fn write_scan_files(
     let markdown_path = report_dir.join(&markdown_name);
     std::fs::write(&json_path, serde_json::to_string_pretty(report)?)?;
     std::fs::write(&markdown_path, render_scan_markdown(report, &json_name))?;
+    Ok(GovernanceScanFiles {
+        json_path,
+        markdown_path,
+    })
+}
+
+pub fn write_fixer_plan_files(
+    plan: &EvidenceFixerPlan,
+    report_dir: &Path,
+) -> Result<GovernanceScanFiles, Box<dyn std::error::Error>> {
+    std::fs::create_dir_all(report_dir)?;
+    let json_name = format!("{}.json", plan.plan_id);
+    let markdown_name = format!("{}.md", plan.plan_id);
+    let json_path = report_dir.join(&json_name);
+    let markdown_path = report_dir.join(&markdown_name);
+    std::fs::write(&json_path, serde_json::to_string_pretty(plan)?)?;
+    std::fs::write(&markdown_path, render_fixer_plan_markdown(plan, &json_name))?;
     Ok(GovernanceScanFiles {
         json_path,
         markdown_path,
@@ -163,10 +207,85 @@ pub fn render_scan_markdown(report: &GovernanceScanReport, sibling_json: &str) -
     out
 }
 
+pub fn render_fixer_plan_markdown(plan: &EvidenceFixerPlan, sibling_json: &str) -> String {
+    let mut out = format!(
+        concat!(
+            "# Evidence Fixer Plan\n\n",
+            "- plan_id: `{}`\n",
+            "- source_scan_report_id: `{}`\n",
+            "- viewer_scope: `{}`\n",
+            "- source_of_truth: `{}`\n\n",
+            "> Sibling JSON `{}` is the source of truth. This Markdown is rendered from the same typed fixer plan.\n\n",
+            "## Summary\n\n",
+            "- total: `{}`\n",
+            "- ready: `{}`\n",
+            "- blocked: `{}`\n\n",
+        ),
+        plan.plan_id,
+        plan.source_scan_report_id,
+        plan.viewer_scope.as_deref().unwrap_or("none"),
+        sibling_json,
+        sibling_json,
+        plan.summary.total,
+        plan.summary.ready,
+        plan.summary.blocked,
+    );
+
+    out.push_str("## Ready Actions\n\n");
+    let mut ready_seen = false;
+    for action in plan
+        .actions
+        .iter()
+        .filter(|action| action.status == EvidenceFixActionStatus::Ready)
+        .take(50)
+    {
+        ready_seen = true;
+        out.push_str(&format!(
+            "- `{}` {:?} subject={} label={}\n",
+            action.action_id,
+            action.kind,
+            action.subject_id.as_deref().unwrap_or("none"),
+            action.label.as_deref().unwrap_or("none"),
+        ));
+    }
+    if !ready_seen {
+        out.push_str("No ready actions.\n");
+    }
+    out.push('\n');
+
+    out.push_str("## Blocked Actions\n\n");
+    let mut blocked_seen = false;
+    for action in plan
+        .actions
+        .iter()
+        .filter(|action| action.status == EvidenceFixActionStatus::Blocked)
+        .take(50)
+    {
+        blocked_seen = true;
+        out.push_str(&format!(
+            "- `{}` {:?} subject={} blockers={}\n",
+            action.action_id,
+            action.kind,
+            action.subject_id.as_deref().unwrap_or("none"),
+            if action.blockers.is_empty() {
+                "none".to_string()
+            } else {
+                action.blockers.join(",")
+            }
+        ));
+    }
+    if !blocked_seen {
+        out.push_str("No blocked actions.\n");
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use wiki_core::{GovernanceScanReport, GovernanceScanSummary, GovernanceSynthesisSignals};
+    use wiki_core::{
+        EvidenceFixerPlan, GovernanceScanReport, GovernanceScanSummary, GovernanceSynthesisSignals,
+    };
 
     #[test]
     fn render_scan_text_contains_key_counts() {
@@ -187,5 +306,19 @@ mod tests {
         let text = render_scan_text(&report);
         assert!(text.contains("report_id=scan-1"));
         assert!(text.contains("references=2"));
+    }
+
+    #[test]
+    fn render_fixer_plan_text_contains_key_counts() {
+        let mut plan = EvidenceFixerPlan::new(
+            "plan-1",
+            "scan-1",
+            OffsetDateTime::from_unix_timestamp(1_700_000_000).unwrap(),
+            Some("shared:wiki".into()),
+        );
+        plan.refresh_summary();
+        let text = render_fixer_plan_text(&plan);
+        assert!(text.contains("plan_id=plan-1"));
+        assert!(text.contains("ready=0"));
     }
 }

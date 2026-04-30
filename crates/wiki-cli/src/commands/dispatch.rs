@@ -1,7 +1,16 @@
 use crate::{
     acquire_cli_writer_lease, automation_run_daily_jobs, llm, orphan_governance,
-    print_automation_jobs, run_automation_plan, run_verify_row_state, vault_audit, vault_backfill,
-    web_search, AiProfileCmd, AutomationCmd, Cli, Cmd, OrphanGovernanceCmd, WebSearchCmd,
+    print_automation_jobs, resolve_wiki_relative_path, run_automation_plan, run_verify_row_state,
+    vault_audit, vault_backfill, web_search, AiProfileCmd, AutomationCmd, Cli, Cmd, GovernanceCmd,
+    OrphanGovernanceCmd, WebSearchCmd,
+};
+use std::collections::BTreeSet;
+use time::OffsetDateTime;
+use wiki_core::{
+    parse_semantic_patch_proposals_json, GovernanceDuplicateGroup, GovernanceScanReport,
+};
+use wiki_kernel::{
+    build_evidence_fixer_plan, duplicate_web_verification_key, EvidenceFixerPlanOptions,
 };
 
 pub(crate) fn maybe_run_without_engine(cli: &Cli) -> Result<bool, Box<dyn std::error::Error>> {
@@ -69,6 +78,62 @@ pub(crate) fn maybe_run_without_engine(cli: &Cli) -> Result<bool, Box<dyn std::e
                     "{}\t{}\t{}\t{}",
                     item.provider, item.domain, item.title, item.url
                 );
+            }
+        }
+        return Ok(true);
+    }
+
+    if let Cmd::Governance {
+        cmd:
+            GovernanceCmd::FixerPlan {
+                scan,
+                json,
+                report_dir,
+                semantic_patches,
+                allow_web_search,
+                allow_private_web_search,
+                internal_only,
+                max_web_checks,
+            },
+    } = &cli.cmd
+    {
+        let raw_scan = std::fs::read_to_string(scan)?;
+        let scan_report: GovernanceScanReport = serde_json::from_str(&raw_scan)?;
+        let semantic_patch_proposals = match semantic_patches {
+            Some(path) => parse_semantic_patch_proposals_json(&std::fs::read_to_string(path)?)?,
+            None => Vec::new(),
+        };
+        let (web_available, web_cross_verified_keys) = maybe_cross_verify_duplicates(
+            cli,
+            &scan_report,
+            *allow_web_search,
+            *allow_private_web_search,
+            *internal_only,
+            *max_web_checks,
+        );
+        let now = OffsetDateTime::now_utc();
+        let plan = build_evidence_fixer_plan(
+            &scan_report,
+            EvidenceFixerPlanOptions {
+                generated_at: now,
+                plan_id: crate::governance::fixer_plan_prefix(now),
+                web_available,
+                web_cross_verified_keys,
+                semantic_patch_proposals,
+            },
+        );
+        let files = report_dir
+            .clone()
+            .map(|dir| resolve_wiki_relative_path(cli.wiki_dir.as_deref(), dir))
+            .map(|dir| crate::governance::write_fixer_plan_files(&plan, &dir))
+            .transpose()?;
+        if *json {
+            println!("{}", serde_json::to_string_pretty(&plan)?);
+        } else {
+            print!("{}", crate::governance::render_fixer_plan_text(&plan));
+            if let Some(files) = files {
+                println!("json_report_file={}", files.json_path.display());
+                println!("markdown_report_file={}", files.markdown_path.display());
             }
         }
         return Ok(true);
@@ -211,4 +276,88 @@ pub(crate) fn maybe_run_without_engine(cli: &Cli) -> Result<bool, Box<dyn std::e
     }
 
     Ok(false)
+}
+
+fn maybe_cross_verify_duplicates(
+    cli: &Cli,
+    scan_report: &GovernanceScanReport,
+    allow_web_search: bool,
+    allow_private_web_search: bool,
+    internal_only: bool,
+    max_web_checks: usize,
+) -> (bool, BTreeSet<String>) {
+    if internal_only || !allow_web_search || max_web_checks == 0 {
+        return (false, BTreeSet::new());
+    }
+    if scan_report
+        .viewer_scope
+        .as_deref()
+        .is_some_and(|scope| scope.trim_start().starts_with("private:"))
+        && !allow_private_web_search
+    {
+        eprintln!("fixer-plan web verification skipped: private viewer_scope requires --allow-private-web-search");
+        return (false, BTreeSet::new());
+    }
+
+    let app = match llm::load_app_config(&cli.llm_config) {
+        Ok(app) => app,
+        Err(err) => {
+            eprintln!("fixer-plan web verification skipped: {}", err);
+            return (false, BTreeSet::new());
+        }
+    };
+
+    let mut web_available = false;
+    let mut verified = BTreeSet::new();
+    for group in scan_report
+        .duplicates
+        .iter()
+        .filter(|group| group.confidence != "exact")
+        .take(max_web_checks)
+    {
+        let query = duplicate_verification_query(group);
+        match web_search::run_search(&app, &[], &query) {
+            Ok(run) => {
+                if run.providers_succeeded.len() >= 2 {
+                    web_available = true;
+                }
+                if run.cross_verified {
+                    verified.insert(duplicate_web_verification_key(group));
+                } else {
+                    eprintln!(
+                        "fixer-plan web verification not met: key={} providers={} domains={}",
+                        duplicate_web_verification_key(group),
+                        run.providers_succeeded.len(),
+                        run.distinct_domains
+                    );
+                }
+            }
+            Err(err) => {
+                eprintln!(
+                    "fixer-plan web verification skipped for key={}: {}",
+                    duplicate_web_verification_key(group),
+                    err
+                );
+            }
+        }
+    }
+    (web_available, verified)
+}
+
+fn duplicate_verification_query(group: &GovernanceDuplicateGroup) -> String {
+    let labels = group
+        .members
+        .iter()
+        .filter_map(|member| member.label.as_deref())
+        .map(str::trim)
+        .filter(|label| !label.is_empty())
+        .collect::<Vec<_>>();
+    if labels.is_empty() {
+        format!("{} {}", group.kind, group.key)
+    } else {
+        format!(
+            "verify whether these refer to the same object: {}",
+            labels.join(" | ")
+        )
+    }
 }

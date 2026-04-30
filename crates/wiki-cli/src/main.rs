@@ -600,6 +600,33 @@ enum GovernanceCmd {
         #[arg(long, default_value_t = 2)]
         low_coverage_threshold: usize,
     },
+    /// Build a typed dry-run fixer plan from a governance scan report.
+    FixerPlan {
+        /// Governance scan JSON report path.
+        #[arg(long)]
+        scan: PathBuf,
+        /// Print pretty JSON to stdout.
+        #[arg(long, default_value_t = false)]
+        json: bool,
+        /// Write sibling JSON + Markdown reports to this directory.
+        #[arg(long)]
+        report_dir: Option<PathBuf>,
+        /// Optional verified semantic patch proposal JSON.
+        #[arg(long)]
+        semantic_patches: Option<PathBuf>,
+        /// Permit web search for actions that require external verification.
+        #[arg(long, default_value_t = false)]
+        allow_web_search: bool,
+        /// Permit web search when scan viewer_scope is private.
+        #[arg(long, default_value_t = false)]
+        allow_private_web_search: bool,
+        /// Force internal-only planning; web-required actions stay blocked.
+        #[arg(long, default_value_t = false)]
+        internal_only: bool,
+        /// Maximum near-duplicate groups to verify by web search.
+        #[arg(long, default_value_t = 5)]
+        max_web_checks: usize,
+    },
 }
 
 #[derive(Subcommand)]
@@ -2607,7 +2634,11 @@ fn run_with_engine(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
     } = commands::runtime::open(&cli)?;
 
     match cli.cmd {
-        Cmd::AiProfile { .. } | Cmd::WebSearch { .. } => {
+        Cmd::AiProfile { .. }
+        | Cmd::WebSearch { .. }
+        | Cmd::Governance {
+            cmd: GovernanceCmd::FixerPlan { .. },
+        } => {
             unreachable!("no-engine command should be handled before opening wiki runtime")
         }
         Cmd::IngestLlm {

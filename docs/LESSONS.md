@@ -44,6 +44,14 @@
 - Tests or reviews that caught issues: Scope-filtered kernel tests fixed duplicate/reference/synthesis signal behavior before CLI wiring.
 - Next plan note: PR3 can build typed fixer plans from `governance scan` JSON and only add LLM/search where evidence rules need them.
 
+## 2026-04-30 / Evidence Fixer Plan
+
+- Scope: PR3 of Wiki Governance + Evidence Fixer + Multi-provider Synthesis v3; typed dry-run fixer plans from governance scan JSON.
+- What worked: Handling `fixer-plan` before runtime open gives a hard read-only boundary and lets tests prove the command does not create a DB.
+- Pitfall avoided: Near-duplicate merge cannot be made executable from fuzzy local similarity alone; it stays blocked unless the web verification key crosses the provider/domain threshold.
+- Test gate: focused `wiki-core evidence_fixer`, `wiki-kernel evidence_fixer_plan`, `wiki-cli --test governance_fixer_plan`, workspace fmt/test/clippy, and `cargo deny` all pass locally before PR.
+- Next plan note: PR4 should consume this typed plan, recheck current state before each apply, and write tombstones before merge/retire/semantic patch actions.
+
 ## 2026-04-30 / Audit Disposition PR 1 MCP Query Storage Ports
 
 - Scope: MCP `wiki_query` default path now follows storage-backed query behavior instead of in-memory-only search.
