@@ -7,7 +7,7 @@
 
 | 轨道 | 状态 | 当前事实 |
 | --- | --- | --- |
-| Active implementation | 待规划 | Audit Report Follow-up v2 已由 PR #83-#93 全部合入；2026-04-30 处置决策新增 3 个待修复 PR，见下方 |
+| Active implementation | PR1 执行中 | Audit Report Follow-up v2 已由 PR #83-#93 全部合入；2026-04-30 处置决策新增 3 个待修复 PR，当前执行 PR1 MCP query storage ports |
 | Production data ops | 稳定 | 最近生产 backfill、consistency、compiler scale-up 都已闭环；新生产写入仍必须 dry-run first |
 | Audit / hardening | 第二轮处置中 | PR #58 + PR #60-#67 + PR #83-#93 已覆盖上一轮；M-5/L-4/I-8 按产品负责人 2026-04-30 处置决策进入下一批 |
 | Docs state | 本页为总入口 | spec 状态见 [specs/README.md](specs/README.md)，经验见 [LESSONS.md](LESSONS.md)，历史计划见 [archive/](archive/README.md) |
@@ -19,7 +19,7 @@
 
 | 顺序 | PR 主题 | 状态 | 优先级 | 覆盖项 | 范围边界 | 验收条件 | 建议分支 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| 1 | MCP `wiki_query` storage-backed default | Planned | P0 | M-5 | MCP `wiki_query` 默认搜索从 `query_pipeline_memory` 切到 SQLite-backed `SqliteSearchPorts`，必要时组合 palace ports；`InMemorySearchPorts` 只保留测试/显式 fallback。 | MCP `wiki_query` 能检索 repo 中已持久化但不在当前 in-memory store 的内容；无 storage 时明确 fallback；write_page 结果仍可写入 page；相关 MCP tests 过。 | `codex/audit-disposition-01-mcp-query-storage-ports` |
+| 1 | MCP `wiki_query` storage-backed default | Active branch | P0 | M-5 | MCP `wiki_query` 默认搜索从 `query_pipeline_memory` 切到 SQLite-backed `SqliteSearchPorts`，必要时组合 palace ports；`InMemorySearchPorts` 只保留测试/显式 fallback。 | MCP `wiki_query` 能检索 repo 中已持久化但不在当前 in-memory store 的内容；无 storage 时明确 fallback；write_page 结果仍可写入 page；相关 MCP tests 过。 | `codex/audit-disposition-01-mcp-query-storage-ports` |
 | 2 | Docs consistency cleanup | Planned | P1 | L-4 | 统一 Rust edition 描述和 Notion 增量同步状态；修 `docs/architecture.md`、`crates/rust-mempalace/README.md` 等明显矛盾。 | `rg` 不再命中 rust-mempalace edition 2024 旧说法；不再出现 Notion 增量同步未实现旧债；docs-only `git diff --check` 过。 | `codex/audit-disposition-02-doc-consistency` |
 | 3 | MCP API reference refresh | Planned | P1 | I-8 | 刷新独立 MCP API 文档，覆盖 wiki + mempalace 全工具参数、返回形状、错误类型、副作用、scope/bank 规则；同步 PR #84/#85 后 bank_id 不可由 client 注入的事实。 | 文档列全当前 `tools_list()` 工具；每个工具有 required/optional/returns/writes/notes；`mempalace_*` 不再把 `bank_id` 写成可越权参数；docs index 链接完整。 | `codex/audit-disposition-03-mcp-api-reference` |
 

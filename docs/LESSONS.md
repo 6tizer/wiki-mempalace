@@ -26,6 +26,15 @@
 - Agent-facing CLI 默认值不要依赖 cwd；只要语义属于 vault 输出，相对路径应在
   `--wiki-dir` 存在时解析为 vault-relative，并用测试固定。
 
+## 2026-04-30 / Audit Disposition PR 1 MCP Query Storage Ports
+
+- Scope: MCP `wiki_query` default path now follows storage-backed query behavior instead of in-memory-only search.
+- What worked: Reusing `SqliteSearchPorts` kept MCP behavior aligned with CLI query/explain without changing the MCP result shape.
+- What caused rework: `wiki_query` records `QueryServed` and saves the engine snapshot, so stale memory can erase persisted rows unless the engine is reloaded before query.
+- Spec changes needed: Future query-path PRs must state whether the path is read-only or records query events, because persistence side effects affect safe fallback design.
+- Tests or reviews that caught issues: Focused MCP tests cover persisted-only retrieval, invalid palace fallback, query hash outbox, and write-page projection compatibility.
+- Next plan note: After PR1 merge, continue with docs consistency cleanup for edition and Notion sync state.
+
 ## 2026-04-29 / Audit v2 PR 01 MCP Input Boundary
 
 - Scope: MCP result limit clamp + lint report path guard，先处理审计 P0 quick fix。

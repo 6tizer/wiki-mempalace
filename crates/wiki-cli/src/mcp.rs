@@ -5,11 +5,12 @@ use std::io::{self, BufRead, Write};
 use time::OffsetDateTime;
 use wiki_core::{
     apply_time_decay_to_confidence, normalize_and_validate_tag_groups, parse_memory_tier, ClaimId,
-    DomainSchema, EntryType, MemoryTier, QueryContext, Scope, SessionCrystallizationInput,
-    WikiPage,
+    CompositeSearchPorts, DomainSchema, EntryType, FusionConfig, MemoryTier, QueryContext, Scope,
+    SearchPorts, SessionCrystallizationInput, WikiPage,
 };
 use wiki_kernel::{initial_status_for, write_projection, LlmWikiEngine, NoopWikiHook};
-use wiki_storage::{EmbeddingWrite, SqliteRepository};
+use wiki_mempalace_bridge::MempalaceSearchPorts;
+use wiki_storage::{EmbeddingWrite, SqliteRepository, SqliteSearchPorts};
 
 use crate::{parse_scope, parse_tier};
 
@@ -526,8 +527,14 @@ fn call_tool(
                 .with_rrf_k(rrf_k)
                 .with_per_stream_limit(limit)
                 .with_viewer_scope(viewer.clone());
-            let ranked =
-                eng.query_pipeline_memory(&ctx, OffsetDateTime::now_utc(), "mcp", None, None);
+            let ranked = run_mcp_query(
+                eng,
+                repo,
+                viewer,
+                palace_path,
+                &ctx,
+                OffsetDateTime::now_utc(),
+            );
             let write_page = args
                 .get("write_page")
                 .and_then(Value::as_bool)
@@ -1088,6 +1095,60 @@ fn call_mempalace_tool(
     }
 }
 
+fn run_mcp_query(
+    eng: &mut LlmWikiEngine<NoopWikiHook>,
+    repo: &SqliteRepository,
+    viewer: &Scope,
+    palace_path: Option<&str>,
+    ctx: &QueryContext<'_>,
+    now: OffsetDateTime,
+) -> Vec<(String, f64)> {
+    match LlmWikiEngine::load_from_repo(eng.schema.clone(), repo, NoopWikiHook) {
+        Ok(fresh) => *eng = fresh,
+        Err(error) => {
+            eprintln!(
+                "警告：无法从 storage 重新加载 MCP query snapshot: {}，回退到 InMemorySearchPorts",
+                error
+            );
+            return eng.query_pipeline_memory(ctx, now, "mcp", None, None);
+        }
+    }
+
+    let wiki_ports = match SqliteSearchPorts::open(repo, Some(viewer.clone())) {
+        Ok(ports) => Box::new(ports) as Box<dyn SearchPorts>,
+        Err(error) => {
+            eprintln!(
+                "警告：无法创建 storage-backed MCP query 搜索端口: {}，回退到 InMemorySearchPorts",
+                error
+            );
+            return eng.query_pipeline_memory(ctx, now, "mcp", None, None);
+        }
+    };
+
+    let ports: Box<dyn SearchPorts> = if let Some(path) = palace_path {
+        match MempalaceSearchPorts::open(
+            std::path::Path::new(path),
+            Some(mempalace_bank_from_scope(viewer)),
+        ) {
+            Ok(mp_ports) => Box::new(CompositeSearchPorts::new(
+                vec![wiki_ports, Box::new(mp_ports)],
+                FusionConfig::default(),
+            )),
+            Err(error) => {
+                eprintln!(
+                    "警告：无法打开 mempalace DB ({}): {}，回退到 storage-backed wiki 检索",
+                    path, error
+                );
+                wiki_ports
+            }
+        }
+    } else {
+        wiki_ports
+    };
+
+    eng.query_pipeline_with_ports(ctx, now, "mcp", ports.as_ref(), None, None)
+}
+
 fn save_and_flush(
     eng: &mut LlmWikiEngine<NoopWikiHook>,
     repo: &SqliteRepository,
@@ -1151,6 +1212,7 @@ fn build_text_embedding(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use wiki_storage::WikiRepository;
 
     #[test]
     fn tools_list_wiki_ingest_llm_has_no_entry_type_param() {
@@ -1625,6 +1687,116 @@ mod tests {
             visible,
             "shared:wiki query should see default-scoped write: {query_resp}"
         );
+    }
+
+    #[test]
+    fn mcp_query_uses_storage_ports_for_persisted_snapshot() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let repo = SqliteRepository::open(tmp.path().join("wiki.db")).expect("repo");
+        let schema = DomainSchema::permissive_default();
+        let viewer = Scope::Shared {
+            team_id: "wiki".into(),
+        };
+        let mut seed =
+            LlmWikiEngine::load_from_repo(schema.clone(), &repo, NoopWikiHook).expect("seed");
+        let claim_id = seed.file_claim(
+            "storage backed mcp query sentinel",
+            viewer.clone(),
+            MemoryTier::Semantic,
+            "test",
+        );
+        seed.save_to_repo(&repo).expect("persist seed snapshot");
+
+        let mut stale_memory = LlmWikiEngine::new(schema);
+        let resp = handle_request(
+            "tools/call",
+            json!({
+                "name": "wiki_query",
+                "arguments": {
+                    "query": "storage backed sentinel",
+                    "per_stream_limit": 10
+                }
+            }),
+            json!(1),
+            &mut stale_memory,
+            &repo,
+            &viewer,
+            std::path::Path::new("llm-config.toml"),
+            false,
+            None,
+            None,
+        );
+
+        assert!(resp.get("error").is_none(), "{resp}");
+        let expected_doc = format!("claim:{}", claim_id.0);
+        let visible = resp
+            .pointer("/result/results")
+            .and_then(Value::as_array)
+            .expect("results")
+            .iter()
+            .any(|r| r.get("doc_id").and_then(Value::as_str) == Some(expected_doc.as_str()));
+        assert!(
+            visible,
+            "MCP query should read persisted storage snapshot, not stale memory: {resp}"
+        );
+
+        let snapshot = repo.load_snapshot().expect("snapshot after query");
+        assert!(
+            snapshot.claims.iter().any(|claim| claim.id == claim_id),
+            "query persistence must not erase the persisted claim"
+        );
+        let outbox = repo.export_outbox_ndjson().expect("outbox");
+        assert!(outbox.contains("query_hash"));
+    }
+
+    #[test]
+    fn mcp_query_invalid_palace_falls_back_to_storage_ports() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let repo = SqliteRepository::open(tmp.path().join("wiki.db")).expect("repo");
+        let schema = DomainSchema::permissive_default();
+        let viewer = Scope::Shared {
+            team_id: "wiki".into(),
+        };
+        let mut seed =
+            LlmWikiEngine::load_from_repo(schema.clone(), &repo, NoopWikiHook).expect("seed");
+        let claim_id = seed.file_claim(
+            "invalid palace fallback sentinel",
+            viewer.clone(),
+            MemoryTier::Semantic,
+            "test",
+        );
+        seed.save_to_repo(&repo).expect("persist seed snapshot");
+        let bad_palace_dir = tmp.path().join("not-a-palace-db");
+        std::fs::create_dir(&bad_palace_dir).expect("bad palace dir");
+
+        let mut eng = LlmWikiEngine::new(schema);
+        let resp = handle_request(
+            "tools/call",
+            json!({
+                "name": "wiki_query",
+                "arguments": {
+                    "query": "fallback sentinel",
+                    "per_stream_limit": 10
+                }
+            }),
+            json!(1),
+            &mut eng,
+            &repo,
+            &viewer,
+            std::path::Path::new("llm-config.toml"),
+            false,
+            None,
+            bad_palace_dir.to_str(),
+        );
+
+        assert!(resp.get("error").is_none(), "{resp}");
+        let expected_doc = format!("claim:{}", claim_id.0);
+        assert!(resp
+            .pointer("/result/results")
+            .and_then(Value::as_array)
+            .expect("results")
+            .iter()
+            .any(|r| r.get("doc_id").and_then(Value::as_str) == Some(expected_doc.as_str())));
     }
 
     #[test]
