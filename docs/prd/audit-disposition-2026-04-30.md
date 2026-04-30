@@ -33,8 +33,8 @@ Out:
 | Module | Goal | Owner area | Status |
 | --- | --- | --- | --- |
 | audit-disposition-01-mcp-query-storage-ports | MCP query 默认检索质量与 CLI query 对齐 | `crates/wiki-cli/src/mcp.rs` | Merged PR #95 |
-| audit-disposition-02-doc-consistency | 修 active docs 矛盾 | docs | In Progress |
-| audit-disposition-03-mcp-api-reference | API reference 与 tools/schema/current behavior 对齐 | docs + MCP tests | Planned |
+| audit-disposition-02-doc-consistency | 修 active docs 矛盾 | docs | Merged PR #96 |
+| audit-disposition-03-mcp-api-reference | API reference 与 tools/schema/current behavior 对齐 | docs + MCP tests | Merged PR #97 |
 
 ## Acceptance
 
@@ -59,8 +59,8 @@ Out:
 - [x] Plain architecture approved by roadmap plan
 - [x] Specs created for PR1
 - [x] Specs created for PR2
-- [ ] Specs created for PR3
-- [ ] Modules implemented
-- [ ] CI green
-- [ ] Merged
-- [ ] Roadmap updated
+- [x] Specs created for PR3
+- [x] Modules implemented
+- [x] CI green
+- [x] Merged
+- [x] Roadmap updated

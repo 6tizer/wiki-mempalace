@@ -1305,6 +1305,72 @@ mod tests {
         }
     }
 
+    fn mcp_api_reference_doc() -> String {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../docs/mcp-api-reference.md");
+        std::fs::read_to_string(path).expect("docs/mcp-api-reference.md")
+    }
+
+    #[test]
+    fn mcp_api_reference_mentions_all_tools_and_error_kinds() {
+        let doc = mcp_api_reference_doc();
+        let v = tools_list();
+        let tools = v.get("tools").and_then(Value::as_array).expect("tools[]");
+
+        for name in tools
+            .iter()
+            .filter_map(|t| t.get("name").and_then(Value::as_str))
+        {
+            assert!(
+                doc.contains(&format!("`{name}`")),
+                "MCP API reference should mention tool {name}"
+            );
+        }
+
+        for kind in [
+            "parse_error",
+            "method_not_found",
+            "invalid_params",
+            "tool_not_found",
+            "scope_denied",
+            "engine_error",
+            "storage_error",
+            "llm_error",
+            "mempalace_error",
+        ] {
+            assert!(
+                doc.contains(&format!("`{kind}`")),
+                "MCP API reference should mention error kind {kind}"
+            );
+        }
+    }
+
+    #[test]
+    fn mcp_api_reference_does_not_list_mempalace_bank_id_as_client_arg() {
+        let doc = mcp_api_reference_doc();
+        assert!(
+            doc.contains("client `bank_id` is rejected"),
+            "reference should state bank_id rejection"
+        );
+        let mempalace_section = doc
+            .split("## Mempalace Tools")
+            .nth(1)
+            .and_then(|s| s.split("## Side Effects").next())
+            .expect("mempalace tools section");
+
+        for line in mempalace_section
+            .lines()
+            .filter(|line| line.trim_start().starts_with("| `mempalace_"))
+        {
+            let columns: Vec<_> = line.split('|').map(str::trim).collect();
+            assert!(columns.len() >= 7, "unexpected tool table row: {line}");
+            assert!(
+                !columns[2].contains("bank_id") && !columns[3].contains("bank_id"),
+                "mempalace client arg columns must not expose bank_id: {line}"
+            );
+        }
+    }
+
     #[test]
     fn mempalace_bank_is_derived_from_viewer_scope() {
         assert_eq!(
