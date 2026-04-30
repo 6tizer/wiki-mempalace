@@ -1,4 +1,5 @@
 use serde::Deserialize;
+use std::collections::{BTreeMap, HashSet};
 use std::path::Path;
 use std::time::Duration;
 use wiki_core::redact_for_ingest;
@@ -12,6 +13,10 @@ pub struct LlmConfigFile {
     pub llm: LlmConfig,
     #[serde(default)]
     pub embed: Option<EmbedConfig>,
+    #[serde(default)]
+    pub llm_profiles: BTreeMap<String, LlmProfileConfig>,
+    #[serde(default)]
+    pub web_search: Option<WebSearchConfig>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -34,6 +39,44 @@ pub struct LlmConfig {
     pub max_output_tokens: u32,
     #[serde(default)]
     pub allowed_base_urls: Vec<String>,
+    #[serde(default)]
+    pub temperature: Option<f32>,
+    #[serde(default)]
+    pub reasoning_effort: Option<String>,
+    #[serde(default)]
+    pub extra_body: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Deserialize, Clone, Default)]
+pub struct LlmProfileConfig {
+    #[serde(default)]
+    pub inherits: Option<String>,
+    #[serde(default)]
+    pub base_url: Option<String>,
+    #[serde(default)]
+    pub api_key: Option<String>,
+    #[serde(default)]
+    pub api_key_env: Option<String>,
+    #[serde(default)]
+    pub model: Option<String>,
+    #[serde(default)]
+    pub timeout_seconds: Option<u64>,
+    #[serde(default)]
+    pub max_retries: Option<u32>,
+    #[serde(default)]
+    pub max_input_chars: Option<usize>,
+    #[serde(default)]
+    pub max_response_chars: Option<usize>,
+    #[serde(default)]
+    pub max_output_tokens: Option<u32>,
+    #[serde(default)]
+    pub allowed_base_urls: Option<Vec<String>>,
+    #[serde(default)]
+    pub temperature: Option<f32>,
+    #[serde(default)]
+    pub reasoning_effort: Option<String>,
+    #[serde(default)]
+    pub extra_body: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -47,10 +90,43 @@ pub struct EmbedConfig {
     pub api_key_env: Option<String>,
 }
 
+#[derive(Debug, Deserialize, Clone, Default)]
+pub struct WebSearchConfig {
+    #[serde(default)]
+    pub providers: BTreeMap<String, WebSearchProviderConfig>,
+    #[serde(default)]
+    pub policies: BTreeMap<String, WebSearchPolicyConfig>,
+}
+
+#[derive(Debug, Deserialize, Clone, Default)]
+pub struct WebSearchProviderConfig {
+    pub kind: String,
+    #[serde(default)]
+    pub api_key: Option<String>,
+    #[serde(default)]
+    pub api_key_env: Option<String>,
+    #[serde(default)]
+    pub max_results: Option<usize>,
+    #[serde(default)]
+    pub timeout_secs: Option<u64>,
+}
+
+#[derive(Debug, Deserialize, Clone, Default)]
+pub struct WebSearchPolicyConfig {
+    #[serde(default)]
+    pub providers: Vec<String>,
+    #[serde(default)]
+    pub min_providers: Option<usize>,
+    #[serde(default)]
+    pub min_distinct_domains: Option<usize>,
+}
+
 #[derive(Debug, Clone)]
 pub struct AppConfig {
     pub llm: LlmConfig,
     pub embed: Option<EmbedConfig>,
+    pub llm_profiles: BTreeMap<String, LlmProfileConfig>,
+    pub web_search: Option<WebSearchConfig>,
 }
 
 fn default_timeout_seconds() -> u64 {
@@ -93,11 +169,101 @@ pub fn load_app_config(path: &Path) -> Result<AppConfig, Box<dyn std::error::Err
     Ok(AppConfig {
         llm: parsed.llm,
         embed: parsed.embed,
+        llm_profiles: parsed.llm_profiles,
+        web_search: parsed.web_search,
     })
 }
 
 pub fn load_llm_config(path: &Path) -> Result<LlmConfig, Box<dyn std::error::Error>> {
     Ok(load_app_config(path)?.llm)
+}
+
+pub fn load_llm_profile_config(
+    path: &Path,
+    profile: Option<&str>,
+) -> Result<LlmConfig, Box<dyn std::error::Error>> {
+    let app = load_app_config(path)?;
+    resolve_llm_profile(&app, profile.unwrap_or("default"))
+}
+
+pub fn resolve_llm_profile(
+    app: &AppConfig,
+    profile: &str,
+) -> Result<LlmConfig, Box<dyn std::error::Error>> {
+    if profile == "default" || profile.trim().is_empty() {
+        return Ok(app.llm.clone());
+    }
+    resolve_llm_profile_inner(app, profile, &mut HashSet::new())
+}
+
+fn resolve_llm_profile_inner(
+    app: &AppConfig,
+    profile: &str,
+    seen: &mut HashSet<String>,
+) -> Result<LlmConfig, Box<dyn std::error::Error>> {
+    if !seen.insert(profile.to_string()) {
+        return Err(format!("llm profile inheritance cycle at {profile}").into());
+    }
+    let overlay = app
+        .llm_profiles
+        .get(profile)
+        .ok_or_else(|| format!("unknown llm profile: {profile}"))?;
+    let parent = overlay.inherits.as_deref().unwrap_or("default");
+    let mut cfg = if parent == "default" || parent.trim().is_empty() {
+        app.llm.clone()
+    } else {
+        resolve_llm_profile_inner(app, parent, seen)?
+    };
+    apply_profile_overlay(&mut cfg, overlay)?;
+    ensure_allowed_base_url(&cfg.base_url, &cfg.allowed_base_urls)?;
+    Ok(cfg)
+}
+
+fn apply_profile_overlay(
+    cfg: &mut LlmConfig,
+    overlay: &LlmProfileConfig,
+) -> Result<(), Box<dyn std::error::Error>> {
+    if let Some(value) = &overlay.base_url {
+        cfg.base_url = value.clone();
+    }
+    if let Some(value) = &overlay.api_key {
+        cfg.api_key = value.clone();
+    }
+    if let Some(value) = &overlay.api_key_env {
+        cfg.api_key_env = Some(value.clone());
+        resolve_api_key(&mut cfg.api_key, Some(value), "llm profile api_key")?;
+    }
+    if let Some(value) = &overlay.model {
+        cfg.model = value.clone();
+    }
+    if let Some(value) = overlay.timeout_seconds {
+        cfg.timeout_seconds = value;
+    }
+    if let Some(value) = overlay.max_retries {
+        cfg.max_retries = value;
+    }
+    if let Some(value) = overlay.max_input_chars {
+        cfg.max_input_chars = value;
+    }
+    if let Some(value) = overlay.max_response_chars {
+        cfg.max_response_chars = value;
+    }
+    if let Some(value) = overlay.max_output_tokens {
+        cfg.max_output_tokens = value;
+    }
+    if let Some(value) = &overlay.allowed_base_urls {
+        cfg.allowed_base_urls = value.clone();
+    }
+    if overlay.temperature.is_some() {
+        cfg.temperature = overlay.temperature;
+    }
+    if let Some(value) = &overlay.reasoning_effort {
+        cfg.reasoning_effort = Some(value.clone());
+    }
+    if let Some(value) = &overlay.extra_body {
+        cfg.extra_body = Some(value.clone());
+    }
+    Ok(())
 }
 
 /// 从模型回复中截取最外层 `{ ... }` JSON 片段。
@@ -245,11 +411,12 @@ fn complete_chat_inner(
             {"role": "user", "content": user}
         ],
         "max_tokens": max_tokens,
-        "temperature": 0.1
+        "temperature": cfg.temperature.unwrap_or(0.1)
     });
     if json_object {
         body["response_format"] = serde_json::json!({"type": "json_object"});
     }
+    apply_provider_body_overrides(&mut body, cfg)?;
 
     let mut last_err: Option<Box<dyn std::error::Error>> = None;
     for _ in 0..=cfg.max_retries {
@@ -315,14 +482,7 @@ pub fn smoke_chat_completion(
 
     let mut last_err: Option<Box<dyn std::error::Error>> = None;
     for _ in 0..=cfg.max_retries {
-        match do_chat_once(
-            &client,
-            &url,
-            &cfg.api_key,
-            &cfg.model,
-            prompt,
-            cfg.max_response_chars,
-        ) {
+        match do_chat_once(&client, &url, cfg, prompt) {
             Ok(s) => {
                 ensure_char_limit("llm response", &s, cfg.max_response_chars)?;
                 return Ok(s);
@@ -528,6 +688,32 @@ fn normalize_base_url(url: &str) -> String {
     url.trim().trim_end_matches('/').to_string()
 }
 
+fn apply_provider_body_overrides(
+    body: &mut serde_json::Value,
+    cfg: &LlmConfig,
+) -> Result<(), Box<dyn std::error::Error>> {
+    if let Some(effort) = cfg
+        .reasoning_effort
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        body["reasoning_effort"] = serde_json::Value::String(effort.to_string());
+    }
+    if let Some(extra) = &cfg.extra_body {
+        let extra = extra
+            .as_object()
+            .ok_or("llm extra_body must be a table/object")?;
+        let target = body
+            .as_object_mut()
+            .ok_or("llm request body must be object")?;
+        for (key, value) in extra {
+            target.insert(key.clone(), value.clone());
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -546,6 +732,9 @@ mod tests {
             max_response_chars: DEFAULT_MAX_RESPONSE_CHARS,
             max_output_tokens: DEFAULT_MAX_OUTPUT_TOKENS,
             allowed_base_urls: Vec::new(),
+            temperature: None,
+            reasoning_effort: None,
+            extra_body: None,
         }
     }
 
@@ -688,6 +877,80 @@ allowed_base_urls = ["https://api.example.test"]
     }
 
     #[test]
+    fn llm_profile_inherits_default_and_overrides_model_and_reasoning() {
+        let file = write_config(
+            r#"
+[llm]
+base_url = "https://api.example.test/v1"
+api_key = "inline"
+model = "default-model"
+allowed_base_urls = ["https://api.example.test"]
+
+[llm_profiles.synthesis_writer]
+inherits = "default"
+model = "writer-model"
+reasoning_effort = "high"
+temperature = 0.2
+max_output_tokens = 24000
+"#,
+        );
+
+        let cfg = load_llm_profile_config(file.path(), Some("synthesis_writer")).unwrap();
+
+        assert_eq!(cfg.base_url, "https://api.example.test/v1");
+        assert_eq!(cfg.api_key, "inline");
+        assert_eq!(cfg.model, "writer-model");
+        assert_eq!(cfg.reasoning_effort.as_deref(), Some("high"));
+        assert_eq!(cfg.temperature, Some(0.2));
+        assert_eq!(cfg.max_output_tokens, 24000);
+    }
+
+    #[test]
+    fn llm_profile_rejects_unlisted_base_url_override() {
+        let file = write_config(
+            r#"
+[llm]
+base_url = "https://api.example.test/v1"
+api_key = "inline"
+model = "default-model"
+allowed_base_urls = ["https://api.example.test"]
+
+[llm_profiles.bad]
+base_url = "https://evil.example/v1"
+model = "bad-model"
+"#,
+        );
+
+        let err = load_llm_profile_config(file.path(), Some("bad"))
+            .unwrap_err()
+            .to_string();
+
+        assert!(err.contains("allowed_base_urls"));
+    }
+
+    #[test]
+    fn llm_profile_extra_body_is_merged_into_request() {
+        let mut body = serde_json::json!({
+            "model": "m",
+            "messages": [],
+            "max_tokens": 1,
+            "temperature": 0.0
+        });
+        let mut cfg = cfg();
+        cfg.reasoning_effort = Some("high".to_string());
+        cfg.extra_body = Some(serde_json::json!({
+            "provider": {"order": ["openai"]},
+            "temperature": 0.3
+        }));
+
+        apply_provider_body_overrides(&mut body, &cfg).unwrap();
+
+        assert_eq!(body["reasoning_effort"], "high");
+        assert_eq!(body["provider"]["order"][0], "openai");
+        assert_eq!(body["temperature"], 0.3);
+    }
+
+    #[test]
     fn ingest_prompt_marks_payload_untrusted_and_redacts_secret() {
         let prompt = build_ingest_llm_user_prompt(
             &cfg(),
@@ -809,25 +1072,28 @@ allowed_base_urls = ["https://api.example.test"]
 fn do_chat_once(
     client: &reqwest::blocking::Client,
     url: &str,
-    api_key: &str,
-    model: &str,
+    cfg: &LlmConfig,
     prompt: &str,
-    max_response_chars: usize,
 ) -> Result<String, Box<dyn std::error::Error>> {
-    let body = serde_json::json!({
-        "model": model,
+    let mut body = serde_json::json!({
+        "model": cfg.model,
         "messages": [
             {"role": "user", "content": prompt}
         ],
         "max_tokens": 128,
-        "temperature": 0.0
+        "temperature": cfg.temperature.unwrap_or(0.0)
     });
+    apply_provider_body_overrides(&mut body, cfg)?;
 
-    let resp = client.post(url).bearer_auth(api_key).json(&body).send()?;
+    let resp = client
+        .post(url)
+        .bearer_auth(&cfg.api_key)
+        .json(&body)
+        .send()?;
 
     let status = resp.status();
     let text = resp.text()?;
-    enforce_provider_response_limit("llm provider response", &text, max_response_chars)?;
+    enforce_provider_response_limit("llm provider response", &text, cfg.max_response_chars)?;
     if !status.is_success() {
         return Err(format!(
             "llm http {}: {}",

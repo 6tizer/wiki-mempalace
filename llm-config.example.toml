@@ -20,6 +20,53 @@ max_response_chars = 200000
 max_output_tokens = 16384
 allowed_base_urls = ["https://api.deepseek.com", "https://api.openai.com", "https://openrouter.ai"]
 
+[llm_profiles.fixer_judge]
+inherits = "default"
+model = "deepseek-reasoner"
+reasoning_effort = "high"
+temperature = 0.0
+max_output_tokens = 8192
+
+[llm_profiles.fixer_patch]
+inherits = "default"
+model = "deepseek-chat"
+reasoning_effort = "medium"
+temperature = 0.0
+
+[llm_profiles.synthesis_research]
+inherits = "default"
+model = "deepseek-reasoner"
+reasoning_effort = "high"
+
+[llm_profiles.synthesis_writer]
+inherits = "default"
+model = "deepseek-reasoner"
+reasoning_effort = "high"
+max_output_tokens = 24000
+
+[llm_profiles.synthesis_verifier]
+inherits = "default"
+model = "deepseek-chat"
+reasoning_effort = "medium"
+temperature = 0.0
+
+[web_search.providers.exa]
+kind = "exa"
+api_key_env = "EXA_API_KEY"
+max_results = 8
+timeout_secs = 20
+
+[web_search.providers.tavily]
+kind = "tavily"
+api_key_env = "TAVILY_API_KEY"
+max_results = 8
+timeout_secs = 20
+
+[web_search.policies.cross_verify]
+providers = ["exa", "tavily"]
+min_providers = 2
+min_distinct_domains = 2
+
 # Optional: OpenAI-compatible embeddings (used with `wiki-cli query --vectors`).
 # If omitted, `--vectors` will error until you add this section.
 # [embed]

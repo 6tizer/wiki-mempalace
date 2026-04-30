@@ -1,7 +1,7 @@
 use crate::{
     acquire_cli_writer_lease, automation_run_daily_jobs, llm, orphan_governance,
     print_automation_jobs, run_automation_plan, run_verify_row_state, vault_audit, vault_backfill,
-    AutomationCmd, Cli, Cmd, OrphanGovernanceCmd,
+    web_search, AiProfileCmd, AutomationCmd, Cli, Cmd, OrphanGovernanceCmd, WebSearchCmd,
 };
 
 pub(crate) fn maybe_run_without_engine(cli: &Cli) -> Result<bool, Box<dyn std::error::Error>> {
@@ -30,6 +30,47 @@ pub(crate) fn maybe_run_without_engine(cli: &Cli) -> Result<bool, Box<dyn std::e
 
     if let Cmd::VerifyRowState { json } = &cli.cmd {
         run_verify_row_state(&cli.db, *json)?;
+        return Ok(true);
+    }
+
+    if let Cmd::AiProfile {
+        cmd: AiProfileCmd::Smoke { profile, prompt },
+    } = &cli.cmd
+    {
+        let cfg = llm::load_llm_profile_config(&cli.llm_config, Some(profile))?;
+        let out = llm::smoke_chat_completion(&cfg, prompt)?;
+        println!("{out}");
+        return Ok(true);
+    }
+
+    if let Cmd::WebSearch {
+        cmd:
+            WebSearchCmd::Smoke {
+                providers,
+                query,
+                json,
+            },
+    } = &cli.cmd
+    {
+        let app = llm::load_app_config(&cli.llm_config)?;
+        let run = web_search::run_search(&app, providers, query)?;
+        if *json {
+            println!("{}", serde_json::to_string_pretty(&run)?);
+        } else {
+            println!(
+                "web_search providers_succeeded={} distinct_domains={} cross_verified={} evidence={}",
+                run.providers_succeeded.len(),
+                run.distinct_domains,
+                run.cross_verified,
+                run.evidence.len()
+            );
+            for item in run.evidence.iter().take(10) {
+                println!(
+                    "{}\t{}\t{}\t{}",
+                    item.provider, item.domain, item.title, item.url
+                );
+            }
+        }
         return Ok(true);
     }
 

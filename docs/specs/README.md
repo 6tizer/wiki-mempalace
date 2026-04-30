@@ -14,6 +14,7 @@
 
 ## Active Specs
 
+- [ai-provider-profiles/](ai-provider-profiles/) — PR1 for Wiki Governance + Evidence Fixer + Multi-provider Synthesis v3: LLM profile resolver plus Exa/Tavily web search runtime. Local complete, pending PR.
 - [m10-metrics/](m10-metrics/) — M10 unified metrics core. Merged PR #12。
 - [m11-dashboard/](m11-dashboard/) — M11 read-only dashboard/report. Merged PR #14。
 - [m12-strategy/](m12-strategy/) — M12 strategy suggestions. Merged PR #16。

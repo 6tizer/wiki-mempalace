@@ -7,7 +7,7 @@
 
 | 轨道 | 状态 | 当前事实 |
 | --- | --- | --- |
-| Active implementation | 待规划 | Audit Report Follow-up v2 已由 PR #83-#93 全部合入；2026-04-30 处置决策新增 3 个待修复 PR 已由 PR #95/#96/#97 全部合入；下一步 1-3 已由 PR #99 合入 |
+| Active implementation | 进行中 | Wiki Governance + Evidence Fixer + Multi-provider Synthesis v3 已启动；当前 PR1 为 `codex/ai-provider-profiles`，实现 LLM profiles + dual web search runtime |
 | Production data ops | 稳定 | 最近生产 backfill、consistency、compiler scale-up 都已闭环；新生产写入仍必须 dry-run first |
 | Audit / hardening | 处置决策完成 | PR #58 + PR #60-#67 + PR #83-#93 已覆盖上一轮；M-5/L-4/I-8 已由 PR #95/#96/#97 完成；Hardening schedule run `25150878853` 已观察为 green |
 | Docs state | 本页为总入口 | spec 状态见 [specs/README.md](specs/README.md)，经验见 [LESSONS.md](LESSONS.md)，历史计划见 [archive/](archive/README.md) |
@@ -52,6 +52,21 @@ PRD -> 白话架构 -> spec 三件套 -> branch -> Plan/review/PR。
 | --- | --- | --- |
 | Row-level state production migration/backfill | 只读验证已完成，但生产 DB 还没有 `wiki_state_row`，所以 blob fallback 不能退 | 用户决定要推进 blob fallback 退役时，先做 backup/dry-run，再受控写入 row-level state |
 | New product/module batch | 当前 M1-M12、J13/J14、compiler、Notion、audit hardening 都已完成本轮闭环 | 用户选定新目标后，新建 PRD 和模块 spec |
+
+## Wiki Governance + Evidence Fixer + Multi-provider Synthesis v3
+
+来源：Notion 工作流程 / Schema 中维护 Agent 能力盘点，以及本地系统“DB 真源、投影派生、证据驱动自动化”的重新设计。
+PRD：[wiki-governance-evidence-synthesis-v3.md](prd/wiki-governance-evidence-synthesis-v3.md)。
+
+| 顺序 | PR 主题 | 状态 | 范围 | 建议分支 |
+| --- | --- | --- | --- | --- |
+| 1 | AI provider profiles + dual web search runtime | Local complete | `[llm]` 兼容 profile resolver；Exa/Tavily 双 provider search；smoke commands | `codex/ai-provider-profiles` |
+| 2 | Governance scan | Planned | 状态、引用、lint、重复、标签、删除候选、synthesis 内部信号 | `codex/wiki-governance-scan` |
+| 3 | Evidence Fixer plan | Planned | 规则 + LLM + 双搜索证据生成 typed fix plan | `codex/evidence-fixer-plan` |
+| 4 | Evidence Fixer apply + restore | Planned | 证据阈值自动 apply；合并/删除/语义 patch 可恢复 | `codex/evidence-fixer-apply-restore` |
+| 5 | Synthesis discovery | Planned | 单/双/三/四标签候选发现、排序、去重 | `codex/synthesis-discovery` |
+| 6 | Web-backed Synthesis composer | Planned | 内部 evidence pack + 双搜索 evidence + LLM 写作/校验 | `codex/web-backed-synthesis-composer` |
+| 7 | Automation + docs | Planned | daily/manual lanes、MCP、Notion 对照矩阵、文档收口 | `codex/governance-automation-docs` |
 
 ## 已完成能力总账
 
