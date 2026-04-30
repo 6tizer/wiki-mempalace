@@ -8,6 +8,8 @@ One closeout PR for the three immediate next items:
 - row-level state production validation
 - hardening scheduled lane observation
 
+PR: <https://github.com/6tizer/wiki-mempalace/pull/99>
+
 ## Evidence
 
 - PR #22 is merged: <https://github.com/6tizer/wiki-mempalace/pull/22>

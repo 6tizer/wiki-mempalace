@@ -2,7 +2,7 @@
 
 ## Status
 
-In progress on branch `codex/next-three-closeout`.
+PR #99: <https://github.com/6tizer/wiki-mempalace/pull/99>
 
 ## Goal
 
