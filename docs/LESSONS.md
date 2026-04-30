@@ -35,6 +35,15 @@
 - Tests or reviews that caught issues: Focused LLM/web_search tests caught config behavior; workspace test/clippy/deny stayed green.
 - Next plan note: Continue with `codex/wiki-governance-scan` after PR1 merge.
 
+## 2026-04-30 / Wiki Governance Scan
+
+- Scope: PR2 of Wiki Governance + Evidence Fixer + Multi-provider Synthesis v3; read-only governance scan for lifecycle, references, lint, gaps, duplicates, retire candidates, and synthesis tag signals.
+- What worked: Keeping the scanner pure over `InMemoryStore` avoided outbox/projection side effects and made the JSON report usable as PR3 Fixer input.
+- What caused rework: `eng.run_basic_lint` is tempting but mutates audit/outbox state; governance scans should call pure `collect_basic_lint_findings` instead.
+- Spec changes needed: Future Fixer specs should consume the typed scan JSON, not scrape Markdown reports.
+- Tests or reviews that caught issues: Scope-filtered kernel tests fixed duplicate/reference/synthesis signal behavior before CLI wiring.
+- Next plan note: PR3 can build typed fixer plans from `governance scan` JSON and only add LLM/search where evidence rules need them.
+
 ## 2026-04-30 / Audit Disposition PR 1 MCP Query Storage Ports
 
 - Scope: MCP `wiki_query` default path now follows storage-backed query behavior instead of in-memory-only search.

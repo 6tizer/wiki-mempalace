@@ -11,6 +11,7 @@ pub mod crystallize;
 pub mod events;
 pub mod fix;
 pub mod gap;
+pub mod governance;
 pub mod graph;
 pub mod lifecycle;
 pub mod llm_ingest_plan;
@@ -35,6 +36,12 @@ pub use crystallize::{draft_from_session, CrystallizationDraft, SessionCrystalli
 pub use events::WikiEvent;
 pub use fix::{FixAction, FixActionType, FixPatch};
 pub use gap::{GapFinding, GapSeverity};
+pub use governance::{
+    GovernanceDuplicateGroup, GovernanceDuplicateMember, GovernanceGapFinding,
+    GovernanceLifecycleSignal, GovernanceLintFinding, GovernanceReferenceFinding,
+    GovernanceRetireCandidate, GovernanceScanReport, GovernanceScanSummary,
+    GovernanceSynthesisSignals, GovernanceTagIntersectionSignal, GovernanceTagSignal,
+};
 pub use graph::{walk_entities, GraphSnapshot, GraphWalkOptions};
 pub use lifecycle::{
     advance_tier, apply_time_decay_to_confidence, merge_sources_confidence, reinforce_claim,

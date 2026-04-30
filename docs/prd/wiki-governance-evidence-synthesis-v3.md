@@ -31,15 +31,15 @@ wiki.db -> Vault projection -> Mempalace projection
 
 ## PR Sequence
 
-| PR | Branch | Scope |
-| --- | --- | --- |
-| 1 | `codex/ai-provider-profiles` | LLM profiles + dual web search provider runtime |
-| 2 | `codex/wiki-governance-scan` | Unified governance scan |
-| 3 | `codex/evidence-fixer-plan` | Evidence Fixer typed dry-run plan |
-| 4 | `codex/evidence-fixer-apply-restore` | Evidence Fixer apply + restore |
-| 5 | `codex/synthesis-discovery` | Synthesis point/line/plane/volume discovery |
-| 6 | `codex/web-backed-synthesis-composer` | Web-backed synthesis writing + verification |
-| 7 | `codex/governance-automation-docs` | Automation, MCP, and docs closeout |
+| PR | Branch | Scope | Status |
+| --- | --- | --- | --- |
+| 1 | `codex/ai-provider-profiles` | LLM profiles + dual web search provider runtime | Merged PR #101 |
+| 2 | `codex/wiki-governance-scan` | Unified governance scan | Local complete, pending PR |
+| 3 | `codex/evidence-fixer-plan` | Evidence Fixer typed dry-run plan | Planned |
+| 4 | `codex/evidence-fixer-apply-restore` | Evidence Fixer apply + restore | Planned |
+| 5 | `codex/synthesis-discovery` | Synthesis point/line/plane/volume discovery | Planned |
+| 6 | `codex/web-backed-synthesis-composer` | Web-backed synthesis writing + verification | Planned |
+| 7 | `codex/governance-automation-docs` | Automation, MCP, and docs closeout | Planned |
 
 ## Success Criteria
 
