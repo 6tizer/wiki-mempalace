@@ -7,7 +7,7 @@
 
 | 轨道 | 状态 | 当前事实 |
 | --- | --- | --- |
-| Active implementation | 收口中 | Audit Report Follow-up v2 已由 PR #83-#93 全部合入；2026-04-30 处置决策新增 3 个待修复 PR 已由 PR #95/#96/#97 全部合入；下一步 1-3 由 PR #99 收口 |
+| Active implementation | 待规划 | Audit Report Follow-up v2 已由 PR #83-#93 全部合入；2026-04-30 处置决策新增 3 个待修复 PR 已由 PR #95/#96/#97 全部合入；下一步 1-3 已由 PR #99 合入 |
 | Production data ops | 稳定 | 最近生产 backfill、consistency、compiler scale-up 都已闭环；新生产写入仍必须 dry-run first |
 | Audit / hardening | 处置决策完成 | PR #58 + PR #60-#67 + PR #83-#93 已覆盖上一轮；M-5/L-4/I-8 已由 PR #95/#96/#97 完成；Hardening schedule run `25150878853` 已观察为 green |
 | Docs state | 本页为总入口 | spec 状态见 [specs/README.md](specs/README.md)，经验见 [LESSONS.md](LESSONS.md)，历史计划见 [archive/](archive/README.md) |
@@ -16,9 +16,9 @@
 
 | 项 | 状态 | 证据 | 后续 |
 | --- | --- | --- | --- |
-| `vault-report-paths` 清理 | PR #99 | PR #22 已 merge；远端分支 `codex/vault-report-paths` 已删除；spec index 改为 Merged PR #22 | 无 |
-| Row-level state production validation | PR #99，验证完成，不能退 blob | 新增只读 `verify-row-state`；生产 `/Users/mac-mini/Documents/wiki/.wiki/wiki.db` 返回 `rows=0 blob_present=true matches_blob=n/a` | 保留 blob fallback；未来若要退役，先做受控生产 row-state migration/backfill |
-| Hardening scheduled lane observation | PR #99 | GitHub Actions run [`25150878853`](https://github.com/6tizer/wiki-mempalace/actions/runs/25150878853)：`schedule` / `success`，`perf`、`cjk-retrieval`、`db-corruption`、`mcp-boundary`、`bank-scope` 全绿 | 无修复 PR |
+| `vault-report-paths` 清理 | 完成 PR #99 | PR #22 已 merge；远端分支 `codex/vault-report-paths` 已删除；spec index 改为 Merged PR #22 | 无 |
+| Row-level state production validation | 完成 PR #99，不能退 blob | 新增只读 `verify-row-state`；生产 `/Users/mac-mini/Documents/wiki/.wiki/wiki.db` 返回 `rows=0 blob_present=true matches_blob=n/a` | 保留 blob fallback；未来若要退役，先做受控生产 row-state migration/backfill |
+| Hardening scheduled lane observation | 完成 PR #99 | GitHub Actions run [`25150878853`](https://github.com/6tizer/wiki-mempalace/actions/runs/25150878853)：`schedule` / `success`，`perf`、`cjk-retrieval`、`db-corruption`、`mcp-boundary`、`bank-scope` 全绿 | 无修复 PR |
 
 ## 已完成 PR 计划（2026-04-30 处置决策）
 
