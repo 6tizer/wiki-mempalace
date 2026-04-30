@@ -35,6 +35,15 @@
 - Tests or reviews that caught issues: Focused MCP tests cover persisted-only retrieval, invalid palace fallback, query hash outbox, and write-page projection compatibility.
 - Next plan note: After PR1 merge, continue with docs consistency cleanup for edition and Notion sync state.
 
+## 2026-04-30 / Audit Disposition PR 2 Doc Consistency
+
+- Scope: Active docs now describe workspace edition 2021 inheritance and completed Notion sync state without changing archived history.
+- What worked: Using `rg` over active docs found the real contradiction and separated it from archive/spec historical context.
+- What caused rework: Acceptance wording can itself contain stale phrases, so docs checks should avoid quoting the obsolete claim verbatim in active docs.
+- Spec changes needed: Docs consistency specs should define active-doc search boundaries and archive handling.
+- Tests or reviews that caught issues: Focused docs review plus active-doc `rg` checks caught edition 2024 wording and Notion sync stale-phrase echoes.
+- Next plan note: After PR2 merge, refresh MCP API reference and add docs sync tests.
+
 ## 2026-04-29 / Audit v2 PR 01 MCP Input Boundary
 
 - Scope: MCP result limit clamp + lint report path guard，先处理审计 P0 quick fix。

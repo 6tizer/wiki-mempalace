@@ -162,6 +162,6 @@ cargo run -p wiki-cli -- \
 
 ## 7. 当前架构债
 
-- workspace `edition = "2021"`，`rust-mempalace` 独立 `edition = "2024"`；整体升级时再统一。
+- workspace 统一使用 `edition = "2021"`；`rust-mempalace` 通过 `edition.workspace = true` 继承，不再独立声明 edition。
 - `wiki.db` 与 `palace.db` 仍是最终一致；准实时同步可在未来通过内核 hook 直连 bridge live sink。
 - 当前完成状态见 [roadmap.md](roadmap.md)。
