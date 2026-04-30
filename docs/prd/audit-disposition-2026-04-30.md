@@ -32,8 +32,8 @@ Out:
 
 | Module | Goal | Owner area | Status |
 | --- | --- | --- | --- |
-| audit-disposition-01-mcp-query-storage-ports | MCP query 默认检索质量与 CLI query 对齐 | `crates/wiki-cli/src/mcp.rs` | In Progress |
-| audit-disposition-02-doc-consistency | 修 active docs 矛盾 | docs | Planned |
+| audit-disposition-01-mcp-query-storage-ports | MCP query 默认检索质量与 CLI query 对齐 | `crates/wiki-cli/src/mcp.rs` | Merged PR #95 |
+| audit-disposition-02-doc-consistency | 修 active docs 矛盾 | docs | In Progress |
 | audit-disposition-03-mcp-api-reference | API reference 与 tools/schema/current behavior 对齐 | docs + MCP tests | Planned |
 
 ## Acceptance
@@ -58,7 +58,8 @@ Out:
 - [x] PRD approved by 2026-04-30 disposition decision
 - [x] Plain architecture approved by roadmap plan
 - [x] Specs created for PR1
-- [ ] Specs created for PR2/PR3
+- [x] Specs created for PR2
+- [ ] Specs created for PR3
 - [ ] Modules implemented
 - [ ] CI green
 - [ ] Merged

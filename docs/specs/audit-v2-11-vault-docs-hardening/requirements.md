@@ -26,7 +26,7 @@
   managed marker、quarantine、手写 UUID 保留、未标记同名页不覆盖。
 - `bash -n scripts/hardening-smoke.sh` 通过。
 - `.github/workflows/hardening.yml` 提供 scheduled/manual slow lane。
-- `docs/architecture.md` 不再包含重复章节或 Notion 增量同步未实现旧状态。
+- `docs/architecture.md` 不再包含重复章节或过期的 Notion sync 状态描述。
 - `docs/roadmap.md` 将 PR 10/11 状态回填到当前事实。
 
 ## Non-goals

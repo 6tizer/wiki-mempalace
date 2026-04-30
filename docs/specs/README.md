@@ -66,4 +66,5 @@
 - [audit-v2-09-cjk-unicode-retrieval/](audit-v2-09-cjk-unicode-retrieval/) — Audit Report Follow-up v2 PR 09: Unicode FTS tokens plus bounded CJK LIKE fallback for `rust-mempalace` retrieval。已合入 PR #91。
 - [audit-v2-10-outbox-sqlite-reliability/](audit-v2-10-outbox-sqlite-reliability/) — Audit Report Follow-up v2 PR 10: per-consumer outbox ack count plus SQLite busy timeout and transaction wrapper hardening。已合入 PR #92。
 - [audit-v2-11-vault-docs-hardening/](audit-v2-11-vault-docs-hardening/) — Audit Report Follow-up v2 PR 11: Vault projection managed marker/quarantine, docs consistency, and scheduled hardening lane。已合入 PR #93。
-- [audit-disposition-01-mcp-query-storage-ports/](audit-disposition-01-mcp-query-storage-ports/) — Audit Disposition PR 01: MCP `wiki_query` defaults to storage-backed wiki search ports。Active branch `codex/audit-disposition-01-mcp-query-storage-ports`。
+- [audit-disposition-01-mcp-query-storage-ports/](audit-disposition-01-mcp-query-storage-ports/) — Audit Disposition PR 01: MCP `wiki_query` defaults to storage-backed wiki search ports。已合入 PR #95。
+- [audit-disposition-02-doc-consistency/](audit-disposition-02-doc-consistency/) — Audit Disposition PR 02: active docs edition / Notion sync consistency cleanup。Active branch `codex/audit-disposition-02-doc-consistency`。

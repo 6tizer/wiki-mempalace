@@ -35,7 +35,7 @@
 
 ## 环境要求
 
-- **Rust**：建议使用当前 **stable** 工具链（本仓库 `Cargo.toml` 使用 `edition = "2024"`，需工具链支持该版本）。
+- **Rust**：建议使用当前 **stable** 工具链；本 workspace 使用 Rust edition 2021，`rust-mempalace` 通过 `edition.workspace = true` 继承。
 - **系统**：无额外守护进程；依赖通过 `rusqlite` 的 `bundled` 特性内嵌 SQLite。
 
 ---
