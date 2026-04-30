@@ -21,6 +21,7 @@ max_output_tokens = 16384
 allowed_base_urls = ["https://api.deepseek.com", "https://api.openai.com", "https://openrouter.ai"]
 
 [llm_profiles.fixer_judge]
+# Used by evidence-heavy Fixer judgment paths.
 inherits = "default"
 model = "deepseek-reasoner"
 reasoning_effort = "high"
@@ -28,23 +29,27 @@ temperature = 0.0
 max_output_tokens = 8192
 
 [llm_profiles.fixer_patch]
+# Used by bounded JSON patch generation.
 inherits = "default"
 model = "deepseek-chat"
 reasoning_effort = "medium"
 temperature = 0.0
 
 [llm_profiles.synthesis_research]
+# Used to generate research/search questions for synthesis.
 inherits = "default"
 model = "deepseek-reasoner"
 reasoning_effort = "high"
 
 [llm_profiles.synthesis_writer]
+# Used to draft long-form synthesis pages.
 inherits = "default"
 model = "deepseek-reasoner"
 reasoning_effort = "high"
 max_output_tokens = 24000
 
 [llm_profiles.synthesis_verifier]
+# Used to reject unsupported or low-quality synthesis drafts.
 inherits = "default"
 model = "deepseek-chat"
 reasoning_effort = "medium"
@@ -63,6 +68,7 @@ max_results = 8
 timeout_secs = 20
 
 [web_search.policies.cross_verify]
+# Fixer/Synthesis use this policy when an action requires external evidence.
 providers = ["exa", "tavily"]
 min_providers = 2
 min_distinct_domains = 2

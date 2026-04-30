@@ -16,7 +16,10 @@
 | `pages/index/`        | `entry_type: index`。                                                        |
 | `pages/lint-report/`  | `entry_type: lint_report`。                                                  |
 | `pages/_unspecified/` | 引擎投影时 `entry_type` 为空的页面（应避免长期停留）。                                          |
-| `reports/`            | Lint 等报告。                                                                   |
+| `reports/`            | Lint、governance、fixer、synthesis、scheduled bundle 等报告。                          |
+| `reports/governance/` | `governance scan` JSON / Markdown。                                          |
+| `reports/fixer/`      | Evidence Fixer plan/apply/restore/tombstone artifacts。                       |
+| `reports/synthesis/`  | Synthesis discovery / compose artifacts。                                     |
 
 
 `write_projection` **只**维护 `pages/`**、`index.md`、`log.md`；**不向** `sources/` 根目录写 source 副本，**也不向** 根 `concepts/` 写哈希命名的 claim 投影（claim 的语义由 `pages/concept/` 承载，引擎内部保留在 `wiki.db`）。
@@ -113,6 +116,28 @@ Wiki Compiler 产出的重要概念和实体必须成为可见页面，而不是
 - summary 的 `## 提取的概念` 段应使用 `[[页面标题]]` 链接 concept/entity。
 - concept/entity 的 `## 来源引用` 段应反链对应 summary。
 - 新增引用前必须按 summary 标题 / page id / source url 去重，不重复追加同一来源。
+
+## Synthesis 页面契约
+
+`pages/synthesis/*.md`：
+
+- `entry_type: synthesis`
+- `status: in_review`
+- `confidence: high`
+- 由 `research-synthesis compose/run` 写入时必须来自已通过 verifier 的 draft。
+- 正文固定包含：
+  - `## 研究问题`
+  - `## 综合分析`
+  - `## 关键发现`
+  - `## 来源列表`
+  - `## 外部证据`
+  - `## 行动建议`
+
+引用约束：
+
+- 每个关键发现必须有内部 page/source evidence 或外部 evidence 支撑。
+- 外部 evidence 必须能追溯到 provider、url、domain、retrieved_at 和 content_hash。
+- Synthesis 只能通过 `wiki.db` 写入；不要手工在 `pages/synthesis/` 下新建投影页来绕过 verifier。
 
 ---
 

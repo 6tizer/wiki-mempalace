@@ -38,8 +38,8 @@ wiki.db -> Vault projection -> Mempalace projection
 | 3 | `codex/evidence-fixer-plan` | Evidence Fixer typed dry-run plan | Merged PR #103 |
 | 4 | `codex/evidence-fixer-apply-restore` | Evidence Fixer apply + restore | Merged PR #104 |
 | 5 | `codex/synthesis-discovery` | Synthesis point/line/plane/volume discovery | Merged PR #105 |
-| 6 | `codex/web-backed-synthesis-composer` | Web-backed synthesis writing + verification | Local complete, pending PR |
-| 7 | `codex/governance-automation-docs` | Automation, MCP, and docs closeout | Planned |
+| 6 | `codex/web-backed-synthesis-composer` | Web-backed synthesis writing + verification | Merged PR #106 |
+| 7 | `codex/governance-automation-docs` | Automation, MCP, and docs closeout | Merged PR #107 |
 
 ## Success Criteria
 
@@ -48,5 +48,6 @@ wiki.db -> Vault projection -> Mempalace projection
 - Exa and Tavily web search providers can run the same query and produce a
   shared evidence artifact.
 - Future Fixer/Synthesis PRs can reuse the same LLM/search infrastructure.
-- Final closeout includes Notion workflow parity mapping, roadmap, specs,
-  handovers, MCP docs, and `LESSONS`.
+- Final closeout includes
+  [Notion workflow parity mapping](../notion-workflow-capability-matrix.md),
+  roadmap, specs, handovers, MCP docs, and `LESSONS`.

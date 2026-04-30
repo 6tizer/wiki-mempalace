@@ -76,6 +76,40 @@ Agent 可自动处理：
 - CI 查错与修复。
 - 文档回填。
 
+例外：当用户明确给出“自治执行计划”并要求实现时，该计划等同本轮 PRD /
+架构 / spec gate 的用户确认。Agent 仍必须补 spec 三件套、handoff、review 与
+测试证据，但不再为每个 PR 单独等待人工确认。
+
+## Governance Automation Workflow
+
+Wiki 维护闭环的默认命令是：
+
+```bash
+wiki-cli ... automation run-daily
+```
+
+它按固定顺序执行：
+
+```text
+notion-sync
+-> batch-ingest
+-> governance-scan
+-> fixer-plan
+-> fixer-apply
+-> maintenance
+-> consume-to-mempalace
+-> vault-reports
+```
+
+研究型综合不进入 daily lane；按需手动跑：
+
+```bash
+wiki-cli ... automation run synthesis-discover
+wiki-cli ... automation run synthesis-run
+```
+
+这些命令仍遵守 DB-first：写入只进 `wiki.db`，再投影 Vault / Mempalace。
+
 ## Plain Architecture Dialogue
 
 PRD 之后先做白话架构对话，不直接写技术 spec。

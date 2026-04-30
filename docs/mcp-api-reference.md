@@ -33,6 +33,9 @@ cargo run -p wiki-cli -- \
 - Vault projection: MCP write tools persist DB/outbox state. When started with
   both `--wiki-dir` and `--sync-wiki`, write tools refresh `pages/`, `index.md`,
   and `log.md` through `write_projection`.
+- Governance/Fixer/Synthesis automation is CLI-only in this version. MCP does
+  not expose `fixer-apply` or `research-synthesis run` because those are batch
+  jobs with reports, writer lease semantics, and optional web/LLM calls.
 
 ## Wiki Tools
 
@@ -79,6 +82,20 @@ client bank capability argument.
 | LLM call | `wiki_ingest_llm`, `mempalace_reflect`, `mempalace_extract` |
 | Palace write | `mempalace_extract` in live mode |
 | Read-only | `wiki_status`, `wiki_wake_up`, `wiki_export_graph_dot`, all mempalace tools except `mempalace_extract` |
+
+## CLI-Only Governance Surface
+
+The following capabilities are available through `wiki-cli`, not MCP:
+
+| Command | Writes | Notes |
+| --- | --- | --- |
+| `governance scan` | no | Produces lifecycle/reference/lint/duplicate/tag/synthesis signals. |
+| `governance fixer-plan` | no | Builds typed evidence fix plans from scan JSON. |
+| `governance fixer-apply --policy evidence-auto --apply` | yes | Applies only ready actions; merge/retire/patch actions produce tombstones. |
+| `governance restore --tombstone ... --apply` | yes | Restores from fixer tombstone through DB -> Vault projection -> outbox. |
+| `research-synthesis discover` | no | Finds single/double/triple/quad tag synthesis candidates. |
+| `research-synthesis compose/run --apply` | yes | Writes verified `entry_type=synthesis` pages. |
+| `automation run-daily` | yes | Runs the daily maintenance lane. |
 
 ## Error Shape
 

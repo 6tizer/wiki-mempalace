@@ -7,12 +7,26 @@
 - `cargo run -p wiki-cli -- --db wiki.db automation last-failures --limit 10`
 - `cargo run -p wiki-cli -- --db wiki.db automation health`
 - `cargo run -p wiki-cli -- --db wiki.db automation health --summary-file wiki/reports/automation-health.txt`
+- `cargo run -p wiki-cli -- --db wiki.db automation run-daily --dry-run`
 - `cargo run -p wiki-cli -- --db wiki.db dashboard`
 
 Dashboard 默认写入 `wiki/reports/dashboard.html`，也可用 `--output <PATH>` 指定路径；
 `--consumer-tag <TAG>` 默认 `mempalace`，`--low-coverage-threshold <N>` 默认 `2`。
 输出是静态自包含 HTML，包含 Automation Health、Issues、Last Failures、Metrics Summary、
 Outbox、Consumer；不需要 web server，不依赖 palace DB。
+
+当前 daily lane 顺序：
+
+```text
+notion-sync
+-> batch-ingest
+-> governance-scan
+-> fixer-plan
+-> fixer-apply
+-> maintenance
+-> consume-to-mempalace
+-> vault-reports
+```
 
 ## 健康级别
 
