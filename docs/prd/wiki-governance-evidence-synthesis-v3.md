@@ -37,8 +37,8 @@ wiki.db -> Vault projection -> Mempalace projection
 | 2 | `codex/wiki-governance-scan` | Unified governance scan | Merged PR #102 |
 | 3 | `codex/evidence-fixer-plan` | Evidence Fixer typed dry-run plan | Merged PR #103 |
 | 4 | `codex/evidence-fixer-apply-restore` | Evidence Fixer apply + restore | Merged PR #104 |
-| 5 | `codex/synthesis-discovery` | Synthesis point/line/plane/volume discovery | Local complete, pending PR |
-| 6 | `codex/web-backed-synthesis-composer` | Web-backed synthesis writing + verification | Planned |
+| 5 | `codex/synthesis-discovery` | Synthesis point/line/plane/volume discovery | Merged PR #105 |
+| 6 | `codex/web-backed-synthesis-composer` | Web-backed synthesis writing + verification | Local complete, pending PR |
 | 7 | `codex/governance-automation-docs` | Automation, MCP, and docs closeout | Planned |
 
 ## Success Criteria

@@ -1,11 +1,11 @@
 use crate::llm::{AppConfig, WebSearchPolicyConfig, WebSearchProviderConfig};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
 use time::{format_description::well_known::Rfc3339, OffsetDateTime};
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WebSearchEvidence {
     pub query: String,
     pub provider: String,
@@ -18,7 +18,7 @@ pub struct WebSearchEvidence {
     pub content_hash: String,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WebSearchRun {
     pub query: String,
     pub providers_requested: Vec<String>,
@@ -29,7 +29,7 @@ pub struct WebSearchRun {
     pub evidence: Vec<WebSearchEvidence>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WebSearchProviderFailure {
     pub provider: String,
     pub error: String,

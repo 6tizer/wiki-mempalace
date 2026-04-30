@@ -8,7 +8,7 @@
 | Discovery algorithm | Main | `crates/wiki-kernel/src/synthesis_discovery.rs` | Complete |
 | CLI command + report output | Main | `crates/wiki-cli/src/main.rs`, `crates/wiki-cli/src/governance.rs`, `crates/wiki-cli/src/commands/dispatch.rs` | Complete |
 | Focused tests | Main | kernel + CLI tests | Complete |
-| Full gates + PR | Main | local commands / GitHub CI | Local complete; PR CI pending |
+| Full gates + PR | Main | local commands / GitHub CI | Complete; merged PR #105 |
 
 ## Verification
 
@@ -21,4 +21,4 @@
 - `cargo clippy --workspace --all-targets -- -D warnings`
 - `cargo deny --all-features check advisories bans licenses sources`
 
-All local gates passed before PR.
+All local gates and GitHub `quick` passed before merge in PR #105.

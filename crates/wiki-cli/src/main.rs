@@ -51,6 +51,7 @@ mod notion_sync;
 mod notion_writeback;
 mod orphan_governance;
 mod palace_init;
+mod research_synthesis;
 mod vault_audit;
 mod vault_backfill;
 mod web_search;
@@ -676,6 +677,66 @@ enum ResearchSynthesisCmd {
         /// Optional governance scan JSON. If omitted, the command scans the current wiki first.
         #[arg(long)]
         scan: Option<PathBuf>,
+        /// Print pretty JSON to stdout.
+        #[arg(long, default_value_t = false)]
+        json: bool,
+        /// Write sibling JSON + Markdown reports to this directory.
+        #[arg(long)]
+        report_dir: Option<PathBuf>,
+        /// Maximum candidates from the combined single/double pool.
+        #[arg(long, default_value_t = 1)]
+        max_single_double: usize,
+        /// Maximum triple-tag candidates.
+        #[arg(long, default_value_t = 1)]
+        max_triple: usize,
+        /// Maximum quad-tag candidates.
+        #[arg(long, default_value_t = 1)]
+        max_quad: usize,
+    },
+    /// Compose one synthesis page from a discovery candidate.
+    Compose {
+        /// Candidate ID from a synthesis discovery report.
+        #[arg(long)]
+        candidate: String,
+        /// Optional synthesis discovery JSON. If omitted, discovery runs first.
+        #[arg(long)]
+        discovery: Option<PathBuf>,
+        /// Optional fake/precomputed web evidence JSON for tests or offline runs.
+        #[arg(long)]
+        web_evidence: Option<PathBuf>,
+        /// Optional fake/precomputed draft JSON. If omitted, synthesis_writer is called.
+        #[arg(long)]
+        draft_json: Option<PathBuf>,
+        /// Optional fake/precomputed verifier JSON. If omitted, synthesis_verifier is called.
+        #[arg(long)]
+        verifier_json: Option<PathBuf>,
+        /// Do not send web search queries. Output is allowed to use internal evidence only.
+        #[arg(long, default_value_t = false)]
+        internal_only: bool,
+        /// Permit external web search when active viewer scope is private.
+        #[arg(long, default_value_t = false)]
+        allow_private_web_search: bool,
+        /// Write the synthesis page if verification passes.
+        #[arg(long, default_value_t = false)]
+        apply: bool,
+        /// Print pretty JSON to stdout.
+        #[arg(long, default_value_t = false)]
+        json: bool,
+        /// Write sibling JSON + Markdown reports to this directory.
+        #[arg(long)]
+        report_dir: Option<PathBuf>,
+    },
+    /// Discover and compose the current top synthesis candidates.
+    Run {
+        /// Write synthesis pages if verification passes.
+        #[arg(long, default_value_t = false)]
+        apply: bool,
+        /// Do not send web search queries. Output is allowed to use internal evidence only.
+        #[arg(long, default_value_t = false)]
+        internal_only: bool,
+        /// Permit external web search when active viewer scope is private.
+        #[arg(long, default_value_t = false)]
+        allow_private_web_search: bool,
         /// Print pretty JSON to stdout.
         #[arg(long, default_value_t = false)]
         json: bool,
@@ -2597,6 +2658,12 @@ fn cmd_writer_lease_label(cmd: &Cmd) -> &'static str {
         Cmd::Governance {
             cmd: GovernanceCmd::Restore { .. },
         } => "governance-restore",
+        Cmd::ResearchSynthesis {
+            cmd: ResearchSynthesisCmd::Compose { .. },
+        } => "research-synthesis-compose",
+        Cmd::ResearchSynthesis {
+            cmd: ResearchSynthesisCmd::Run { .. },
+        } => "research-synthesis-run",
         Cmd::VaultBackfill { .. } => "vault-backfill",
         _ => "wiki-cli",
     }
@@ -2628,6 +2695,12 @@ fn cmd_needs_writer_lease(cmd: &Cmd) -> bool {
         } => *apply,
         Cmd::Governance {
             cmd: GovernanceCmd::Restore { apply, .. },
+        } => *apply,
+        Cmd::ResearchSynthesis {
+            cmd: ResearchSynthesisCmd::Compose { apply, .. },
+        } => *apply,
+        Cmd::ResearchSynthesis {
+            cmd: ResearchSynthesisCmd::Run { apply, .. },
         } => *apply,
         Cmd::VaultBackfill { apply, .. } => *apply,
         Cmd::ConsistencyApply { apply, .. } => *apply,
@@ -2663,7 +2736,9 @@ fn cmd_needs_writer_lease(cmd: &Cmd) -> bool {
         | Cmd::Governance {
             cmd: GovernanceCmd::Scan { .. } | GovernanceCmd::FixerPlan { .. },
         }
-        | Cmd::ResearchSynthesis { .. }
+        | Cmd::ResearchSynthesis {
+            cmd: ResearchSynthesisCmd::Discover { .. },
+        }
         | Cmd::AiProfile { .. }
         | Cmd::WebSearch { .. }
         | Cmd::LlmSmoke { .. }
@@ -3538,6 +3613,154 @@ fn run_with_engine(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                 if let Some(files) = files {
                     println!("json_report_file={}", files.json_path.display());
                     println!("markdown_report_file={}", files.markdown_path.display());
+                }
+            }
+        }
+        Cmd::ResearchSynthesis {
+            cmd:
+                ResearchSynthesisCmd::Compose {
+                    candidate,
+                    discovery,
+                    web_evidence,
+                    draft_json,
+                    verifier_json,
+                    internal_only,
+                    allow_private_web_search,
+                    apply,
+                    json,
+                    report_dir,
+                },
+        } => {
+            let discovery_report = match discovery {
+                Some(path) => {
+                    let path = resolve_wiki_relative_path(wiki_root.as_deref(), path);
+                    research_synthesis::read_discovery_report(&path)?
+                }
+                None => {
+                    let now = OffsetDateTime::now_utc();
+                    let scan_report = run_governance_scan(
+                        &eng.store,
+                        &schema,
+                        GovernanceScanOptions {
+                            viewer_scope: Some(&viewer),
+                            low_coverage_threshold: 2,
+                            generated_at: now,
+                            report_id: governance::governance_report_prefix(now),
+                        },
+                    );
+                    discover_synthesis_candidates(
+                        &scan_report,
+                        SynthesisDiscoveryOptions {
+                            generated_at: now,
+                            report_id: governance::synthesis_discovery_report_prefix(now),
+                            max_single_double: 1,
+                            max_triple: 1,
+                            max_quad: 1,
+                        },
+                    )
+                }
+            };
+            let report = run_research_synthesis_compose(
+                &mut eng,
+                &repo,
+                &viewer,
+                sync_wiki,
+                wiki_root.as_deref(),
+                &cli.llm_config,
+                &discovery_report,
+                &candidate,
+                ResearchSynthesisComposeInputs {
+                    web_evidence,
+                    draft_json,
+                    verifier_json,
+                    internal_only,
+                    allow_private_web_search,
+                    apply,
+                },
+            )?;
+            let files = report_dir
+                .map(|dir| resolve_wiki_relative_path(wiki_root.as_deref(), dir))
+                .map(|dir| research_synthesis::write_compose_files(&report, &dir))
+                .transpose()?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&report)?);
+            } else {
+                print!("{}", research_synthesis::render_compose_text(&report));
+                if let Some(files) = files {
+                    println!("json_report_file={}", files.json_path.display());
+                    println!("markdown_report_file={}", files.markdown_path.display());
+                }
+            }
+        }
+        Cmd::ResearchSynthesis {
+            cmd:
+                ResearchSynthesisCmd::Run {
+                    apply,
+                    internal_only,
+                    allow_private_web_search,
+                    json,
+                    report_dir,
+                    max_single_double,
+                    max_triple,
+                    max_quad,
+                },
+        } => {
+            let now = OffsetDateTime::now_utc();
+            let scan_report = run_governance_scan(
+                &eng.store,
+                &schema,
+                GovernanceScanOptions {
+                    viewer_scope: Some(&viewer),
+                    low_coverage_threshold: 2,
+                    generated_at: now,
+                    report_id: governance::governance_report_prefix(now),
+                },
+            );
+            let discovery_report = discover_synthesis_candidates(
+                &scan_report,
+                SynthesisDiscoveryOptions {
+                    generated_at: now,
+                    report_id: governance::synthesis_discovery_report_prefix(now),
+                    max_single_double,
+                    max_triple,
+                    max_quad,
+                },
+            );
+            let mut reports = Vec::new();
+            for candidate in &discovery_report.candidates {
+                reports.push(run_research_synthesis_compose(
+                    &mut eng,
+                    &repo,
+                    &viewer,
+                    sync_wiki,
+                    wiki_root.as_deref(),
+                    &cli.llm_config,
+                    &discovery_report,
+                    &candidate.candidate_id,
+                    ResearchSynthesisComposeInputs {
+                        web_evidence: None,
+                        draft_json: None,
+                        verifier_json: None,
+                        internal_only,
+                        allow_private_web_search,
+                        apply,
+                    },
+                )?);
+            }
+            if let Some(dir) = report_dir {
+                let dir = resolve_wiki_relative_path(wiki_root.as_deref(), dir);
+                for report in &reports {
+                    let files = research_synthesis::write_compose_files(report, &dir)?;
+                    println!("json_report_file={}", files.json_path.display());
+                    println!("markdown_report_file={}", files.markdown_path.display());
+                }
+            }
+            if json {
+                println!("{}", serde_json::to_string_pretty(&reports)?);
+            } else {
+                println!("synthesis run: reports={}", reports.len());
+                for report in &reports {
+                    print!("{}", research_synthesis::render_compose_text(report));
                 }
             }
         }
@@ -4953,6 +5176,32 @@ mod tests {
                 max_quad: 1,
             },
         }));
+        assert!(!cmd_needs_writer_lease(&Cmd::ResearchSynthesis {
+            cmd: ResearchSynthesisCmd::Compose {
+                candidate: "synth-cand-0001".into(),
+                discovery: Some(PathBuf::from("discovery.json")),
+                web_evidence: None,
+                draft_json: None,
+                verifier_json: None,
+                internal_only: false,
+                allow_private_web_search: false,
+                apply: false,
+                json: false,
+                report_dir: None,
+            },
+        }));
+        assert!(cmd_needs_writer_lease(&Cmd::ResearchSynthesis {
+            cmd: ResearchSynthesisCmd::Run {
+                apply: true,
+                internal_only: false,
+                allow_private_web_search: false,
+                json: false,
+                report_dir: None,
+                max_single_double: 1,
+                max_triple: 1,
+                max_quad: 1,
+            },
+        }));
         assert!(!cmd_needs_writer_lease(&Cmd::ExportOutboxNdjsonFrom {
             consumer_tag: DEFAULT_MEMPALACE_CONSUMER_TAG.into(),
             last_id: 0,
@@ -5839,6 +6088,161 @@ fn maybe_sync_projection(
         );
     }
     Ok(())
+}
+
+struct ResearchSynthesisComposeInputs {
+    web_evidence: Option<PathBuf>,
+    draft_json: Option<PathBuf>,
+    verifier_json: Option<PathBuf>,
+    internal_only: bool,
+    allow_private_web_search: bool,
+    apply: bool,
+}
+
+fn run_research_synthesis_compose(
+    eng: &mut LlmWikiEngine<NoopWikiHook>,
+    repo: &SqliteRepository,
+    viewer: &Scope,
+    sync_wiki: bool,
+    wiki_root: Option<&std::path::Path>,
+    llm_config_path: &std::path::Path,
+    discovery_report: &wiki_core::SynthesisDiscoveryReport,
+    candidate_id: &str,
+    inputs: ResearchSynthesisComposeInputs,
+) -> Result<research_synthesis::SynthesisComposeReport, Box<dyn std::error::Error>> {
+    let candidate = research_synthesis::select_candidate(discovery_report, candidate_id)?.clone();
+    let internal_evidence =
+        research_synthesis::build_internal_evidence(&eng.store, viewer, &candidate);
+    let mut extra_blockers = Vec::new();
+    let private_web_blocked = matches!(viewer, Scope::Private { .. })
+        && !inputs.internal_only
+        && !inputs.allow_private_web_search;
+    if private_web_blocked {
+        extra_blockers.push(
+            "private viewer scope requires --allow-private-web-search for web research".into(),
+        );
+    }
+
+    let web_runs = match inputs.web_evidence {
+        Some(path) => {
+            let path = resolve_wiki_relative_path(wiki_root, path);
+            research_synthesis::read_web_runs(&path)?
+        }
+        None if inputs.internal_only || private_web_blocked => Vec::new(),
+        None => match research_synthesis::run_web_research(
+            llm_config_path,
+            &candidate,
+            &internal_evidence,
+        ) {
+            Ok(runs) => runs,
+            Err(err) => {
+                extra_blockers.push(format!("web research failed: {err}"));
+                Vec::new()
+            }
+        },
+    };
+
+    let draft = match inputs.draft_json {
+        Some(path) => {
+            let path = resolve_wiki_relative_path(wiki_root, path);
+            Some(research_synthesis::read_draft(&path)?)
+        }
+        None if extra_blockers.is_empty() => {
+            match research_synthesis::generate_draft_with_llm(
+                llm_config_path,
+                &candidate,
+                &internal_evidence,
+                &web_runs,
+            ) {
+                Ok(draft) => Some(draft),
+                Err(err) => {
+                    extra_blockers.push(format!("synthesis_writer failed: {err}"));
+                    None
+                }
+            }
+        }
+        None => None,
+    };
+
+    let verifier = match inputs.verifier_json {
+        Some(path) => {
+            let path = resolve_wiki_relative_path(wiki_root, path);
+            Some(research_synthesis::read_verifier(&path)?)
+        }
+        None if extra_blockers.is_empty() => {
+            if let Some(draft) = &draft {
+                match research_synthesis::verify_with_llm(
+                    llm_config_path,
+                    draft,
+                    &candidate,
+                    &internal_evidence,
+                    &web_runs,
+                ) {
+                    Ok(verdict) => Some(verdict),
+                    Err(err) => {
+                        extra_blockers.push(format!("synthesis_verifier failed: {err}"));
+                        None
+                    }
+                }
+            } else {
+                None
+            }
+        }
+        None => None,
+    };
+
+    let now = OffsetDateTime::now_utc();
+    let mut report = research_synthesis::build_compose_report(
+        research_synthesis::synthesis_compose_report_prefix(now),
+        now,
+        discovery_report,
+        candidate.clone(),
+        internal_evidence.clone(),
+        web_runs.clone(),
+        draft.clone(),
+        verifier.clone(),
+        false,
+        None,
+        inputs.internal_only,
+    );
+    add_research_synthesis_blockers(&mut report, extra_blockers);
+    if report.status == research_synthesis::SynthesisComposeStatus::Ready && inputs.apply {
+        let draft = draft.ok_or("ready synthesis compose report missing draft")?;
+        let page = research_synthesis::build_synthesis_page(&candidate, &draft, viewer.clone());
+        let pid = page.id;
+        eng.store.pages.insert(pid, page);
+        eng.save_to_repo_and_flush_outbox_with_policy(repo, 128, 3)?;
+        maybe_sync_projection(sync_wiki, wiki_root, eng)?;
+        let now = OffsetDateTime::now_utc();
+        report = research_synthesis::build_compose_report(
+            research_synthesis::synthesis_compose_report_prefix(now),
+            now,
+            discovery_report,
+            candidate,
+            internal_evidence,
+            web_runs,
+            Some(draft),
+            verifier,
+            true,
+            Some(pid.0.to_string()),
+            inputs.internal_only,
+        );
+    }
+    Ok(report)
+}
+
+fn add_research_synthesis_blockers(
+    report: &mut research_synthesis::SynthesisComposeReport,
+    blockers: Vec<String>,
+) {
+    if blockers.is_empty() {
+        return;
+    }
+    report.blockers.extend(blockers);
+    report.blockers.sort();
+    report.blockers.dedup();
+    report.status = research_synthesis::SynthesisComposeStatus::Blocked;
+    report.page_id = None;
 }
 
 fn save_to_repo_and_flush_outbox_with_embeddings(

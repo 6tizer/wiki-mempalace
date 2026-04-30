@@ -69,6 +69,15 @@
 - Tests or reviews that caught issues: Clippy caught `field_reassign_with_default`; focused review replaced naive triple loops with pair-graph triangle enumeration.
 - Next plan note: PR6 should consume discovery candidates, build internal evidence packs, run dual-provider web research, then write `in_review/high` synthesis pages only after verifier checks.
 
+## 2026-04-30 / Web-backed Synthesis Composer
+
+- Scope: PR6 of Wiki Governance + Evidence Fixer + Multi-provider Synthesis v3; internal evidence pack, dual web evidence, LLM draft, verifier, and guarded synthesis page write.
+- What worked: Keeping fake `--web-evidence`, `--draft-json`, and `--verifier-json` inputs on the same compose path made the web/LLM chain testable without live provider calls.
+- Pitfall avoided: Private-scope web search must block before external query generation unless `--allow-private-web-search` is explicit.
+- Spec changes needed: Automation docs should treat blocked compose reports as first-class artifacts, not failures to ignore.
+- Tests or reviews that caught issues: CLI compose tests caught the DB write path and private-web block; clippy caught needless generic borrows in section rendering.
+- Next plan note: PR7 should wire daily/manual jobs and MCP/docs around `governance scan`, Fixer, discovery, and synthesis run without changing DB-first write semantics.
+
 ## 2026-04-30 / Audit Disposition PR 1 MCP Query Storage Ports
 
 - Scope: MCP `wiki_query` default path now follows storage-backed query behavior instead of in-memory-only search.

@@ -18,7 +18,8 @@
 - [wiki-governance-scan/](wiki-governance-scan/) — PR2 for Wiki Governance + Evidence Fixer + Multi-provider Synthesis v3: read-only lifecycle/reference/lint/duplicate/retire/synthesis-signal scan. Merged PR #102.
 - [evidence-fixer-plan/](evidence-fixer-plan/) — PR3 for Wiki Governance + Evidence Fixer + Multi-provider Synthesis v3: typed dry-run fixer plan from governance scan evidence. Merged PR #103.
 - [evidence-fixer-apply-restore/](evidence-fixer-apply-restore/) — PR4 for Wiki Governance + Evidence Fixer + Multi-provider Synthesis v3: evidence-auto apply, tombstones, and restore. Merged PR #104.
-- [synthesis-discovery/](synthesis-discovery/) — PR5 for Wiki Governance + Evidence Fixer + Multi-provider Synthesis v3: point/line/plane/body candidate discovery from governance scan signals. Local complete, pending PR.
+- [synthesis-discovery/](synthesis-discovery/) — PR5 for Wiki Governance + Evidence Fixer + Multi-provider Synthesis v3: point/line/plane/body candidate discovery from governance scan signals. Merged PR #105.
+- [web-backed-synthesis-composer/](web-backed-synthesis-composer/) — PR6 for Wiki Governance + Evidence Fixer + Multi-provider Synthesis v3: internal evidence + dual web evidence + LLM composition/verification. Local complete, pending PR.
 - [m10-metrics/](m10-metrics/) — M10 unified metrics core. Merged PR #12。
 - [m11-dashboard/](m11-dashboard/) — M11 read-only dashboard/report. Merged PR #14。
 - [m12-strategy/](m12-strategy/) — M12 strategy suggestions. Merged PR #16。

@@ -1,6 +1,6 @@
 # Handoff: Synthesis Discovery
 
-Implementation complete on branch `codex/synthesis-discovery`.
+Implementation complete and merged as PR #105.
 
 PR5 of Wiki Governance + Evidence Fixer + Multi-provider Synthesis v3.
 
