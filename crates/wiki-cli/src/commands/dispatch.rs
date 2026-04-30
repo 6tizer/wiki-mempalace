@@ -2,7 +2,7 @@ use crate::{
     acquire_cli_writer_lease, automation_run_daily_jobs, llm, orphan_governance,
     print_automation_jobs, resolve_wiki_relative_path, run_automation_plan, run_verify_row_state,
     vault_audit, vault_backfill, web_search, AiProfileCmd, AutomationCmd, Cli, Cmd, GovernanceCmd,
-    OrphanGovernanceCmd, WebSearchCmd,
+    OrphanGovernanceCmd, ResearchSynthesisCmd, WebSearchCmd,
 };
 use std::collections::BTreeSet;
 use time::OffsetDateTime;
@@ -10,7 +10,8 @@ use wiki_core::{
     parse_semantic_patch_proposals_json, GovernanceDuplicateGroup, GovernanceScanReport,
 };
 use wiki_kernel::{
-    build_evidence_fixer_plan, duplicate_web_verification_key, EvidenceFixerPlanOptions,
+    build_evidence_fixer_plan, discover_synthesis_candidates, duplicate_web_verification_key,
+    EvidenceFixerPlanOptions, SynthesisDiscoveryOptions,
 };
 
 pub(crate) fn maybe_run_without_engine(cli: &Cli) -> Result<bool, Box<dyn std::error::Error>> {
@@ -131,6 +132,51 @@ pub(crate) fn maybe_run_without_engine(cli: &Cli) -> Result<bool, Box<dyn std::e
             println!("{}", serde_json::to_string_pretty(&plan)?);
         } else {
             print!("{}", crate::governance::render_fixer_plan_text(&plan));
+            if let Some(files) = files {
+                println!("json_report_file={}", files.json_path.display());
+                println!("markdown_report_file={}", files.markdown_path.display());
+            }
+        }
+        return Ok(true);
+    }
+
+    if let Cmd::ResearchSynthesis {
+        cmd:
+            ResearchSynthesisCmd::Discover {
+                scan: Some(scan),
+                json,
+                report_dir,
+                max_single_double,
+                max_triple,
+                max_quad,
+            },
+    } = &cli.cmd
+    {
+        let raw_scan = std::fs::read_to_string(scan)?;
+        let scan_report: GovernanceScanReport = serde_json::from_str(&raw_scan)?;
+        let now = OffsetDateTime::now_utc();
+        let report = discover_synthesis_candidates(
+            &scan_report,
+            SynthesisDiscoveryOptions {
+                generated_at: now,
+                report_id: crate::governance::synthesis_discovery_report_prefix(now),
+                max_single_double: *max_single_double,
+                max_triple: *max_triple,
+                max_quad: *max_quad,
+            },
+        );
+        let files = report_dir
+            .clone()
+            .map(|dir| resolve_wiki_relative_path(cli.wiki_dir.as_deref(), dir))
+            .map(|dir| crate::governance::write_synthesis_discovery_files(&report, &dir))
+            .transpose()?;
+        if *json {
+            println!("{}", serde_json::to_string_pretty(&report)?);
+        } else {
+            print!(
+                "{}",
+                crate::governance::render_synthesis_discovery_text(&report)
+            );
             if let Some(files) = files {
                 println!("json_report_file={}", files.json_path.display());
                 println!("markdown_report_file={}", files.markdown_path.display());

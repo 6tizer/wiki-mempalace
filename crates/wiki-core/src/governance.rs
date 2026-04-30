@@ -124,9 +124,14 @@ pub struct GovernanceRetireCandidate {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct GovernanceSynthesisSignals {
+    #[serde(default)]
     pub tags: Vec<GovernanceTagSignal>,
+    #[serde(default)]
     pub intersections: Vec<GovernanceTagIntersectionSignal>,
+    #[serde(default)]
     pub deprecated_tags_used: Vec<String>,
+    #[serde(default)]
+    pub existing_topics: Vec<GovernanceSynthesisTopicSignal>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -142,6 +147,15 @@ pub struct GovernanceTagIntersectionSignal {
     pub tags: Vec<String>,
     pub concept_entity_pages: u64,
     pub page_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GovernanceSynthesisTopicSignal {
+    pub page_id: String,
+    pub title: String,
+    pub tags: Vec<String>,
+    pub status: Option<EntryStatus>,
+    pub source_domains: Vec<String>,
 }
 
 #[cfg(test)]

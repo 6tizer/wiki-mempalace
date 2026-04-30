@@ -8,7 +8,7 @@
 | Executor | Main | `crates/wiki-kernel/src/evidence_fixer_apply.rs` | Complete |
 | CLI commands + reports | Main | `crates/wiki-cli/src/main.rs`, `crates/wiki-cli/src/governance.rs` | Complete |
 | Restore and reliability tests | Main | kernel + CLI tests | Complete |
-| Focused review + gates | Main | local commands / GitHub CI | Local complete; PR CI pending |
+| Focused review + gates | Main | local commands / GitHub CI | Complete; merged PR #104 |
 
 ## Verification
 
@@ -22,4 +22,4 @@
 - `cargo clippy --workspace --all-targets -- -D warnings`
 - `cargo deny --all-features check advisories bans licenses sources`
 
-All local gates passed before PR.
+All local gates and GitHub `quick` passed before merge in PR #104.

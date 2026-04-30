@@ -12,6 +12,7 @@ mod memory;
 mod metrics;
 mod search_ports;
 mod strategy;
+mod synthesis_discovery;
 mod wiki_writer;
 
 pub mod page_contract;
@@ -37,6 +38,7 @@ pub use search_ports::{
     EmptySearchPorts, InMemorySearchPorts, SearchPorts,
 };
 pub use strategy::{run_strategy_scan, StrategyScanOptions};
+pub use synthesis_discovery::{discover_synthesis_candidates, SynthesisDiscoveryOptions};
 pub use wiki_writer::{
     write_lint_report, write_projection, write_projection_pages, ProjectionStats,
 };

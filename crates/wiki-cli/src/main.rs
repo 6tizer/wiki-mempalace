@@ -18,11 +18,12 @@ use wiki_core::{
     WikiMetricsReport, WikiPage,
 };
 use wiki_kernel::{
-    apply_evidence_fixer_plan, collect_wiki_metrics, finalize_consumed_page, format_claim_doc_id,
-    initial_status_for, map_findings_to_fixes, merge_graph_rankings,
-    restore_evidence_fixer_tombstone, run_governance_scan, run_strategy_scan, write_lint_report,
-    write_projection, EvidenceFixerApplyOptions, GovernanceScanOptions, InMemorySearchPorts,
-    InMemoryStore, LlmWikiEngine, NoopWikiHook, SearchPorts, StrategyScanOptions,
+    apply_evidence_fixer_plan, collect_wiki_metrics, discover_synthesis_candidates,
+    finalize_consumed_page, format_claim_doc_id, initial_status_for, map_findings_to_fixes,
+    merge_graph_rankings, restore_evidence_fixer_tombstone, run_governance_scan, run_strategy_scan,
+    write_lint_report, write_projection, EvidenceFixerApplyOptions, GovernanceScanOptions,
+    InMemorySearchPorts, InMemoryStore, LlmWikiEngine, NoopWikiHook, SearchPorts,
+    StrategyScanOptions, SynthesisDiscoveryOptions,
 };
 use wiki_mempalace_bridge::{
     consume_outbox_ndjson_with_resolver_and_stats, LiveMempalaceSink, MempalaceError,
@@ -135,6 +136,11 @@ enum Cmd {
     Governance {
         #[command(subcommand)]
         cmd: GovernanceCmd,
+    },
+    /// Discover high-value synthesis candidates from internal wiki signals.
+    ResearchSynthesis {
+        #[command(subcommand)]
+        cmd: ResearchSynthesisCmd,
     },
     Ingest {
         uri: String,
@@ -660,6 +666,31 @@ enum GovernanceCmd {
         /// Write sibling JSON + Markdown restore report to this directory.
         #[arg(long)]
         report_dir: Option<PathBuf>,
+    },
+}
+
+#[derive(Subcommand)]
+enum ResearchSynthesisCmd {
+    /// Discover point/line/plane/volume synthesis candidates. Read-only.
+    Discover {
+        /// Optional governance scan JSON. If omitted, the command scans the current wiki first.
+        #[arg(long)]
+        scan: Option<PathBuf>,
+        /// Print pretty JSON to stdout.
+        #[arg(long, default_value_t = false)]
+        json: bool,
+        /// Write sibling JSON + Markdown reports to this directory.
+        #[arg(long)]
+        report_dir: Option<PathBuf>,
+        /// Maximum candidates from the combined single/double pool.
+        #[arg(long, default_value_t = 1)]
+        max_single_double: usize,
+        /// Maximum triple-tag candidates.
+        #[arg(long, default_value_t = 1)]
+        max_triple: usize,
+        /// Maximum quad-tag candidates.
+        #[arg(long, default_value_t = 1)]
+        max_quad: usize,
     },
 }
 
@@ -2632,6 +2663,7 @@ fn cmd_needs_writer_lease(cmd: &Cmd) -> bool {
         | Cmd::Governance {
             cmd: GovernanceCmd::Scan { .. } | GovernanceCmd::FixerPlan { .. },
         }
+        | Cmd::ResearchSynthesis { .. }
         | Cmd::AiProfile { .. }
         | Cmd::WebSearch { .. }
         | Cmd::LlmSmoke { .. }
@@ -2667,6 +2699,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             | Cmd::AiProfile { .. }
             | Cmd::WebSearch { .. }
             | Cmd::Governance { .. }
+            | Cmd::ResearchSynthesis { .. }
             | Cmd::VerifyRowState { .. }
     ) {
         banner::print_startup_banner();
@@ -2701,6 +2734,9 @@ fn run_with_engine(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
         | Cmd::WebSearch { .. }
         | Cmd::Governance {
             cmd: GovernanceCmd::FixerPlan { .. },
+        }
+        | Cmd::ResearchSynthesis {
+            cmd: ResearchSynthesisCmd::Discover { scan: Some(_), .. },
         } => {
             unreachable!("no-engine command should be handled before opening wiki runtime")
         }
@@ -3453,6 +3489,52 @@ fn run_with_engine(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                 println!("{}", serde_json::to_string_pretty(&report)?);
             } else {
                 print!("{}", governance::render_scan_text(&report));
+                if let Some(files) = files {
+                    println!("json_report_file={}", files.json_path.display());
+                    println!("markdown_report_file={}", files.markdown_path.display());
+                }
+            }
+        }
+        Cmd::ResearchSynthesis {
+            cmd:
+                ResearchSynthesisCmd::Discover {
+                    scan: None,
+                    json,
+                    report_dir,
+                    max_single_double,
+                    max_triple,
+                    max_quad,
+                },
+        } => {
+            let now = OffsetDateTime::now_utc();
+            let scan_report = run_governance_scan(
+                &eng.store,
+                &schema,
+                GovernanceScanOptions {
+                    viewer_scope: Some(&viewer),
+                    low_coverage_threshold: 2,
+                    generated_at: now,
+                    report_id: governance::governance_report_prefix(now),
+                },
+            );
+            let report = discover_synthesis_candidates(
+                &scan_report,
+                SynthesisDiscoveryOptions {
+                    generated_at: now,
+                    report_id: governance::synthesis_discovery_report_prefix(now),
+                    max_single_double,
+                    max_triple,
+                    max_quad,
+                },
+            );
+            let files = report_dir
+                .map(|dir| resolve_wiki_relative_path(wiki_root.as_deref(), dir))
+                .map(|dir| governance::write_synthesis_discovery_files(&report, &dir))
+                .transpose()?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&report)?);
+            } else {
+                print!("{}", governance::render_synthesis_discovery_text(&report));
                 if let Some(files) = files {
                     println!("json_report_file={}", files.json_path.display());
                     println!("markdown_report_file={}", files.markdown_path.display());
@@ -4859,6 +4941,16 @@ mod tests {
                 json: false,
                 report_dir: None,
                 low_coverage_threshold: 2,
+            },
+        }));
+        assert!(!cmd_needs_writer_lease(&Cmd::ResearchSynthesis {
+            cmd: ResearchSynthesisCmd::Discover {
+                scan: Some(PathBuf::from("scan.json")),
+                json: false,
+                report_dir: None,
+                max_single_double: 1,
+                max_triple: 1,
+                max_quad: 1,
             },
         }));
         assert!(!cmd_needs_writer_lease(&Cmd::ExportOutboxNdjsonFrom {

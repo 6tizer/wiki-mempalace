@@ -60,6 +60,15 @@
 - Test gate: focused `wiki-core evidence_fixer`, `wiki-kernel evidence_fixer_apply`, `wiki-cli --test governance_fixer_apply`, `wiki-cli --bin wiki-cli governance`, workspace fmt/test/clippy, and `cargo deny` all pass locally before PR.
 - Next plan note: PR5 should consume governance scan synthesis signals and avoid duplicate candidate topics.
 
+## 2026-04-30 / Synthesis Discovery
+
+- Scope: PR5 of Wiki Governance + Evidence Fixer + Multi-provider Synthesis v3; point/line/plane/body candidate discovery from governance scan signals.
+- What worked: Reusing `GovernanceScanReport` kept discovery read-only and made `--scan` no-engine mode easy to prove in CLI tests.
+- Pitfall avoided: Three-tag synthesis is a pairwise triangle rule, not a triple-intersection rule; tests must pin that difference.
+- Spec changes needed: Quad discovery needs existing synthesis topic coverage in the scan so it can avoid proposing body-level jumps without anchors.
+- Tests or reviews that caught issues: Clippy caught `field_reassign_with_default`; focused review replaced naive triple loops with pair-graph triangle enumeration.
+- Next plan note: PR6 should consume discovery candidates, build internal evidence packs, run dual-provider web research, then write `in_review/high` synthesis pages only after verifier checks.
+
 ## 2026-04-30 / Audit Disposition PR 1 MCP Query Storage Ports
 
 - Scope: MCP `wiki_query` default path now follows storage-backed query behavior instead of in-memory-only search.
