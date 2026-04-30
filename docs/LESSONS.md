@@ -44,6 +44,15 @@
 - Tests or reviews that caught issues: Focused docs review plus active-doc `rg` checks caught edition 2024 wording and Notion sync stale-phrase echoes.
 - Next plan note: After PR2 merge, refresh MCP API reference and add docs sync tests.
 
+## 2026-04-30 / Audit Disposition PR 3 MCP API Reference
+
+- Scope: MCP API reference now tracks current unified `wiki-cli mcp` tools, typed errors, scope rules, side effects, and mempalace bank capability.
+- What worked: A docs sync test tied the reference to `tools_list()`, so future tool additions cannot silently skip docs.
+- What caused rework: Mempalace `bank_id` must still be mentioned as a rejected field, but never in tool client arg columns.
+- Spec changes needed: API docs specs should separate unified `wiki-cli mcp` from standalone `rust-mempalace mcp`.
+- Tests or reviews that caught issues: Focused docs tests cover all tool names, error kinds, and mempalace bank arg table columns.
+- Next plan note: After PR3 merge, close the 2026-04-30 disposition roadmap batch as complete.
+
 ## 2026-04-29 / Audit v2 PR 01 MCP Input Boundary
 
 - Scope: MCP result limit clamp + lint report path guard，先处理审计 P0 quick fix。
