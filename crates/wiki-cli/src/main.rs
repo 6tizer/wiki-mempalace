@@ -19,9 +19,9 @@ use wiki_core::{
 };
 use wiki_kernel::{
     collect_wiki_metrics, finalize_consumed_page, format_claim_doc_id, initial_status_for,
-    map_findings_to_fixes, merge_graph_rankings, run_strategy_scan, write_lint_report,
-    write_projection, InMemorySearchPorts, InMemoryStore, LlmWikiEngine, NoopWikiHook, SearchPorts,
-    StrategyScanOptions,
+    map_findings_to_fixes, merge_graph_rankings, run_governance_scan, run_strategy_scan,
+    write_lint_report, write_projection, GovernanceScanOptions, InMemorySearchPorts, InMemoryStore,
+    LlmWikiEngine, NoopWikiHook, SearchPorts, StrategyScanOptions,
 };
 use wiki_mempalace_bridge::{
     consume_outbox_ndjson_with_resolver_and_stats, LiveMempalaceSink, MempalaceError,
@@ -38,6 +38,7 @@ mod commands;
 mod compiler_deferred;
 mod consistency;
 mod dashboard;
+mod governance;
 mod llm;
 mod mcp;
 mod notion_archived_retirement;
@@ -128,6 +129,11 @@ enum Cmd {
     WebSearch {
         #[command(subcommand)]
         cmd: WebSearchCmd,
+    },
+    /// Run read-only governance scans for lifecycle, references, duplicates, and synthesis signals.
+    Governance {
+        #[command(subcommand)]
+        cmd: GovernanceCmd,
     },
     Ingest {
         uri: String,
@@ -577,6 +583,22 @@ enum WebSearchCmd {
         query: String,
         #[arg(long, default_value_t = false)]
         json: bool,
+    },
+}
+
+#[derive(Subcommand)]
+enum GovernanceCmd {
+    /// Run a read-only unified governance scan.
+    Scan {
+        /// Print pretty JSON to stdout.
+        #[arg(long, default_value_t = false)]
+        json: bool,
+        /// Write sibling JSON + Markdown reports to this directory.
+        #[arg(long)]
+        report_dir: Option<PathBuf>,
+        /// Low coverage threshold used by the embedded gap scan.
+        #[arg(long, default_value_t = 2)]
+        low_coverage_threshold: usize,
     },
 }
 
@@ -2519,6 +2541,7 @@ fn cmd_needs_writer_lease(cmd: &Cmd) -> bool {
         | Cmd::Metrics { .. }
         | Cmd::Dashboard { .. }
         | Cmd::Suggest { .. }
+        | Cmd::Governance { .. }
         | Cmd::AiProfile { .. }
         | Cmd::WebSearch { .. }
         | Cmd::LlmSmoke { .. }
@@ -2553,6 +2576,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             | Cmd::SuggestExecutorApply { .. }
             | Cmd::AiProfile { .. }
             | Cmd::WebSearch { .. }
+            | Cmd::Governance { .. }
             | Cmd::VerifyRowState { .. }
     ) {
         banner::print_startup_banner();
@@ -3307,6 +3331,39 @@ fn run_with_engine(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
             }
             println!("json_report_file={}", files.json_path.display());
             println!("markdown_report_file={}", files.markdown_path.display());
+        }
+        Cmd::Governance {
+            cmd:
+                GovernanceCmd::Scan {
+                    json,
+                    report_dir,
+                    low_coverage_threshold,
+                },
+        } => {
+            let now = OffsetDateTime::now_utc();
+            let report = run_governance_scan(
+                &eng.store,
+                &schema,
+                GovernanceScanOptions {
+                    viewer_scope: Some(&viewer),
+                    low_coverage_threshold,
+                    generated_at: now,
+                    report_id: governance::governance_report_prefix(now),
+                },
+            );
+            let files = report_dir
+                .map(|dir| resolve_wiki_relative_path(wiki_root.as_deref(), dir))
+                .map(|dir| governance::write_scan_files(&report, &dir))
+                .transpose()?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&report)?);
+            } else {
+                print!("{}", governance::render_scan_text(&report));
+                if let Some(files) = files {
+                    println!("json_report_file={}", files.json_path.display());
+                    println!("markdown_report_file={}", files.markdown_path.display());
+                }
+            }
         }
         Cmd::Metrics {
             consumer_tag,
@@ -4617,6 +4674,13 @@ mod tests {
             low_coverage_threshold: 2,
             json: false,
             report: None,
+        }));
+        assert!(!cmd_needs_writer_lease(&Cmd::Governance {
+            cmd: GovernanceCmd::Scan {
+                json: false,
+                report_dir: None,
+                low_coverage_threshold: 2,
+            },
         }));
         assert!(!cmd_needs_writer_lease(&Cmd::ExportOutboxNdjsonFrom {
             consumer_tag: DEFAULT_MEMPALACE_CONSUMER_TAG.into(),

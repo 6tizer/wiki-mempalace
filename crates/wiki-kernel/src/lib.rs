@@ -4,6 +4,7 @@ mod auto_hooks;
 mod engine;
 mod fix;
 mod gap;
+mod governance_scan;
 mod hooks;
 mod memory;
 mod metrics;
@@ -18,6 +19,7 @@ pub use engine::{
 };
 pub use fix::{map_findings_to_fixes, map_gap_finding, map_lint_finding};
 pub use gap::run_gap_scan;
+pub use governance_scan::{run_governance_scan, GovernanceScanOptions};
 pub use hooks::{NoopWikiHook, WikiHook};
 pub use memory::InMemoryStore;
 pub use metrics::collect_wiki_metrics;
