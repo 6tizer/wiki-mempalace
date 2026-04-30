@@ -265,11 +265,14 @@ fn automation_run_daily_dry_run_prints_fixed_plan() {
         .assert()
         .success()
         .stdout(predicate::str::contains("automation run-daily plan:"))
-        .stdout(predicate::str::contains("1. batch-ingest"))
-        .stdout(predicate::str::contains("2. lint"))
-        .stdout(predicate::str::contains("3. maintenance"))
-        .stdout(predicate::str::contains("4. consume-to-mempalace"))
-        .stdout(predicate::str::contains("6. vault-reports"))
+        .stdout(predicate::str::contains("1. notion-sync"))
+        .stdout(predicate::str::contains("2. batch-ingest"))
+        .stdout(predicate::str::contains("3. governance-scan"))
+        .stdout(predicate::str::contains("4. fixer-plan"))
+        .stdout(predicate::str::contains("5. fixer-apply"))
+        .stdout(predicate::str::contains("6. maintenance"))
+        .stdout(predicate::str::contains("7. consume-to-mempalace"))
+        .stdout(predicate::str::contains("8. vault-reports"))
         .stdout(predicate::str::contains("dry-run: no jobs executed"))
         .stdout(predicate::str::contains("automation: running").not());
 }
@@ -282,12 +285,18 @@ fn automation_list_jobs_prints_registry() {
         .assert()
         .success()
         .stdout(predicate::str::contains("automation jobs:"))
+        .stdout(predicate::str::contains("notion-sync daily=yes"))
         .stdout(predicate::str::contains("batch-ingest daily=yes"))
-        .stdout(predicate::str::contains("lint daily=yes"))
+        .stdout(predicate::str::contains("governance-scan daily=yes"))
+        .stdout(predicate::str::contains("fixer-plan daily=yes"))
+        .stdout(predicate::str::contains("fixer-apply daily=yes"))
+        .stdout(predicate::str::contains("lint daily=no"))
         .stdout(predicate::str::contains("maintenance daily=yes"))
         .stdout(predicate::str::contains("consume-to-mempalace daily=yes"))
         .stdout(predicate::str::contains("llm-smoke daily=no"))
-        .stdout(predicate::str::contains("vault-reports daily=yes"));
+        .stdout(predicate::str::contains("vault-reports daily=yes"))
+        .stdout(predicate::str::contains("synthesis-discover daily=no"))
+        .stdout(predicate::str::contains("synthesis-run daily=no"));
 }
 
 #[test]
@@ -303,12 +312,18 @@ fn automation_status_prints_never_run_for_fresh_db() {
         .assert()
         .success()
         .stdout(predicate::str::contains("automation status:"))
+        .stdout(predicate::str::contains("notion-sync: never-run"))
         .stdout(predicate::str::contains("batch-ingest: never-run"))
+        .stdout(predicate::str::contains("governance-scan: never-run"))
+        .stdout(predicate::str::contains("fixer-plan: never-run"))
+        .stdout(predicate::str::contains("fixer-apply: never-run"))
         .stdout(predicate::str::contains("lint: never-run"))
         .stdout(predicate::str::contains("maintenance: never-run"))
         .stdout(predicate::str::contains("consume-to-mempalace: never-run"))
         .stdout(predicate::str::contains("llm-smoke: never-run"))
-        .stdout(predicate::str::contains("vault-reports: never-run"));
+        .stdout(predicate::str::contains("vault-reports: never-run"))
+        .stdout(predicate::str::contains("synthesis-discover: never-run"))
+        .stdout(predicate::str::contains("synthesis-run: never-run"));
 }
 
 #[test]
@@ -350,7 +365,7 @@ fn automation_run_lint_executes_only_target_job() {
         .assert()
         .success()
         .stdout(predicate::str::contains("automation: running lint"))
-        .stdout(predicate::str::contains("daily=yes"))
+        .stdout(predicate::str::contains("daily=no"))
         .stdout(predicate::str::contains("status=succeeded"))
         .stdout(predicate::str::contains("duration_ms="));
 
@@ -453,6 +468,138 @@ fn automation_run_vault_reports_writes_scheduled_bundle_and_latest_pointer() {
         let path = PathBuf::from(latest["files"][key].as_str().unwrap());
         assert!(path.exists(), "missing scheduled report file for {key}");
     }
+}
+
+#[test]
+fn automation_run_governance_scan_writes_report() {
+    let db = tempfile::NamedTempFile::new().unwrap();
+    let db_path = db.path().to_owned();
+    let vault_dir = tempfile::tempdir().unwrap();
+
+    wiki_cli()
+        .arg("--db")
+        .arg(&db_path)
+        .arg("--wiki-dir")
+        .arg(vault_dir.path())
+        .arg("automation")
+        .arg("run")
+        .arg("governance-scan")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "automation: running governance-scan",
+        ))
+        .stdout(predicate::str::contains("governance scan:"))
+        .stdout(predicate::str::contains("json_report_file="))
+        .stdout(predicate::str::contains("status=succeeded"));
+
+    assert!(vault_dir.path().join("reports/governance").exists());
+    let repo = SqliteRepository::open(&db_path).unwrap();
+    assert!(repo
+        .get_latest_automation_run("governance-scan")
+        .unwrap()
+        .is_some());
+}
+
+#[test]
+fn automation_run_fixer_plan_writes_report() {
+    let db = tempfile::NamedTempFile::new().unwrap();
+    let db_path = db.path().to_owned();
+    let vault_dir = tempfile::tempdir().unwrap();
+
+    wiki_cli()
+        .arg("--db")
+        .arg(&db_path)
+        .arg("--wiki-dir")
+        .arg(vault_dir.path())
+        .arg("automation")
+        .arg("run")
+        .arg("fixer-plan")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("automation: running fixer-plan"))
+        .stdout(predicate::str::contains("evidence fixer plan:"))
+        .stdout(predicate::str::contains("json_report_file="))
+        .stdout(predicate::str::contains("status=succeeded"));
+
+    let fixer_dir = vault_dir.path().join("reports/fixer");
+    assert!(fixer_dir.exists());
+    assert!(std::fs::read_dir(fixer_dir).unwrap().any(|entry| entry
+        .unwrap()
+        .file_name()
+        .to_string_lossy()
+        .ends_with("-evidence-fixer-plan.json")));
+}
+
+#[test]
+fn automation_run_fixer_apply_writes_apply_report_without_existing_plan() {
+    let db = tempfile::NamedTempFile::new().unwrap();
+    let db_path = db.path().to_owned();
+    let vault_dir = tempfile::tempdir().unwrap();
+
+    wiki_cli()
+        .arg("--db")
+        .arg(&db_path)
+        .arg("--wiki-dir")
+        .arg(vault_dir.path())
+        .arg("automation")
+        .arg("run")
+        .arg("fixer-apply")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("automation: running fixer-apply"))
+        .stdout(predicate::str::contains("plan_file="))
+        .stdout(predicate::str::contains("evidence fixer apply:"))
+        .stdout(predicate::str::contains("status=succeeded"));
+
+    let fixer_dir = vault_dir.path().join("reports/fixer");
+    assert!(std::fs::read_dir(fixer_dir).unwrap().any(|entry| entry
+        .unwrap()
+        .file_name()
+        .to_string_lossy()
+        .ends_with("-evidence-fixer-apply.json")));
+}
+
+#[test]
+fn automation_run_synthesis_jobs_write_reports_without_candidates() {
+    let db = tempfile::NamedTempFile::new().unwrap();
+    let db_path = db.path().to_owned();
+    let vault_dir = tempfile::tempdir().unwrap();
+
+    wiki_cli()
+        .arg("--db")
+        .arg(&db_path)
+        .arg("--wiki-dir")
+        .arg(vault_dir.path())
+        .arg("automation")
+        .arg("run")
+        .arg("synthesis-discover")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "automation: running synthesis-discover",
+        ))
+        .stdout(predicate::str::contains("synthesis discovery:"))
+        .stdout(predicate::str::contains("status=succeeded"));
+
+    wiki_cli()
+        .arg("--db")
+        .arg(&db_path)
+        .arg("--wiki-dir")
+        .arg(vault_dir.path())
+        .arg("automation")
+        .arg("run")
+        .arg("synthesis-run")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "automation: running synthesis-run",
+        ))
+        .stdout(predicate::str::contains("synthesis run: reports=0"))
+        .stdout(predicate::str::contains("status=succeeded"));
+
+    let synthesis_dir = vault_dir.path().join("reports/synthesis");
+    assert!(synthesis_dir.exists());
 }
 
 #[test]

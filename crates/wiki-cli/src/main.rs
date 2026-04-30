@@ -2,7 +2,7 @@
 
 use clap::{Parser, Subcommand, ValueEnum};
 use serde::Serialize;
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use time::{format_description::well_known::Rfc3339, Duration, OffsetDateTime};
@@ -10,18 +10,19 @@ use walkdir::WalkDir;
 use wiki_core::{
     build_strategy_execution_plan, document_visible_to_viewer, parse_memory_tier, AuditOperation,
     AuditRecord, ClaimId, CompositeSearchPorts, Confidence, DomainSchema, Entity, EntityId,
-    EntityKind, EntryStatus, EntryType, FixAction, FixActionType, FixPatch, FusionConfig,
-    GapFinding, GapSeverity, LlmIngestPlanV1, MemoryTier, PageContract, PageId, QueryContext,
-    RelationKind, Scope, SessionCrystallizationInput, SourceId, StrategyExecutionAction,
-    StrategyExecutionActionKind, StrategyExecutionDryRunStatus, StrategyExecutionPlan,
-    StrategyExecutionPolicy, StrategyReport, StrategySeverity, TypedEdge, WikiEvent,
-    WikiMetricsReport, WikiPage,
+    EntityKind, EntryStatus, EntryType, EvidenceFixerPlan, FixAction, FixActionType, FixPatch,
+    FusionConfig, GapFinding, GapSeverity, GovernanceDuplicateGroup, GovernanceScanReport,
+    LlmIngestPlanV1, MemoryTier, PageContract, PageId, QueryContext, RelationKind, Scope,
+    SessionCrystallizationInput, SourceId, StrategyExecutionAction, StrategyExecutionActionKind,
+    StrategyExecutionDryRunStatus, StrategyExecutionPlan, StrategyExecutionPolicy, StrategyReport,
+    StrategySeverity, TypedEdge, WikiEvent, WikiMetricsReport, WikiPage,
 };
 use wiki_kernel::{
-    apply_evidence_fixer_plan, collect_wiki_metrics, discover_synthesis_candidates,
-    finalize_consumed_page, format_claim_doc_id, initial_status_for, map_findings_to_fixes,
-    merge_graph_rankings, restore_evidence_fixer_tombstone, run_governance_scan, run_strategy_scan,
-    write_lint_report, write_projection, EvidenceFixerApplyOptions, GovernanceScanOptions,
+    apply_evidence_fixer_plan, build_evidence_fixer_plan, collect_wiki_metrics,
+    discover_synthesis_candidates, duplicate_web_verification_key, finalize_consumed_page,
+    format_claim_doc_id, initial_status_for, map_findings_to_fixes, merge_graph_rankings,
+    restore_evidence_fixer_tombstone, run_governance_scan, run_strategy_scan, write_lint_report,
+    write_projection, EvidenceFixerApplyOptions, EvidenceFixerPlanOptions, GovernanceScanOptions,
     InMemorySearchPorts, InMemoryStore, LlmWikiEngine, NoopWikiHook, SearchPorts,
     StrategyScanOptions, SynthesisDiscoveryOptions,
 };
@@ -67,6 +68,12 @@ const DEFAULT_DASHBOARD_OUTPUT: &str = "wiki/reports/dashboard.html";
 const VAULT_DASHBOARD_OUTPUT: &str = "reports/dashboard.html";
 const DEFAULT_SUGGEST_REPORT_DIR: &str = "wiki/reports/suggestions";
 const VAULT_SUGGEST_REPORT_DIR: &str = "reports/suggestions";
+const DEFAULT_GOVERNANCE_REPORT_DIR: &str = "wiki/reports/governance";
+const VAULT_GOVERNANCE_REPORT_DIR: &str = "reports/governance";
+const DEFAULT_FIXER_REPORT_DIR: &str = "wiki/reports/fixer";
+const VAULT_FIXER_REPORT_DIR: &str = "reports/fixer";
+const DEFAULT_SYNTHESIS_REPORT_DIR: &str = "wiki/reports/synthesis";
+const VAULT_SYNTHESIS_REPORT_DIR: &str = "reports/synthesis";
 const DEFAULT_SCHEDULED_REPORT_KEEP: usize = 14;
 
 #[derive(Parser)]
@@ -886,8 +893,16 @@ enum NotionArchivedRetirementCmd {
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, ValueEnum)]
 enum AutomationJob {
+    #[value(name = "notion-sync")]
+    NotionSync,
     #[value(name = "batch-ingest")]
     BatchIngest,
+    #[value(name = "governance-scan")]
+    GovernanceScan,
+    #[value(name = "fixer-plan")]
+    FixerPlan,
+    #[value(name = "fixer-apply")]
+    FixerApply,
     #[value(name = "lint")]
     Lint,
     #[value(name = "maintenance")]
@@ -896,10 +911,12 @@ enum AutomationJob {
     ConsumeToMempalace,
     #[value(name = "llm-smoke")]
     LlmSmoke,
-    #[value(name = "notion-sync")]
-    NotionSync,
     #[value(name = "vault-reports")]
     VaultReports,
+    #[value(name = "synthesis-discover")]
+    SynthesisDiscover,
+    #[value(name = "synthesis-run")]
+    SynthesisRun,
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -913,6 +930,13 @@ struct AutomationJobSpec {
 
 const AUTOMATION_JOB_SPECS: &[AutomationJobSpec] = &[
     AutomationJobSpec {
+        job: AutomationJob::NotionSync,
+        in_daily: true,
+        requires_network: true,
+        short_circuit: false,
+        description: "Incrementally sync Notion databases (X书签 and 微信文章) into wiki.db.",
+    },
+    AutomationJobSpec {
         job: AutomationJob::BatchIngest,
         in_daily: true,
         requires_network: true,
@@ -920,8 +944,29 @@ const AUTOMATION_JOB_SPECS: &[AutomationJobSpec] = &[
         description: "Compile vault sources with compiled_to_wiki=false into wiki.db.",
     },
     AutomationJobSpec {
-        job: AutomationJob::Lint,
+        job: AutomationJob::GovernanceScan,
         in_daily: true,
+        requires_network: false,
+        short_circuit: true,
+        description: "Write a read-only governance scan report for lifecycle, references, duplicates, and synthesis signals.",
+    },
+    AutomationJobSpec {
+        job: AutomationJob::FixerPlan,
+        in_daily: true,
+        requires_network: true,
+        short_circuit: true,
+        description: "Build an evidence fixer plan from the current governance scan evidence.",
+    },
+    AutomationJobSpec {
+        job: AutomationJob::FixerApply,
+        in_daily: true,
+        requires_network: false,
+        short_circuit: true,
+        description: "Apply ready evidence-auto fixer actions from the latest fixer plan.",
+    },
+    AutomationJobSpec {
+        job: AutomationJob::Lint,
+        in_daily: false,
         requires_network: false,
         short_circuit: true,
         description: "Run lint and write the latest report / projection outputs.",
@@ -948,18 +993,25 @@ const AUTOMATION_JOB_SPECS: &[AutomationJobSpec] = &[
         description: "Check the configured LLM endpoint with a minimal chat completion.",
     },
     AutomationJobSpec {
-        job: AutomationJob::NotionSync,
-        in_daily: true,
-        requires_network: true,
-        short_circuit: false,
-        description: "Incrementally sync Notion databases (X书签 and 微信文章) into wiki.db.",
-    },
-    AutomationJobSpec {
         job: AutomationJob::VaultReports,
         in_daily: true,
         requires_network: false,
         short_circuit: false,
         description: "Generate scheduled Vault reports, latest pointers, and retention cleanup.",
+    },
+    AutomationJobSpec {
+        job: AutomationJob::SynthesisDiscover,
+        in_daily: false,
+        requires_network: false,
+        short_circuit: true,
+        description: "Discover point/line/plane/volume synthesis candidates from internal wiki signals.",
+    },
+    AutomationJobSpec {
+        job: AutomationJob::SynthesisRun,
+        in_daily: false,
+        requires_network: true,
+        short_circuit: true,
+        description: "Run synthesis discovery and compose verified in-review synthesis pages.",
     },
 ];
 
@@ -1041,13 +1093,18 @@ fn automation_run_daily_jobs() -> Vec<AutomationJob> {
 
 fn automation_job_name(job: AutomationJob) -> &'static str {
     match job {
+        AutomationJob::NotionSync => "notion-sync",
         AutomationJob::BatchIngest => "batch-ingest",
+        AutomationJob::GovernanceScan => "governance-scan",
+        AutomationJob::FixerPlan => "fixer-plan",
+        AutomationJob::FixerApply => "fixer-apply",
         AutomationJob::Lint => "lint",
         AutomationJob::Maintenance => "maintenance",
         AutomationJob::ConsumeToMempalace => "consume-to-mempalace",
         AutomationJob::LlmSmoke => "llm-smoke",
-        AutomationJob::NotionSync => "notion-sync",
         AutomationJob::VaultReports => "vault-reports",
+        AutomationJob::SynthesisDiscover => "synthesis-discover",
+        AutomationJob::SynthesisRun => "synthesis-run",
     }
 }
 
@@ -1170,6 +1227,30 @@ fn default_suggest_report_dir(wiki_root: Option<&Path>) -> PathBuf {
         root.join(VAULT_SUGGEST_REPORT_DIR)
     } else {
         PathBuf::from(DEFAULT_SUGGEST_REPORT_DIR)
+    }
+}
+
+fn default_governance_report_dir(wiki_root: Option<&Path>) -> PathBuf {
+    if let Some(root) = wiki_root {
+        root.join(VAULT_GOVERNANCE_REPORT_DIR)
+    } else {
+        PathBuf::from(DEFAULT_GOVERNANCE_REPORT_DIR)
+    }
+}
+
+fn default_fixer_report_dir(wiki_root: Option<&Path>) -> PathBuf {
+    if let Some(root) = wiki_root {
+        root.join(VAULT_FIXER_REPORT_DIR)
+    } else {
+        PathBuf::from(DEFAULT_FIXER_REPORT_DIR)
+    }
+}
+
+fn default_synthesis_report_dir(wiki_root: Option<&Path>) -> PathBuf {
+    if let Some(root) = wiki_root {
+        root.join(VAULT_SYNTHESIS_REPORT_DIR)
+    } else {
+        PathBuf::from(DEFAULT_SYNTHESIS_REPORT_DIR)
     }
 }
 
@@ -2560,10 +2641,12 @@ fn automation_job_needs_writer_lease(job: AutomationJob) -> bool {
     matches!(
         job,
         AutomationJob::BatchIngest
+            | AutomationJob::FixerApply
             | AutomationJob::Lint
             | AutomationJob::Maintenance
             | AutomationJob::ConsumeToMempalace
             | AutomationJob::NotionSync
+            | AutomationJob::SynthesisRun
     )
 }
 
@@ -5026,11 +5109,13 @@ mod tests {
         assert_eq!(
             labels,
             vec![
+                "notion-sync",
                 "batch-ingest",
-                "lint",
+                "governance-scan",
+                "fixer-plan",
+                "fixer-apply",
                 "maintenance",
                 "consume-to-mempalace",
-                "notion-sync",
                 "vault-reports",
             ]
         );
@@ -5045,21 +5130,32 @@ mod tests {
         assert_eq!(
             labels,
             vec![
+                "notion-sync",
                 "batch-ingest",
+                "governance-scan",
+                "fixer-plan",
+                "fixer-apply",
                 "lint",
                 "maintenance",
                 "consume-to-mempalace",
                 "llm-smoke",
-                "notion-sync",
                 "vault-reports",
+                "synthesis-discover",
+                "synthesis-run",
             ]
         );
+        assert!(automation_job_spec(AutomationJob::FixerPlan).requires_network);
+        assert!(automation_job_spec(AutomationJob::FixerPlan).in_daily);
+        assert!(!automation_job_spec(AutomationJob::FixerApply).requires_network);
+        assert!(automation_job_spec(AutomationJob::FixerApply).in_daily);
         assert!(automation_job_spec(AutomationJob::LlmSmoke).requires_network);
         assert!(!automation_job_spec(AutomationJob::LlmSmoke).in_daily);
         assert!(automation_job_spec(AutomationJob::NotionSync).requires_network);
         assert!(automation_job_spec(AutomationJob::NotionSync).in_daily);
         assert!(!automation_job_spec(AutomationJob::VaultReports).requires_network);
         assert!(automation_job_spec(AutomationJob::VaultReports).in_daily);
+        assert!(automation_job_spec(AutomationJob::SynthesisRun).requires_network);
+        assert!(!automation_job_spec(AutomationJob::SynthesisRun).in_daily);
         assert!(automation_notion_refresh_existing());
     }
 
@@ -5126,9 +5222,24 @@ mod tests {
                 job: AutomationJob::LlmSmoke,
             },
         }));
+        assert!(cmd_needs_writer_lease(&Cmd::Automation {
+            cmd: AutomationCmd::Run {
+                job: AutomationJob::FixerApply,
+            },
+        }));
         assert!(!cmd_needs_writer_lease(&Cmd::Automation {
             cmd: AutomationCmd::Run {
                 job: AutomationJob::VaultReports,
+            },
+        }));
+        assert!(!cmd_needs_writer_lease(&Cmd::Automation {
+            cmd: AutomationCmd::Run {
+                job: AutomationJob::SynthesisDiscover,
+            },
+        }));
+        assert!(cmd_needs_writer_lease(&Cmd::Automation {
+            cmd: AutomationCmd::Run {
+                job: AutomationJob::SynthesisRun,
             },
         }));
         assert!(cmd_needs_writer_lease(&Cmd::NotionSync {
@@ -5254,11 +5365,14 @@ mod tests {
         assert!(called.is_empty());
         let stdout = String::from_utf8(out).unwrap();
         assert!(stdout.contains("automation run-daily plan:"));
-        assert!(stdout.contains("1. batch-ingest"));
-        assert!(stdout.contains("2. lint"));
-        assert!(stdout.contains("3. maintenance"));
-        assert!(stdout.contains("4. consume-to-mempalace"));
-        assert!(stdout.contains("6. vault-reports"));
+        assert!(stdout.contains("1. notion-sync"));
+        assert!(stdout.contains("2. batch-ingest"));
+        assert!(stdout.contains("3. governance-scan"));
+        assert!(stdout.contains("4. fixer-plan"));
+        assert!(stdout.contains("5. fixer-apply"));
+        assert!(stdout.contains("6. maintenance"));
+        assert!(stdout.contains("7. consume-to-mempalace"));
+        assert!(stdout.contains("8. vault-reports"));
         assert!(stdout.contains("dry-run: no jobs executed"));
     }
 
@@ -5292,7 +5406,7 @@ mod tests {
 
         let err = run_automation_plan(&jobs, false, &mut out, |job| {
             seen.push(job);
-            if job == AutomationJob::Lint {
+            if job == AutomationJob::GovernanceScan {
                 Err("boom".into())
             } else {
                 Ok(())
@@ -5300,13 +5414,23 @@ mod tests {
         })
         .unwrap_err();
 
-        assert_eq!(seen, vec![AutomationJob::BatchIngest, AutomationJob::Lint]);
+        assert_eq!(
+            seen,
+            vec![
+                AutomationJob::NotionSync,
+                AutomationJob::BatchIngest,
+                AutomationJob::GovernanceScan,
+            ]
+        );
         assert!(err.to_string().contains("boom"));
         let stdout = String::from_utf8(out).unwrap();
+        assert!(stdout.contains("automation: running notion-sync"));
+        assert!(stdout.contains("automation: finished notion-sync"));
         assert!(stdout.contains("automation: running batch-ingest"));
         assert!(stdout.contains("automation: finished batch-ingest"));
-        assert!(stdout.contains("automation: running lint"));
-        assert!(!stdout.contains("automation: finished lint"));
+        assert!(stdout.contains("automation: running governance-scan"));
+        assert!(!stdout.contains("automation: finished governance-scan"));
+        assert!(!stdout.contains("automation: running fixer-plan"));
         assert!(!stdout.contains("automation: running consume-to-mempalace"));
         assert!(!stdout.contains("automation: finished consume-to-mempalace"));
     }
@@ -6726,6 +6850,330 @@ fn run_consume_to_mempalace_job(
     Ok((dispatch, start_id, acked))
 }
 
+fn current_governance_scan(
+    eng: &LlmWikiEngine<NoopWikiHook>,
+    schema: &DomainSchema,
+    viewer: &Scope,
+    now: OffsetDateTime,
+) -> GovernanceScanReport {
+    run_governance_scan(
+        &eng.store,
+        schema,
+        GovernanceScanOptions {
+            viewer_scope: Some(viewer),
+            low_coverage_threshold: 2,
+            generated_at: now,
+            report_id: governance::governance_report_prefix(now),
+        },
+    )
+}
+
+fn run_automation_governance_scan_job(
+    eng: &LlmWikiEngine<NoopWikiHook>,
+    schema: &DomainSchema,
+    viewer: &Scope,
+    wiki_root: Option<&std::path::Path>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let now = OffsetDateTime::now_utc();
+    let report = current_governance_scan(eng, schema, viewer, now);
+    let dir = default_governance_report_dir(wiki_root);
+    let files = governance::write_scan_files(&report, &dir)?;
+    print!("{}", governance::render_scan_text(&report));
+    println!("json_report_file={}", files.json_path.display());
+    println!("markdown_report_file={}", files.markdown_path.display());
+    Ok(())
+}
+
+fn build_automation_fixer_plan(
+    cli: &Cli,
+    scan_report: &GovernanceScanReport,
+    now: OffsetDateTime,
+    allow_web_search: bool,
+) -> EvidenceFixerPlan {
+    let (web_available, web_cross_verified_keys) = if allow_web_search {
+        automation_cross_verify_duplicates(cli, scan_report, 5)
+    } else {
+        (false, BTreeSet::new())
+    };
+    build_evidence_fixer_plan(
+        scan_report,
+        EvidenceFixerPlanOptions {
+            generated_at: now,
+            plan_id: governance::fixer_plan_prefix(now),
+            web_available,
+            web_cross_verified_keys,
+            semantic_patch_proposals: Vec::new(),
+        },
+    )
+}
+
+fn automation_cross_verify_duplicates(
+    cli: &Cli,
+    scan_report: &GovernanceScanReport,
+    max_web_checks: usize,
+) -> (bool, BTreeSet<String>) {
+    if max_web_checks == 0 {
+        return (false, BTreeSet::new());
+    }
+    if scan_report
+        .viewer_scope
+        .as_deref()
+        .is_some_and(|scope| scope.trim_start().starts_with("private:"))
+    {
+        eprintln!(
+            "fixer-plan web verification skipped: private viewer_scope requires explicit CLI approval"
+        );
+        return (false, BTreeSet::new());
+    }
+
+    let app = match llm::load_app_config(&cli.llm_config) {
+        Ok(app) => app,
+        Err(err) => {
+            eprintln!("fixer-plan web verification skipped: {}", err);
+            return (false, BTreeSet::new());
+        }
+    };
+
+    let mut web_available = false;
+    let mut verified = BTreeSet::new();
+    for group in scan_report
+        .duplicates
+        .iter()
+        .filter(|group| group.confidence != "exact")
+        .take(max_web_checks)
+    {
+        let query = automation_duplicate_verification_query(group);
+        match web_search::run_search(&app, &[], &query) {
+            Ok(run) => {
+                if run.providers_succeeded.len() >= 2 {
+                    web_available = true;
+                }
+                if run.cross_verified {
+                    verified.insert(duplicate_web_verification_key(group));
+                } else {
+                    eprintln!(
+                        "fixer-plan web verification not met: key={} providers={} domains={}",
+                        duplicate_web_verification_key(group),
+                        run.providers_succeeded.len(),
+                        run.distinct_domains
+                    );
+                }
+            }
+            Err(err) => {
+                eprintln!(
+                    "fixer-plan web verification skipped for key={}: {}",
+                    duplicate_web_verification_key(group),
+                    err
+                );
+            }
+        }
+    }
+    (web_available, verified)
+}
+
+fn automation_duplicate_verification_query(group: &GovernanceDuplicateGroup) -> String {
+    let labels = group
+        .members
+        .iter()
+        .filter_map(|member| member.label.as_deref())
+        .map(str::trim)
+        .filter(|label| !label.is_empty())
+        .collect::<Vec<_>>();
+    if labels.is_empty() {
+        format!("{} {}", group.kind, group.key)
+    } else {
+        format!(
+            "verify whether these refer to the same object: {}",
+            labels.join(" | ")
+        )
+    }
+}
+
+fn run_automation_fixer_plan_job(
+    cli: &Cli,
+    eng: &LlmWikiEngine<NoopWikiHook>,
+    schema: &DomainSchema,
+    viewer: &Scope,
+    wiki_root: Option<&std::path::Path>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let now = OffsetDateTime::now_utc();
+    let scan_report = current_governance_scan(eng, schema, viewer, now);
+    let plan = build_automation_fixer_plan(cli, &scan_report, now, true);
+    let dir = default_fixer_report_dir(wiki_root);
+    let files = governance::write_fixer_plan_files(&plan, &dir)?;
+    print!("{}", governance::render_fixer_plan_text(&plan));
+    println!("json_report_file={}", files.json_path.display());
+    println!("markdown_report_file={}", files.markdown_path.display());
+    Ok(())
+}
+
+fn latest_fixer_plan_path(dir: &Path) -> Result<Option<PathBuf>, Box<dyn std::error::Error>> {
+    if !dir.exists() {
+        return Ok(None);
+    }
+    let mut paths = Vec::new();
+    for entry in std::fs::read_dir(dir)? {
+        let entry = entry?;
+        if !entry.file_type()?.is_file() {
+            continue;
+        }
+        let path = entry.path();
+        let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+            continue;
+        };
+        if name.ends_with("-evidence-fixer-plan.json") {
+            paths.push(path);
+        }
+    }
+    paths.sort_by(|a, b| {
+        let a_name = a.file_name().and_then(|name| name.to_str()).unwrap_or("");
+        let b_name = b.file_name().and_then(|name| name.to_str()).unwrap_or("");
+        a_name.cmp(b_name)
+    });
+    Ok(paths.pop())
+}
+
+fn run_automation_fixer_apply_job(
+    cli: &Cli,
+    eng: &mut LlmWikiEngine<NoopWikiHook>,
+    repo: &SqliteRepository,
+    schema: &DomainSchema,
+    viewer: &Scope,
+    sync_wiki: bool,
+    wiki_root: Option<&std::path::Path>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let dir = default_fixer_report_dir(wiki_root);
+    let plan = match latest_fixer_plan_path(&dir)? {
+        Some(path) => {
+            println!("plan_file={}", path.display());
+            serde_json::from_str::<EvidenceFixerPlan>(&std::fs::read_to_string(path)?)?
+        }
+        None => {
+            let now = OffsetDateTime::now_utc();
+            let scan_report = current_governance_scan(eng, schema, viewer, now);
+            let plan = build_automation_fixer_plan(cli, &scan_report, now, false);
+            let files = governance::write_fixer_plan_files(&plan, &dir)?;
+            println!("plan_file={}", files.json_path.display());
+            plan
+        }
+    };
+    let now = OffsetDateTime::now_utc();
+    let report = apply_evidence_fixer_plan(
+        eng,
+        viewer,
+        &plan,
+        EvidenceFixerApplyOptions {
+            generated_at: now,
+            report_id: governance::fixer_apply_report_prefix(now),
+            policy: wiki_core::EvidenceFixerApplyPolicy::EvidenceAuto,
+            apply: true,
+        },
+    );
+    if report.summary.applied > 0 {
+        eng.save_to_repo_and_flush_outbox_with_policy(repo, 128, 3)?;
+        maybe_sync_projection(sync_wiki, wiki_root, eng)?;
+    }
+    let files = governance::write_fixer_apply_files(&report, &dir)?;
+    print!("{}", governance::render_fixer_apply_text(&report));
+    println!("json_report_file={}", files.json_path.display());
+    println!("markdown_report_file={}", files.markdown_path.display());
+    for path in files.tombstone_paths {
+        println!("tombstone_file={}", path.display());
+    }
+    Ok(())
+}
+
+fn run_automation_synthesis_discover_job(
+    eng: &LlmWikiEngine<NoopWikiHook>,
+    schema: &DomainSchema,
+    viewer: &Scope,
+    wiki_root: Option<&std::path::Path>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let now = OffsetDateTime::now_utc();
+    let scan_report = current_governance_scan(eng, schema, viewer, now);
+    let report = discover_synthesis_candidates(
+        &scan_report,
+        SynthesisDiscoveryOptions {
+            generated_at: now,
+            report_id: governance::synthesis_discovery_report_prefix(now),
+            max_single_double: 1,
+            max_triple: 1,
+            max_quad: 1,
+        },
+    );
+    let dir = default_synthesis_report_dir(wiki_root);
+    let files = governance::write_synthesis_discovery_files(&report, &dir)?;
+    print!("{}", governance::render_synthesis_discovery_text(&report));
+    println!("json_report_file={}", files.json_path.display());
+    println!("markdown_report_file={}", files.markdown_path.display());
+    Ok(())
+}
+
+fn run_automation_synthesis_run_job(
+    cli: &Cli,
+    eng: &mut LlmWikiEngine<NoopWikiHook>,
+    repo: &SqliteRepository,
+    schema: &DomainSchema,
+    viewer: &Scope,
+    sync_wiki: bool,
+    wiki_root: Option<&std::path::Path>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let now = OffsetDateTime::now_utc();
+    let scan_report = current_governance_scan(eng, schema, viewer, now);
+    let discovery_report = discover_synthesis_candidates(
+        &scan_report,
+        SynthesisDiscoveryOptions {
+            generated_at: now,
+            report_id: governance::synthesis_discovery_report_prefix(now),
+            max_single_double: 1,
+            max_triple: 1,
+            max_quad: 1,
+        },
+    );
+    let dir = default_synthesis_report_dir(wiki_root);
+    let discovery_files = governance::write_synthesis_discovery_files(&discovery_report, &dir)?;
+    print!(
+        "{}",
+        governance::render_synthesis_discovery_text(&discovery_report)
+    );
+    println!(
+        "discovery_json_file={}",
+        discovery_files.json_path.display()
+    );
+    println!(
+        "discovery_markdown_file={}",
+        discovery_files.markdown_path.display()
+    );
+
+    let mut reports = Vec::new();
+    for candidate in &discovery_report.candidates {
+        let report = run_research_synthesis_compose(
+            eng,
+            repo,
+            viewer,
+            sync_wiki,
+            wiki_root,
+            &cli.llm_config,
+            &discovery_report,
+            &candidate.candidate_id,
+            ResearchSynthesisComposeInputs {
+                web_evidence: None,
+                draft_json: None,
+                verifier_json: None,
+                internal_only: false,
+                allow_private_web_search: false,
+                apply: true,
+            },
+        )?;
+        let files = research_synthesis::write_compose_files(&report, &dir)?;
+        println!("json_report_file={}", files.json_path.display());
+        println!("markdown_report_file={}", files.markdown_path.display());
+        reports.push(report);
+    }
+    println!("synthesis run: reports={}", reports.len());
+    Ok(())
+}
+
 fn dispatch_automation_job(
     job: AutomationJob,
     heartbeat: &AutomationHeartbeat<'_>,
@@ -6739,6 +7187,15 @@ fn dispatch_automation_job(
 ) -> Result<(), Box<dyn std::error::Error>> {
     heartbeat.tick();
     match job {
+        AutomationJob::NotionSync => run_notion_sync_job(
+            eng,
+            repo,
+            viewer,
+            if sync_wiki { wiki_root } else { None },
+            false,
+            0,
+            false,
+        ),
         AutomationJob::BatchIngest => {
             let vault = cli
                 .wiki_dir
@@ -6764,6 +7221,15 @@ fn dispatch_automation_job(
                 },
             )
         }
+        AutomationJob::GovernanceScan => {
+            run_automation_governance_scan_job(eng, schema, viewer, wiki_root)
+        }
+        AutomationJob::FixerPlan => {
+            run_automation_fixer_plan_job(cli, eng, schema, viewer, wiki_root)
+        }
+        AutomationJob::FixerApply => {
+            run_automation_fixer_apply_job(cli, eng, repo, schema, viewer, sync_wiki, wiki_root)
+        }
         AutomationJob::Lint => run_lint_job(eng, repo, viewer, sync_wiki, wiki_root),
         AutomationJob::Maintenance => run_maintenance_job(eng, repo, viewer, sync_wiki, wiki_root),
         AutomationJob::ConsumeToMempalace => run_consume_to_mempalace_job(
@@ -6781,17 +7247,14 @@ fn dispatch_automation_job(
             println!("{out}");
             Ok(())
         }
-        AutomationJob::NotionSync => run_notion_sync_job(
-            eng,
-            repo,
-            viewer,
-            if sync_wiki { wiki_root } else { None },
-            false,
-            0,
-            false,
-        ),
         AutomationJob::VaultReports => {
             run_scheduled_vault_reports_job(eng, repo, viewer, schema, wiki_root)
+        }
+        AutomationJob::SynthesisDiscover => {
+            run_automation_synthesis_discover_job(eng, schema, viewer, wiki_root)
+        }
+        AutomationJob::SynthesisRun => {
+            run_automation_synthesis_run_job(cli, eng, repo, schema, viewer, sync_wiki, wiki_root)
         }
     }
 }

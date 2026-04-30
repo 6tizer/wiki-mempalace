@@ -55,6 +55,8 @@
 | Agent MCP 写入 | `wiki_ingest` / `wiki_file_claim` / `wiki_ingest_llm` | ✅ 实时生效 | 通过 MCP server 实时写 wiki.db |
 | CLI 手动写入 | `ingest` / `file-claim` / `batch-ingest` | ✅ 实时生效 | 直接调 CLI |
 | Notion API 增量同步 | `wiki-cli notion-sync` / automation `notion-sync` | ✅ 已合入 | PR #36/#38/#42；archived source retirement 已由 PR #68/#69 收敛 |
+| Governance / Fixer | `governance scan` / `fixer-plan` / `fixer-apply` / `restore` | ✅ 已接入 | 只以 `wiki.db` 为真源；Fixer apply 写 DB/outbox/projection，不直接改 palace |
+| Synthesis | `research-synthesis discover` / `compose` / `run` | ✅ 已接入 | 内部 evidence + 双 provider web evidence + LLM draft/verifier；输出 `entry_type=synthesis` |
 
 ## 1. Crate 依赖拓扑
 
@@ -139,10 +141,46 @@ wiki 内部检索默认从 `wiki.db` snapshot 提供 BM25 / vector / graph 三�
 `MempalaceSearchPorts` 会从 `palace.db` 注入 `mp_drawer:*` / `mp_kg:*` 候选，
 再由 `CompositeSearchPorts` 去重并进入同一套 RRF 排序。
 
+## 6. Governance / Fixer / Synthesis
+
+```text
+governance scan
+  -> read wiki.db snapshot
+  -> reports/governance/*
+  -> fixer-plan
+  -> fixer-apply --policy evidence-auto --apply
+  -> save_to_repo_and_flush_outbox_with_policy()
+  -> optional write_projection()
+
+research-synthesis run --apply
+  -> governance scan
+  -> synthesis discovery
+  -> internal evidence pack
+  -> Exa/Tavily web evidence
+  -> synthesis_writer + synthesis_verifier profiles
+  -> WikiPage(entry_type=synthesis, status=in_review, confidence=high)
+```
+
+自动化日常链路：
+
+```text
+notion-sync
+-> batch-ingest
+-> governance-scan
+-> fixer-plan
+-> fixer-apply
+-> maintenance
+-> consume-to-mempalace
+-> vault-reports
+```
+
+`synthesis-discover` 和 `synthesis-run` 是 manual automation jobs，不进入 daily
+lane。原因是 synthesis 可能发起外部搜索和较长 LLM 写作，应该按研究节奏单独触发。
+
 `--graph-extras-file` 中的 `claim:` / `page:` / `entity:` / `source:` 会按
 `--viewer-scope` 过滤；外部 `mp_drawer:` / `mp_kg:` 注入默认拒绝，避免绕过 mempalace bank/scope。
 
-## 6. MCP Server 工具清单
+## 7. MCP Server 工具清单
 
 | 前缀 | 工具 | 实现路径 |
 | --- | --- | --- |
@@ -160,7 +198,7 @@ cargo run -p wiki-cli -- \
   mcp
 ```
 
-## 7. 当前架构债
+## 8. 当前架构债
 
 - workspace 统一使用 `edition = "2021"`；`rust-mempalace` 通过 `edition.workspace = true` 继承，不再独立声明 edition。
 - `wiki.db` 与 `palace.db` 仍是最终一致；准实时同步可在未来通过内核 hook 直连 bridge live sink。

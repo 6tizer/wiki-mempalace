@@ -78,6 +78,15 @@
 - Tests or reviews that caught issues: CLI compose tests caught the DB write path and private-web block; clippy caught needless generic borrows in section rendering.
 - Next plan note: PR7 should wire daily/manual jobs and MCP/docs around `governance scan`, Fixer, discovery, and synthesis run without changing DB-first write semantics.
 
+## 2026-04-30 / Governance Automation Docs
+
+- Scope: PR7 of Wiki Governance + Evidence Fixer + Multi-provider Synthesis v3; automation jobs, daily/manual lanes, MCP boundary, Notion workflow matrix, and docs closeout.
+- What worked: Reusing the existing automation registry kept job status, heartbeat, writer lease, and health reporting in one place.
+- Design decision: `lint` stays available as a manual job, but daily now uses `governance-scan` plus `maintenance` to avoid a duplicate standalone lint step.
+- Safety boundary: Governance/Fixer/Synthesis batch apply stays CLI-only; MCP remains live tool access and does not expose unattended `fixer-apply` or `synthesis-run`.
+- Tests or reviews that caught issues: focused automation tests caught the changed `lint daily=no` contract after daily lane reordering.
+- Next plan note: v3 is closed after PR7 merge; next work should come from a new PRD/spec unless production operation asks for a dry-run/apply cycle.
+
 ## 2026-04-30 / Audit Disposition PR 1 MCP Query Storage Ports
 
 - Scope: MCP `wiki_query` default path now follows storage-backed query behavior instead of in-memory-only search.
