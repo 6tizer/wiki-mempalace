@@ -2,7 +2,7 @@
 
 ## Status
 
-PR #99: <https://github.com/6tizer/wiki-mempalace/pull/99>
+Completed by PR #99: <https://github.com/6tizer/wiki-mempalace/pull/99>
 
 ## Goal
 

@@ -69,4 +69,4 @@
 - [audit-disposition-01-mcp-query-storage-ports/](audit-disposition-01-mcp-query-storage-ports/) — Audit Disposition PR 01: MCP `wiki_query` defaults to storage-backed wiki search ports。已合入 PR #95。
 - [audit-disposition-02-doc-consistency/](audit-disposition-02-doc-consistency/) — Audit Disposition PR 02: active docs edition / Notion sync consistency cleanup。已合入 PR #96。
 - [audit-disposition-03-mcp-api-reference/](audit-disposition-03-mcp-api-reference/) — Audit Disposition PR 03: MCP API reference refresh plus docs sync tests。已合入 PR #97。
-- [next-three-closeout-2026-04-30/](next-three-closeout-2026-04-30/) — Stale branch/docs cleanup, read-only row-state production validation, and scheduled hardening observation。PR #99。
+- [next-three-closeout-2026-04-30/](next-three-closeout-2026-04-30/) — Stale branch/docs cleanup, read-only row-state production validation, and scheduled hardening observation。已合入 PR #99。
