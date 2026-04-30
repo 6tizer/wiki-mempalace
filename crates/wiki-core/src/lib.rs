@@ -37,8 +37,11 @@ pub use crystallize::{draft_from_session, CrystallizationDraft, SessionCrystalli
 pub use events::WikiEvent;
 pub use evidence_fixer::{
     parse_semantic_patch_proposals_json, EvidenceFixAction, EvidenceFixActionKind,
-    EvidenceFixActionStatus, EvidenceFixEvidence, EvidenceFixPayload, EvidenceFixerPlan,
-    EvidenceFixerPlanSummary, SemanticPatchProposal, SemanticPatchProposalSet,
+    EvidenceFixActionStatus, EvidenceFixEvidence, EvidenceFixPayload,
+    EvidenceFixerApplyActionReport, EvidenceFixerApplyActionStatus, EvidenceFixerApplyPolicy,
+    EvidenceFixerApplyReport, EvidenceFixerApplySummary, EvidenceFixerPlan,
+    EvidenceFixerPlanSummary, EvidenceFixerRestoreReport, EvidenceFixerRunMode,
+    EvidenceFixerSnapshot, EvidenceFixerTombstone, SemanticPatchProposal, SemanticPatchProposalSet,
 };
 pub use fix::{FixAction, FixActionType, FixPatch};
 pub use gap::{GapFinding, GapSeverity};

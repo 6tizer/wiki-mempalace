@@ -245,6 +245,45 @@ impl<H: WikiHook> LlmWikiEngine<H> {
         page_id
     }
 
+    pub fn delete_page(&mut self, page_id: PageId, actor: &str) -> Option<wiki_core::WikiPage> {
+        let removed = self.store.pages.remove(&page_id)?;
+        self.audit(
+            AuditOperation::WritePage,
+            actor,
+            format!("deleted page {}", page_id.0),
+        );
+        self.emit(WikiEvent::PageDeleted {
+            page_id,
+            at: OffsetDateTime::now_utc(),
+        });
+        Some(removed)
+    }
+
+    pub fn restore_claim_snapshot(&mut self, claim: Claim, actor: &str) -> ClaimId {
+        let claim_id = claim.id;
+        self.store.claims.insert(claim_id, claim);
+        self.audit(
+            AuditOperation::WriteClaim,
+            actor,
+            format!("restored claim {}", claim_id.0),
+        );
+        self.emit(WikiEvent::ClaimUpserted {
+            claim_id,
+            at: OffsetDateTime::now_utc(),
+        });
+        claim_id
+    }
+
+    pub fn delete_claim(&mut self, claim_id: ClaimId, actor: &str) -> Option<Claim> {
+        let removed = self.store.claims.remove(&claim_id)?;
+        self.audit(
+            AuditOperation::WriteClaim,
+            actor,
+            format!("deleted claim {}", claim_id.0),
+        );
+        Some(removed)
+    }
+
     pub fn supersede(
         &mut self,
         old_id: ClaimId,
