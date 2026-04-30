@@ -502,3 +502,12 @@
 - Spec changes needed: M12 executor 后续若增加 supersede/crystallize，必须先扩展 typed action 和 allowlist，不能直接复用 shell command。
 - Tests or reviews that caught issues: suggest 集成测试覆盖 preflight 不写、`--apply` 无 allowlist 失败、allowlisted auto fix 成功 apply。
 - Next plan note: 这项合并后 roadmap 23 项全部完成；剩余工作转入生产手动验收或新 roadmap。
+
+## 2026-04-30 / Next Three Closeout
+
+- Scope: 清掉 stale `vault-report-paths` 状态，增加只读 row-state 生产验证命令，观察 hardening schedule 首跑。
+- What worked: `verify-row-state` 走 no-engine dispatch + read-only SQLite handle，能验证真实生产 DB 而不触发 writer lease、snapshot save、outbox 或 Vault projection。
+- What caused rework: 生产 `wiki.db` 仍是 legacy blob-only 状态；验证命令必须把缺失 `wiki_state_row` 表转成可读失败，而不是 raw SQLite error。
+- Spec changes needed: row-state blob fallback 退役必须拆成下一轮受控 migration/backfill，不能把“代码支持 row-level”误当成“生产已可退 blob”。
+- Tests or reviews that caught issues: focused CLI tests 覆盖 matching rows、JSON、missing rows、legacy blob-only DB；生产只读验证返回 `rows=0 blob_present=true matches_blob=n/a`。
+- Next plan note: Hardening scheduled run `25150878853` 已 green；除非未来 schedule 失败，否则不需要修复 PR。

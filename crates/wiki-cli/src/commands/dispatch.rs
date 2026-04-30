@@ -1,7 +1,7 @@
 use crate::{
     acquire_cli_writer_lease, automation_run_daily_jobs, llm, orphan_governance,
-    print_automation_jobs, run_automation_plan, vault_audit, vault_backfill, AutomationCmd, Cli,
-    Cmd, OrphanGovernanceCmd,
+    print_automation_jobs, run_automation_plan, run_verify_row_state, vault_audit, vault_backfill,
+    AutomationCmd, Cli, Cmd, OrphanGovernanceCmd,
 };
 
 pub(crate) fn maybe_run_without_engine(cli: &Cli) -> Result<bool, Box<dyn std::error::Error>> {
@@ -25,6 +25,11 @@ pub(crate) fn maybe_run_without_engine(cli: &Cli) -> Result<bool, Box<dyn std::e
         let jobs = automation_run_daily_jobs();
         let mut stdout = std::io::stdout().lock();
         run_automation_plan(&jobs, true, &mut stdout, |_| Ok(()))?;
+        return Ok(true);
+    }
+
+    if let Cmd::VerifyRowState { json } = &cli.cmd {
+        run_verify_row_state(&cli.db, *json)?;
         return Ok(true);
     }
 

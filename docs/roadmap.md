@@ -7,10 +7,18 @@
 
 | 轨道 | 状态 | 当前事实 |
 | --- | --- | --- |
-| Active implementation | 待规划 | Audit Report Follow-up v2 已由 PR #83-#93 全部合入；2026-04-30 处置决策新增 3 个待修复 PR 已由 PR #95/#96/#97 全部合入 |
+| Active implementation | 收口中 | Audit Report Follow-up v2 已由 PR #83-#93 全部合入；2026-04-30 处置决策新增 3 个待修复 PR 已由 PR #95/#96/#97 全部合入；下一步 1-3 正在 `codex/next-three-closeout` 收口 |
 | Production data ops | 稳定 | 最近生产 backfill、consistency、compiler scale-up 都已闭环；新生产写入仍必须 dry-run first |
-| Audit / hardening | 处置决策完成 | PR #58 + PR #60-#67 + PR #83-#93 已覆盖上一轮；M-5/L-4/I-8 已由 PR #95/#96/#97 完成 |
+| Audit / hardening | 处置决策完成 | PR #58 + PR #60-#67 + PR #83-#93 已覆盖上一轮；M-5/L-4/I-8 已由 PR #95/#96/#97 完成；Hardening schedule run `25150878853` 已观察为 green |
 | Docs state | 本页为总入口 | spec 状态见 [specs/README.md](specs/README.md)，经验见 [LESSONS.md](LESSONS.md)，历史计划见 [archive/](archive/README.md) |
+
+## 下一步 1-3 收口（2026-04-30）
+
+| 项 | 状态 | 证据 | 后续 |
+| --- | --- | --- | --- |
+| `vault-report-paths` 清理 | 完成 | PR #22 已 merge；远端分支 `codex/vault-report-paths` 已删除；spec index 改为 Merged PR #22 | 无 |
+| Row-level state production validation | 验证完成，不能退 blob | 新增只读 `verify-row-state`；生产 `/Users/mac-mini/Documents/wiki/.wiki/wiki.db` 返回 `rows=0 blob_present=true matches_blob=n/a` | 保留 blob fallback；未来若要退役，先做受控生产 row-state migration/backfill |
+| Hardening scheduled lane observation | 完成 | GitHub Actions run [`25150878853`](https://github.com/6tizer/wiki-mempalace/actions/runs/25150878853)：`schedule` / `success`，`perf`、`cjk-retrieval`、`db-corruption`、`mcp-boundary`、`bank-scope` 全绿 | 无修复 PR |
 
 ## 已完成 PR 计划（2026-04-30 处置决策）
 
@@ -42,8 +50,7 @@ PRD -> 白话架构 -> spec 三件套 -> branch -> Plan/review/PR。
 
 | 候选 | 为什么在池子里 | 启动条件 |
 | --- | --- | --- |
-| Row-level state production validation / blob fallback retirement | PR #76/#77 已完成 row-level state cutover，但 blob 兼容层仍保留到生产验证后再移除 | 先写验证 PRD/spec；只用 dry-run/backup 证明可退兼容层 |
-| Hardening scheduled lane observation | PR #93 新增 scheduled/manual hardening lane；需要观察真实 GitHub schedule 首跑 | schedule 或 manual `all` lane 有结果后，再按失败证据开修复 PR |
+| Row-level state production migration/backfill | 只读验证已完成，但生产 DB 还没有 `wiki_state_row`，所以 blob fallback 不能退 | 用户决定要推进 blob fallback 退役时，先做 backup/dry-run，再受控写入 row-level state |
 | New product/module batch | 当前 M1-M12、J13/J14、compiler、Notion、audit hardening 都已完成本轮闭环 | 用户选定新目标后，新建 PRD 和模块 spec |
 
 ## 已完成能力总账
