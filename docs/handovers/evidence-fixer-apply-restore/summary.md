@@ -1,6 +1,6 @@
 # Handoff: Evidence Fixer Apply + Restore
 
-Implementation complete on branch `codex/evidence-fixer-apply-restore`.
+Implementation complete and merged as PR #104.
 
 PR4 of Wiki Governance + Evidence Fixer + Multi-provider Synthesis v3.
 

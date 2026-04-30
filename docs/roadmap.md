@@ -7,7 +7,7 @@
 
 | 轨道 | 状态 | 当前事实 |
 | --- | --- | --- |
-| Active implementation | 进行中 | Wiki Governance + Evidence Fixer + Multi-provider Synthesis v3 已启动；PR #101/#102/#103 已合入；当前 PR4 为 `codex/evidence-fixer-apply-restore` |
+| Active implementation | 进行中 | Wiki Governance + Evidence Fixer + Multi-provider Synthesis v3 已启动；PR #101/#102/#103/#104 已合入；当前 PR5 为 `codex/synthesis-discovery` |
 | Production data ops | 稳定 | 最近生产 backfill、consistency、compiler scale-up 都已闭环；新生产写入仍必须 dry-run first |
 | Audit / hardening | 处置决策完成 | PR #58 + PR #60-#67 + PR #83-#93 已覆盖上一轮；M-5/L-4/I-8 已由 PR #95/#96/#97 完成；Hardening schedule run `25150878853` 已观察为 green |
 | Docs state | 本页为总入口 | spec 状态见 [specs/README.md](specs/README.md)，经验见 [LESSONS.md](LESSONS.md)，历史计划见 [archive/](archive/README.md) |
@@ -63,8 +63,8 @@ PRD：[wiki-governance-evidence-synthesis-v3.md](prd/wiki-governance-evidence-sy
 | 1 | AI provider profiles + dual web search runtime | Merged PR #101 | `[llm]` 兼容 profile resolver；Exa/Tavily 双 provider search；smoke commands | `codex/ai-provider-profiles` |
 | 2 | Governance scan | Merged PR #102 | 状态、引用、lint、重复、标签、删除候选、synthesis 内部信号 | `codex/wiki-governance-scan` |
 | 3 | Evidence Fixer plan | Merged PR #103 | 规则 + LLM + 双搜索证据生成 typed fix plan | `codex/evidence-fixer-plan` |
-| 4 | Evidence Fixer apply + restore | Local complete | 证据阈值自动 apply；合并/删除/语义 patch 可恢复 | `codex/evidence-fixer-apply-restore` |
-| 5 | Synthesis discovery | Planned | 单/双/三/四标签候选发现、排序、去重 | `codex/synthesis-discovery` |
+| 4 | Evidence Fixer apply + restore | Merged PR #104 | 证据阈值自动 apply；合并/删除/语义 patch 可恢复 | `codex/evidence-fixer-apply-restore` |
+| 5 | Synthesis discovery | Local complete, pending PR | 单/双/三/四标签候选发现、排序、去重 | `codex/synthesis-discovery` |
 | 6 | Web-backed Synthesis composer | Planned | 内部 evidence pack + 双搜索 evidence + LLM 写作/校验 | `codex/web-backed-synthesis-composer` |
 | 7 | Automation + docs | Planned | daily/manual lanes、MCP、Notion 对照矩阵、文档收口 | `codex/governance-automation-docs` |
 

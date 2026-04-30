@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use time::OffsetDateTime;
 use wiki_core::{
     EvidenceFixActionStatus, EvidenceFixerApplyReport, EvidenceFixerPlan,
-    EvidenceFixerRestoreReport, GovernanceScanReport,
+    EvidenceFixerRestoreReport, GovernanceScanReport, SynthesisDiscoveryReport,
 };
 
 pub struct GovernanceScanFiles {
@@ -59,6 +59,19 @@ pub fn fixer_apply_report_prefix(generated_at: OffsetDateTime) -> String {
 pub fn fixer_restore_report_prefix(generated_at: OffsetDateTime) -> String {
     format!(
         "{:04}-{:02}-{:02}T{:02}{:02}{:02}.{:09}Z-evidence-fixer-restore",
+        generated_at.year(),
+        generated_at.month() as u8,
+        generated_at.day(),
+        generated_at.hour(),
+        generated_at.minute(),
+        generated_at.second(),
+        generated_at.nanosecond()
+    )
+}
+
+pub fn synthesis_discovery_report_prefix(generated_at: OffsetDateTime) -> String {
+    format!(
+        "{:04}-{:02}-{:02}T{:02}{:02}{:02}.{:09}Z-synthesis-discovery",
         generated_at.year(),
         generated_at.month() as u8,
         generated_at.day(),
@@ -131,6 +144,23 @@ pub fn render_fixer_restore_text(report: &EvidenceFixerRestoreReport) -> String 
         report.status,
         report.restored_subject_type,
         report.restored_subject_id,
+    )
+}
+
+pub fn render_synthesis_discovery_text(report: &SynthesisDiscoveryReport) -> String {
+    format!(
+        concat!(
+            "synthesis discovery: report_id={} scan={} viewer_scope={} total={} ",
+            "single={} double={} triple={} quad={}\n"
+        ),
+        report.report_id,
+        report.source_scan_report_id,
+        report.viewer_scope.as_deref().unwrap_or("none"),
+        report.summary.total,
+        report.summary.single_tag,
+        report.summary.double_tag,
+        report.summary.triple_tag,
+        report.summary.quad_tag,
     )
 }
 
@@ -208,6 +238,26 @@ pub fn write_fixer_restore_files(
     std::fs::write(
         &markdown_path,
         render_fixer_restore_markdown(report, &json_name),
+    )?;
+    Ok(GovernanceScanFiles {
+        json_path,
+        markdown_path,
+    })
+}
+
+pub fn write_synthesis_discovery_files(
+    report: &SynthesisDiscoveryReport,
+    report_dir: &Path,
+) -> Result<GovernanceScanFiles, Box<dyn std::error::Error>> {
+    std::fs::create_dir_all(report_dir)?;
+    let json_name = format!("{}.json", report.report_id);
+    let markdown_name = format!("{}.md", report.report_id);
+    let json_path = report_dir.join(&json_name);
+    let markdown_path = report_dir.join(&markdown_name);
+    std::fs::write(&json_path, serde_json::to_string_pretty(report)?)?;
+    std::fs::write(
+        &markdown_path,
+        render_synthesis_discovery_markdown(report, &json_name),
     )?;
     Ok(GovernanceScanFiles {
         json_path,
@@ -313,6 +363,21 @@ pub fn render_scan_markdown(report: &GovernanceScanReport, sibling_json: &str) -
                 } else {
                     tag.source_domains.join(",")
                 }
+            ));
+        }
+    }
+    out.push('\n');
+    if !report.synthesis_signals.existing_topics.is_empty() {
+        out.push_str("\nExisting synthesis topics:\n");
+        for topic in report.synthesis_signals.existing_topics.iter().take(50) {
+            out.push_str(&format!(
+                "- `{}` tags=`{}` status={}\n",
+                topic.title,
+                topic.tags.join(","),
+                topic
+                    .status
+                    .map(|status| format!("{status:?}"))
+                    .unwrap_or_else(|| "none".to_string())
             ));
         }
     }
@@ -464,6 +529,60 @@ pub fn render_fixer_restore_markdown(
     )
 }
 
+pub fn render_synthesis_discovery_markdown(
+    report: &SynthesisDiscoveryReport,
+    sibling_json: &str,
+) -> String {
+    let mut out = format!(
+        concat!(
+            "# Synthesis Discovery\n\n",
+            "- report_id: `{}`\n",
+            "- source_scan_report_id: `{}`\n",
+            "- viewer_scope: `{}`\n",
+            "- source_of_truth: `{}`\n\n",
+            "> Sibling JSON `{}` is the source of truth. This Markdown is rendered from the same discovery report.\n\n",
+            "## Summary\n\n",
+            "- total: `{}`\n",
+            "- single_tag: `{}`\n",
+            "- double_tag: `{}`\n",
+            "- triple_tag: `{}`\n",
+            "- quad_tag: `{}`\n\n",
+            "## Candidates\n\n",
+        ),
+        report.report_id,
+        report.source_scan_report_id,
+        report.viewer_scope.as_deref().unwrap_or("none"),
+        sibling_json,
+        sibling_json,
+        report.summary.total,
+        report.summary.single_tag,
+        report.summary.double_tag,
+        report.summary.triple_tag,
+        report.summary.quad_tag,
+    );
+    if report.candidates.is_empty() {
+        out.push_str("No candidates.\n");
+    } else {
+        for candidate in &report.candidates {
+            out.push_str(&format!(
+                "- `{}` {:?} tags=`{}` pages={} domains={} score={} reason={}\n",
+                candidate.candidate_id,
+                candidate.kind,
+                candidate.tags.join(","),
+                candidate.concept_entity_pages,
+                if candidate.source_domains.is_empty() {
+                    "none".to_string()
+                } else {
+                    candidate.source_domains.join(",")
+                },
+                candidate.score,
+                candidate.rationale
+            ));
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -504,5 +623,19 @@ mod tests {
         let text = render_fixer_plan_text(&plan);
         assert!(text.contains("plan_id=plan-1"));
         assert!(text.contains("ready=0"));
+    }
+
+    #[test]
+    fn render_synthesis_discovery_text_contains_key_counts() {
+        let mut report = SynthesisDiscoveryReport::new(
+            "disc-1",
+            OffsetDateTime::from_unix_timestamp(1_700_000_000).unwrap(),
+            Some("shared:wiki".into()),
+            "scan-1",
+        );
+        report.refresh_summary();
+        let text = render_synthesis_discovery_text(&report);
+        assert!(text.contains("report_id=disc-1"));
+        assert!(text.contains("scan=scan-1"));
     }
 }

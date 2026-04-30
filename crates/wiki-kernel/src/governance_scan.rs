@@ -6,8 +6,8 @@ use wiki_core::{
     EntryType, GovernanceDuplicateGroup, GovernanceDuplicateMember, GovernanceGapFinding,
     GovernanceLifecycleSignal, GovernanceLintFinding, GovernanceReferenceFinding,
     GovernanceRetireCandidate, GovernanceScanReport, GovernanceSynthesisSignals,
-    GovernanceTagIntersectionSignal, GovernanceTagSignal, MemoryTier, PromotionConditions,
-    RawArtifact, Scope, WikiPage,
+    GovernanceSynthesisTopicSignal, GovernanceTagIntersectionSignal, GovernanceTagSignal,
+    MemoryTier, PromotionConditions, RawArtifact, Scope, WikiPage,
 };
 
 use crate::{collect_basic_lint_findings, run_gap_scan, InMemoryStore};
@@ -555,8 +555,33 @@ fn collect_synthesis_signals(
         .collect();
     let mut tag_pages: BTreeMap<String, Vec<&WikiPage>> = BTreeMap::new();
     let mut deprecated_used = BTreeSet::new();
+    let mut existing_topics = Vec::new();
 
     for page in sorted_visible_pages(store, viewer_scope) {
+        if page.entry_type == Some(EntryType::Synthesis) {
+            let mut tags: Vec<_> = page
+                .tags
+                .iter()
+                .filter(|tag| !deprecated.contains(&tag.to_ascii_lowercase()))
+                .cloned()
+                .collect::<BTreeSet<_>>()
+                .into_iter()
+                .collect();
+            tags.sort();
+            let source_domains = page
+                .source_url
+                .as_deref()
+                .and_then(domain_from_url)
+                .into_iter()
+                .collect();
+            existing_topics.push(GovernanceSynthesisTopicSignal {
+                page_id: page.id.0.to_string(),
+                title: page.title.clone(),
+                tags,
+                status: Some(page.status),
+                source_domains,
+            });
+        }
         for tag in &page.tags {
             let key = tag.to_ascii_lowercase();
             if deprecated.contains(&key) {
@@ -637,11 +662,13 @@ fn collect_synthesis_signals(
             .cmp(&a.concept_entity_pages)
             .then_with(|| a.tags.cmp(&b.tags))
     });
+    existing_topics.sort_by(|a, b| a.tags.cmp(&b.tags).then_with(|| a.page_id.cmp(&b.page_id)));
 
     GovernanceSynthesisSignals {
         tags,
         intersections,
         deprecated_tags_used: deprecated_used.into_iter().collect(),
+        existing_topics,
     }
 }
 
@@ -913,6 +940,10 @@ mod tests {
             page.source_url = Some(format!("https://example{idx}.com/a"));
             store.pages.insert(page.id, page);
         }
+        let mut synthesis = WikiPage::new("AI Memory Synthesis", "body", viewer.clone())
+            .with_entry_type(EntryType::Synthesis);
+        synthesis.tags = vec!["AI".into(), "Memory".into(), "old".into()];
+        store.pages.insert(synthesis.id, synthesis);
 
         let report = run_governance_scan(
             &store,
@@ -936,5 +967,10 @@ mod tests {
             .iter()
             .any(|intersection| intersection.tags == vec!["AI", "Memory"]));
         assert_eq!(report.synthesis_signals.deprecated_tags_used, vec!["old"]);
+        assert_eq!(report.synthesis_signals.existing_topics.len(), 1);
+        assert_eq!(
+            report.synthesis_signals.existing_topics[0].tags,
+            vec!["AI".to_string(), "Memory".to_string()]
+        );
     }
 }

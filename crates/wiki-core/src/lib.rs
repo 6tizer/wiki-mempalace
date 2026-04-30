@@ -28,6 +28,7 @@ pub mod scope_policy;
 pub mod search;
 pub mod search_ports;
 pub mod strategy;
+pub mod synthesis_discovery;
 pub mod tags;
 
 pub use artifact::RawArtifact;
@@ -49,7 +50,8 @@ pub use governance::{
     GovernanceDuplicateGroup, GovernanceDuplicateMember, GovernanceGapFinding,
     GovernanceLifecycleSignal, GovernanceLintFinding, GovernanceReferenceFinding,
     GovernanceRetireCandidate, GovernanceScanReport, GovernanceScanSummary,
-    GovernanceSynthesisSignals, GovernanceTagIntersectionSignal, GovernanceTagSignal,
+    GovernanceSynthesisSignals, GovernanceSynthesisTopicSignal, GovernanceTagIntersectionSignal,
+    GovernanceTagSignal,
 };
 pub use graph::{walk_entities, GraphSnapshot, GraphWalkOptions};
 pub use lifecycle::{
@@ -85,6 +87,9 @@ pub use strategy::{
     build_strategy_execution_plan, StrategyExecutionAction, StrategyExecutionActionKind,
     StrategyExecutionDryRunStatus, StrategyExecutionPlan, StrategyExecutionPlanMode,
     StrategyExecutionPolicy, StrategyReport, StrategySeverity, StrategySuggestion,
+};
+pub use synthesis_discovery::{
+    SynthesisCandidate, SynthesisCandidateKind, SynthesisDiscoveryReport, SynthesisDiscoverySummary,
 };
 pub use tags::{
     normalize_and_validate_tag_groups, normalize_and_validate_tags, normalize_tags,

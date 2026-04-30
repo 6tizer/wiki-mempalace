@@ -22,7 +22,7 @@ depending on CLI stdout text.
 - `retire_candidates`: only obvious candidates, such as empty pages, managed
   orphan projection pages, and title-marked merge residue.
 - `synthesis_signals`: concept/entity tag counts, pair intersections, distinct
-  source domains, and deprecated tag usage.
+  source domains, existing synthesis topic coverage, and deprecated tag usage.
 
 ## Read-only Boundary
 
