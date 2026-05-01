@@ -45,7 +45,7 @@ wiki.db -> Vault projection -> Mempalace projection
 
 - Existing `[llm]` config remains compatible.
 - New LLM profiles can be selected by task.
-- Exa and Tavily web search providers can run the same query and produce a
+- Exa and xAI/Grok web search providers can run the same query and produce a
   shared evidence artifact.
 - Future Fixer/Synthesis PRs can reuse the same LLM/search infrastructure.
 - Final closeout includes

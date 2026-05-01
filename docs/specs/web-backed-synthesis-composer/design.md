@@ -10,7 +10,7 @@
   projection sync.
 - Existing PR1 LLM/web runtime is reused:
   - `synthesis_research` generates external search queries.
-  - Exa/Tavily policy performs cross-provider search.
+  - Exa/xAI policy performs cross-provider search.
   - `synthesis_writer` writes JSON draft.
   - `synthesis_verifier` approves or blocks the draft.
 

@@ -11,7 +11,9 @@ PR1 of Wiki Governance + Evidence Fixer + Multi-provider Synthesis v3.
 This PR owns:
 
 - LLM profile config and resolver.
-- Exa/Tavily web search runtime.
+- Original Exa/Tavily web search runtime. Follow-up
+  `codex/xai-web-search-provider` changes the checked-in default to Exa/xAI
+  while keeping Tavily legacy-compatible.
 - `ai-profile smoke` and `web-search smoke`.
 - Example config and spec docs.
 

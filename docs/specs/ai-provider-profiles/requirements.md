@@ -8,12 +8,12 @@
   reasoning effort, output limits, retries, and provider-specific request body.
 - Keep provider URL allowlist and env-key precedence from existing LLM
   governance.
-- Add web search provider config for Exa and Tavily.
+- Add web search provider config for Exa and xAI/Grok.
 - Allow one query to fan out to multiple configured providers and return a
   deduped evidence artifact.
 - Add smoke commands:
   - `wiki-cli ai-profile smoke --profile <name>`
-  - `wiki-cli web-search smoke --providers exa,tavily --query <query>`
+  - `wiki-cli web-search smoke --providers exa,xai --query <query>`
 
 ## Compatibility
 
@@ -28,7 +28,7 @@
 - A named profile can inherit base URL/key from `[llm]` and override model and
   reasoning settings.
 - A profile base URL outside `allowed_base_urls` is rejected.
-- Exa/Tavily config resolves API keys from env or inline local fallback.
+- Exa/xAI config resolves API keys from env or inline local fallback.
 - Single provider missing key returns a clear blocked/error response without
   leaking secrets.
 - Same URL from two providers is deduped while preserving provider provenance.

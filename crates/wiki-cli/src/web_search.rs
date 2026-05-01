@@ -40,6 +40,8 @@ struct ResolvedProvider {
     name: String,
     kind: String,
     api_key: String,
+    model: Option<String>,
+    tools: Vec<String>,
     max_results: usize,
     timeout_secs: u64,
 }
@@ -139,6 +141,13 @@ fn resolve_provider(
         name: name.to_string(),
         kind: provider.kind.trim().to_ascii_lowercase(),
         api_key,
+        model: provider
+            .model
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToString::to_string),
+        tools: provider.tools.clone().unwrap_or_default(),
         max_results: provider.max_results.unwrap_or(8).clamp(1, 20),
         timeout_secs: provider.timeout_secs.unwrap_or(20).clamp(1, 120),
     })
@@ -151,6 +160,7 @@ fn search_provider(
     match provider.kind.as_str() {
         "exa" => search_exa(provider, query),
         "tavily" => search_tavily(provider, query),
+        "xai" => search_xai(provider, query),
         other => Err(format!("unsupported web search provider kind: {other}").into()),
     }
 }
@@ -252,6 +262,192 @@ fn search_tavily(
             ))
         })
         .collect())
+}
+
+fn search_xai(
+    provider: &ResolvedProvider,
+    query: &str,
+) -> Result<Vec<WebSearchEvidence>, Box<dyn std::error::Error>> {
+    let client = reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(provider.timeout_secs))
+        .build()?;
+    let tools = xai_tool_payloads(provider)?;
+    let prompt = format!(
+        "Search for current, source-backed evidence for this query. \
+         Return a concise neutral summary and rely on source citations. Query: {query}"
+    );
+    let body = serde_json::json!({
+        "model": provider.model.as_deref().unwrap_or("grok-4.3"),
+        "input": [
+            {
+                "role": "user",
+                "content": prompt
+            }
+        ],
+        "tools": tools
+    });
+    let resp = client
+        .post("https://api.x.ai/v1/responses")
+        .bearer_auth(&provider.api_key)
+        .json(&body)
+        .send()?;
+    let status = resp.status();
+    let text = resp.text()?;
+    if !status.is_success() {
+        return Err(format!("xai http {}: {}", status.as_u16(), sanitize_error(&text)).into());
+    }
+    let value: serde_json::Value = serde_json::from_str(&text)?;
+    extract_xai_evidence(provider, query, &value)
+}
+
+fn xai_tool_payloads(
+    provider: &ResolvedProvider,
+) -> Result<Vec<serde_json::Value>, Box<dyn std::error::Error>> {
+    let configured = if provider.tools.is_empty() {
+        vec!["web_search".to_string(), "x_search".to_string()]
+    } else {
+        provider.tools.clone()
+    };
+    let mut seen = BTreeSet::new();
+    let mut out = Vec::new();
+    for tool in configured {
+        let tool = tool.trim();
+        if tool.is_empty() {
+            continue;
+        }
+        match tool {
+            "web_search" | "x_search" => {
+                if seen.insert(tool.to_string()) {
+                    out.push(serde_json::json!({ "type": tool }));
+                }
+            }
+            other => {
+                return Err(format!(
+                    "unsupported xai search tool: {other}; only web_search and x_search are allowed"
+                )
+                .into())
+            }
+        }
+    }
+    if out.is_empty() {
+        return Err("xai search provider requires at least one search tool".into());
+    }
+    Ok(out)
+}
+
+fn extract_xai_evidence(
+    provider: &ResolvedProvider,
+    query: &str,
+    value: &serde_json::Value,
+) -> Result<Vec<WebSearchEvidence>, Box<dyn std::error::Error>> {
+    let output_text = collect_xai_output_text(value);
+    let snippet = truncate_chars(output_text.trim(), 4_000);
+    let summary = if snippet.is_empty() {
+        None
+    } else {
+        Some(snippet.clone())
+    };
+    let citations = collect_xai_citations(value);
+    if citations.is_empty() {
+        return Err("xai response missing citations".into());
+    }
+    Ok(citations
+        .into_iter()
+        .take(provider.max_results)
+        .map(|(url, title)| {
+            let title = clean_xai_title(title.as_deref(), &url);
+            evidence_item(
+                query,
+                &provider.name,
+                &title,
+                &url,
+                &snippet,
+                summary.clone(),
+            )
+        })
+        .collect())
+}
+
+fn collect_xai_output_text(value: &serde_json::Value) -> String {
+    if let Some(text) = value["output_text"].as_str() {
+        return text.to_string();
+    }
+    let mut parts = Vec::new();
+    if let Some(output) = value["output"].as_array() {
+        for item in output {
+            if let Some(content) = item["content"].as_array() {
+                for block in content {
+                    if let Some(text) = block["text"].as_str() {
+                        parts.push(text.to_string());
+                    }
+                }
+            }
+        }
+    }
+    parts.join("\n")
+}
+
+fn collect_xai_citations(value: &serde_json::Value) -> Vec<(String, Option<String>)> {
+    let mut out = Vec::new();
+    let mut seen = BTreeSet::new();
+    if let Some(output) = value["output"].as_array() {
+        for item in output {
+            if let Some(content) = item["content"].as_array() {
+                for block in content {
+                    if let Some(annotations) = block["annotations"].as_array() {
+                        for annotation in annotations {
+                            push_xai_citation(annotation, &mut out, &mut seen);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    if let Some(citations) = value["citations"].as_array() {
+        for citation in citations {
+            push_xai_citation(citation, &mut out, &mut seen);
+        }
+    }
+    out
+}
+
+fn push_xai_citation(
+    value: &serde_json::Value,
+    out: &mut Vec<(String, Option<String>)>,
+    seen: &mut BTreeSet<String>,
+) {
+    let url = value
+        .as_str()
+        .or_else(|| value["url"].as_str())
+        .or_else(|| value["web_citation"]["url"].as_str())
+        .or_else(|| value["x_citation"]["url"].as_str());
+    let Some(url) = url.map(str::trim).filter(|url| !url.is_empty()) else {
+        return;
+    };
+    if seen.insert(url.to_string()) {
+        let title = value["title"]
+            .as_str()
+            .or_else(|| value["name"].as_str())
+            .map(str::trim)
+            .filter(|title| !title.is_empty())
+            .map(ToString::to_string);
+        out.push((url.to_string(), title));
+    }
+}
+
+fn clean_xai_title(title: Option<&str>, url: &str) -> String {
+    let Some(title) = title.map(str::trim).filter(|title| !title.is_empty()) else {
+        return url.to_string();
+    };
+    if title.chars().all(|ch| ch.is_ascii_digit()) {
+        url.to_string()
+    } else {
+        title.to_string()
+    }
+}
+
+fn truncate_chars(text: &str, limit: usize) -> String {
+    text.chars().take(limit).collect()
 }
 
 fn evidence_item(
@@ -364,16 +560,16 @@ mod tests {
             WebSearchProviderConfig {
                 kind: "exa".to_string(),
                 api_key: Some("exa-key".to_string()),
-                api_key_env: None,
                 max_results: Some(8),
                 timeout_secs: Some(20),
+                ..Default::default()
             },
         );
         let mut policies = BTreeMap::new();
         policies.insert(
             "cross_verify".to_string(),
             WebSearchPolicyConfig {
-                providers: vec!["exa".to_string(), "tavily".to_string()],
+                providers: vec!["exa".to_string(), "xai".to_string()],
                 min_providers: Some(2),
                 min_distinct_domains: Some(2),
             },
@@ -423,10 +619,7 @@ mod tests {
     fn resolve_provider_errors_without_key() {
         let provider = WebSearchProviderConfig {
             kind: "exa".into(),
-            api_key: None,
-            api_key_env: None,
-            max_results: None,
-            timeout_secs: None,
+            ..Default::default()
         };
 
         let err = resolve_provider("exa", Some(&provider))
@@ -447,7 +640,7 @@ mod tests {
             &[],
         );
 
-        assert_eq!(providers, vec!["exa", "tavily"]);
+        assert_eq!(providers, vec!["exa", "xai"]);
     }
 
     #[test]
@@ -455,7 +648,7 @@ mod tests {
         let a = evidence_item("q", "exa", "Title", "https://example.test/a", "a", None);
         let b = evidence_item(
             "q",
-            "tavily",
+            "xai",
             "Title",
             "https://example.test/a",
             "b",
@@ -466,7 +659,88 @@ mod tests {
 
         assert_eq!(out.len(), 1);
         assert!(out[0].provider.contains("exa"));
-        assert!(out[0].provider.contains("tavily"));
+        assert!(out[0].provider.contains("xai"));
         assert_eq!(out[0].summary.as_deref(), Some("summary"));
+    }
+
+    #[test]
+    fn xai_tool_payloads_default_to_web_and_x_search() {
+        let provider = ResolvedProvider {
+            name: "xai".into(),
+            kind: "xai".into(),
+            api_key: "key".into(),
+            model: Some("grok-4.3".into()),
+            tools: Vec::new(),
+            max_results: 8,
+            timeout_secs: 20,
+        };
+
+        let tools = xai_tool_payloads(&provider).unwrap();
+
+        assert_eq!(tools.len(), 2);
+        assert_eq!(tools[0]["type"], "web_search");
+        assert_eq!(tools[1]["type"], "x_search");
+    }
+
+    #[test]
+    fn xai_tool_payloads_reject_code_interpreter() {
+        let provider = ResolvedProvider {
+            name: "xai".into(),
+            kind: "xai".into(),
+            api_key: "key".into(),
+            model: Some("grok-4.3".into()),
+            tools: vec!["web_search".into(), "code_interpreter".into()],
+            max_results: 8,
+            timeout_secs: 20,
+        };
+
+        let err = xai_tool_payloads(&provider).unwrap_err().to_string();
+
+        assert!(err.contains("unsupported xai search tool"));
+    }
+
+    #[test]
+    fn xai_response_extracts_citations_as_evidence() {
+        let provider = ResolvedProvider {
+            name: "xai".into(),
+            kind: "xai".into(),
+            api_key: "key".into(),
+            model: Some("grok-4.3".into()),
+            tools: Vec::new(),
+            max_results: 8,
+            timeout_secs: 20,
+        };
+        let value = serde_json::json!({
+            "output_text": "xAI summary with source-backed evidence.",
+            "citations": [
+                "https://alpha.example/report"
+            ],
+            "output": [{
+                "type": "message",
+                "content": [{
+                    "type": "output_text",
+                    "text": "xAI summary with source-backed evidence.",
+                    "annotations": [{
+                        "type": "url_citation",
+                        "url": "https://beta.example/article",
+                        "title": "Beta article",
+                        "start_index": 0,
+                        "end_index": 5
+                    }]
+                }]
+            }]
+        });
+
+        let out = extract_xai_evidence(&provider, "query", &value).unwrap();
+
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[0].provider, "xai");
+        assert_eq!(out[0].domain, "beta.example");
+        assert_eq!(out[0].title, "Beta article");
+        assert_eq!(out[1].domain, "alpha.example");
+        assert_eq!(
+            out[0].summary.as_deref(),
+            Some("xAI summary with source-backed evidence.")
+        );
     }
 }
