@@ -14,8 +14,8 @@
 
 ## Active Specs
 
-- [ai-provider-profiles/](ai-provider-profiles/) — PR1 for Wiki Governance + Evidence Fixer + Multi-provider Synthesis v3: LLM profile resolver plus Exa/xAI web search runtime. Merged PR #101; xAI follow-up active in [xai-web-search-provider/](xai-web-search-provider/).
-- [xai-web-search-provider/](xai-web-search-provider/) — Follow-up: default dual web search moves from Exa/Tavily to Exa/xAI, with Tavily retained for old configs.
+- [ai-provider-profiles/](ai-provider-profiles/) — PR1 for Wiki Governance + Evidence Fixer + Multi-provider Synthesis v3: LLM profile resolver plus Exa/xAI web search runtime. Merged PR #101; xAI follow-up merged PR #108.
+- [xai-web-search-provider/](xai-web-search-provider/) — Follow-up: default dual web search moved from Exa/Tavily to Exa/xAI, with Tavily retained for old configs. Merged PR #108.
 - [wiki-governance-scan/](wiki-governance-scan/) — PR2 for Wiki Governance + Evidence Fixer + Multi-provider Synthesis v3: read-only lifecycle/reference/lint/duplicate/retire/synthesis-signal scan. Merged PR #102.
 - [evidence-fixer-plan/](evidence-fixer-plan/) — PR3 for Wiki Governance + Evidence Fixer + Multi-provider Synthesis v3: typed dry-run fixer plan from governance scan evidence. Merged PR #103.
 - [evidence-fixer-apply-restore/](evidence-fixer-apply-restore/) — PR4 for Wiki Governance + Evidence Fixer + Multi-provider Synthesis v3: evidence-auto apply, tombstones, and restore. Merged PR #104.
