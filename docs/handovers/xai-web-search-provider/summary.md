@@ -2,7 +2,7 @@
 
 ## Status
 
-Implementation complete on branch `codex/xai-web-search-provider`.
+Merged PR #108 from branch `codex/xai-web-search-provider`.
 
 ## Scope
 

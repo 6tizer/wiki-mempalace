@@ -37,7 +37,7 @@
 
 ## 2026-05-01 / xAI Web Search Provider
 
-- Scope: Follow-up to PR1; default cross-verification config moves from Exa/Tavily to Exa/xAI while keeping old Tavily configs usable.
+- Scope: PR #108 follow-up to PR1; default cross-verification config moves from Exa/Tavily to Exa/xAI while keeping old Tavily configs usable.
 - What worked: xAI citations map cleanly into the existing evidence artifact, so Fixer/Synthesis did not need a new evidence contract.
 - Pitfall avoided: Do not enable `code_interpreter` through web search provider config; this adapter is only for cited web/X evidence.
 - Spec changes needed: Docs should distinguish current default providers from legacy-compatible adapters.
