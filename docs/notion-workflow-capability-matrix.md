@@ -14,7 +14,7 @@ Wiki Governance + Evidence Fixer + Multi-provider Synthesis v3 batch.
 | Mempalace memory | `consume-to-mempalace`, MCP `mempalace_*` read/extract tools | Covered. Palace is an outbox-fed projection, not a source of truth. |
 | Daily maintenance | `automation run-daily` | Covered. Runs sync, compile, governance scan, fixer plan/apply, maintenance, consume, reports. |
 | Research maintenance | `automation run synthesis-discover`, `automation run synthesis-run` | Covered as manual automation jobs; not part of daily lane. |
-| External verification | LLM profiles plus Exa/Tavily web search policies | Covered for Fixer/Synthesis paths that need outside evidence. |
+| External verification | LLM profiles plus Exa/xAI web search policies | Covered for Fixer/Synthesis paths that need outside evidence. |
 
 ## Practical Meaning
 

@@ -106,6 +106,10 @@ pub struct WebSearchProviderConfig {
     #[serde(default)]
     pub api_key_env: Option<String>,
     #[serde(default)]
+    pub model: Option<String>,
+    #[serde(default)]
+    pub tools: Option<Vec<String>>,
+    #[serde(default)]
     pub max_results: Option<usize>,
     #[serde(default)]
     pub timeout_secs: Option<u64>,

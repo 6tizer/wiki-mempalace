@@ -29,8 +29,8 @@ fn discovery_json() -> Value {
 fn web_json() -> Value {
     json!([{
         "query": "AI memory validation",
-        "providers_requested": ["exa", "tavily"],
-        "providers_succeeded": ["exa", "tavily"],
+        "providers_requested": ["exa", "xai"],
+        "providers_succeeded": ["exa", "xai"],
         "providers_failed": [],
         "distinct_domains": 2,
         "cross_verified": true,
@@ -48,7 +48,7 @@ fn web_json() -> Value {
             },
             {
                 "query": "AI memory validation",
-                "provider": "tavily",
+                "provider": "xai",
                 "title": "Evidence B",
                 "url": "https://b.example/evidence",
                 "domain": "b.example",

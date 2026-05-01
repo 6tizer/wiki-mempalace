@@ -21,10 +21,15 @@ OpenAI-compatible chat body after default fields are set.
 
 ## Web Search Runtime
 
-`[web_search.providers.<name>]` defines a provider. The first adapters are:
+`[web_search.providers.<name>]` defines a provider. The default cross-verify
+adapters are:
 
 - Exa: `POST https://api.exa.ai/search`, `x-api-key` header.
-- Tavily: `POST https://api.tavily.com/search`, bearer auth.
+- xAI/Grok: `POST https://api.x.ai/v1/responses`, bearer auth, Responses API
+  `web_search` / `x_search` tools, evidence derived from citation URLs.
+
+The Tavily adapter remains supported for old local configs, but the checked-in
+example config uses Exa + xAI.
 
 The runtime returns `WebSearchEvidence`:
 

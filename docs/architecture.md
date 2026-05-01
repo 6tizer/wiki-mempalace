@@ -156,7 +156,7 @@ research-synthesis run --apply
   -> governance scan
   -> synthesis discovery
   -> internal evidence pack
-  -> Exa/Tavily web evidence
+  -> Exa/xAI web evidence
   -> synthesis_writer + synthesis_verifier profiles
   -> WikiPage(entry_type=synthesis, status=in_review, confidence=high)
 ```

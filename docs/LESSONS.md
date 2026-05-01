@@ -28,12 +28,21 @@
 
 ## 2026-04-30 / AI Provider Profiles
 
-- Scope: PR1 of Wiki Governance + Evidence Fixer + Multi-provider Synthesis v3; task-level LLM profiles and Exa/Tavily web search evidence runtime.
+- Scope: PR1 of Wiki Governance + Evidence Fixer + Multi-provider Synthesis v3; task-level LLM profiles and Exa/Tavily web search evidence runtime. A later xAI follow-up changes the checked-in default pair while keeping Tavily legacy-compatible.
 - What worked: Keeping `[llm]` as default preserved existing ingest/query/MCP paths while future Fixer/Synthesis can opt into named profiles.
 - What caused rework: Parallel `cargo test` commands only created Cargo lock contention; use `cargo test -p wiki-cli --bin wiki-cli <filter>` for focused unit checks.
 - Spec changes needed: Future Fixer/Synthesis specs should reference profile names instead of embedding provider/model choices in feature logic.
 - Tests or reviews that caught issues: Focused LLM/web_search tests caught config behavior; workspace test/clippy/deny stayed green.
 - Next plan note: Continue with `codex/wiki-governance-scan` after PR1 merge.
+
+## 2026-05-01 / xAI Web Search Provider
+
+- Scope: Follow-up to PR1; default cross-verification config moves from Exa/Tavily to Exa/xAI while keeping old Tavily configs usable.
+- What worked: xAI citations map cleanly into the existing evidence artifact, so Fixer/Synthesis did not need a new evidence contract.
+- Pitfall avoided: Do not enable `code_interpreter` through web search provider config; this adapter is only for cited web/X evidence.
+- Spec changes needed: Docs should distinguish current default providers from legacy-compatible adapters.
+- Tests or reviews that caught issues: Focused `web_search::tests` pin citation parsing and xAI tool allowlisting; workspace test/clippy/deny stayed green.
+- Next plan note: Real smoke requires `EXA_API_KEY` and `XAI_API_KEY`; no repo secrets are committed.
 
 ## 2026-04-30 / Wiki Governance Scan
 
