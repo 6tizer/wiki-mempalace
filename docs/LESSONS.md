@@ -589,4 +589,4 @@
 - What caused rework: `filename_collisions_resolved` 第一版把普通同名 slug 也算进去，实际需要记录的是 macOS 大小写不敏感碰撞；修正后真实值为 `3`。
 - Spec changes needed: 全量重导入流程要明确“验证用 staging”和“替换用 clean final”分开，query/lint smoke 会产生运行痕迹，不能直接拿 smoke 后 DB 当生产初始包。
 - Tests or reviews that caught issues: `cargo test -p wiki-migration-notion`、`cargo test -p wiki-cli --test vault_backfill`、`cargo clippy --workspace --all-targets -- -D warnings`、staging/production consistency audit。
-- Next plan note: 下一步只剩 PR/CI/merge；生产旧目录和备份均保留，可按整目录恢复。
+- Next plan note: PR #110 已合入；生产旧目录和备份均保留，可按整目录恢复。
