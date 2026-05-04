@@ -19,6 +19,12 @@
 > lease 负责避免多个进程各自持有旧内存 snapshot 后互相覆盖。多 agent 共享时仍优先
 > 共用同一个 MCP server，或串行执行写命令。
 
+> **当前生产数据（2026-05-05）**：`/Users/mac-mini/Documents/wiki/.wiki/wiki.db`
+> 已由三库 Notion 全量导出重建，当前包含 `4765` 个 Wiki page 和 `1526`
+> 个 source（X `943`，微信 `583`）。`/Users/mac-mini/Documents/wiki` 是
+> Obsidian Vault 投影，`/Users/mac-mini/Documents/wiki/.wiki/palace.db` 是
+> Mempalace 投影，二者已随本次重建同步刷新。
+
 ---
 
 ## 仓库结构
@@ -34,10 +40,10 @@ wiki-mempalace/
 │   └── backup.sh              # Dogfood 备份脚本（D4）
 ├── docs/
 │   ├── README.md              # 文档入口：当前事实 / 活跃计划 / 历史归档
-│   ├── roadmap.md             # 当前路线图（M12 / LongMemEval 为主要剩余项）
+│   ├── roadmap.md             # 当前路线图与生产状态
 │   ├── dev-workflow.md        # PRD/spec/branch/subagent/review/PR/CI 固定开发流程
 │   ├── LESSONS.md             # 每轮合并后的项目级经验
-│   ├── automation-issue-batch-3.md # 当前 batch-3 任务规划
+│   ├── automation-issue-batch-3.md # 历史 batch-3 任务规划（当前入口以 roadmap/specs 为准）
 │   ├── prd/                   # 当前批次 PRD
 │   ├── specs/                 # 每个功能模块的 spec 三件套
 │   ├── handovers/             # subagent 模块交接文档
@@ -72,9 +78,25 @@ cargo build --workspace --release
 ### 最小冒烟
 
 > **参数位置约定**：`--db` / `--wiki-dir` / `--sync-wiki` / `--viewer-scope` /
-> `--vectors` / `--llm-config` / `--schema` / `--graph-extras-file` 都是**顶层 global**
+> `--vectors` / `--llm-config` / `--schema` / `--graph-extras-file` / `--palace` 都是**顶层 global**
 > 参数，必须放在子命令**之前**。所有写入类子命令在完成后会自动持久化并 flush outbox，
 > 无需手动调用 `save_snapshot` / `flush_outbox`。
+
+### 生产 vault-local 启动
+
+```bash
+cargo run -p wiki-cli -- \
+  --db /Users/mac-mini/Documents/wiki/.wiki/wiki.db \
+  --wiki-dir /Users/mac-mini/Documents/wiki --sync-wiki \
+  --viewer-scope shared:wiki \
+  --palace /Users/mac-mini/Documents/wiki/.wiki/palace.db \
+  mcp
+```
+
+上面这条会启动当前生产知识库的统一 MCP Server。`wiki.db` 是写入真源；
+Obsidian Vault 和 `palace.db` 都是投影层。
+
+### 本地最小冒烟示例
 
 ```bash
 # 1) ingest 一条原文（脱敏 + 落 SQLite + 投影 Markdown）
@@ -116,7 +138,11 @@ cargo run -p wiki-cli -- --db wiki.db \
 cargo run -p wiki-cli -- schema-validate DomainSchema.json
 
 # 9) 启动统一 MCP Server（stdio JSON-RPC）
-cargo run -p wiki-cli -- --db wiki.db mcp --palace ~/.mempalace-rs
+cargo run -p wiki-cli -- \
+  --db wiki.db \
+  --wiki-dir wiki --sync-wiki \
+  --viewer-scope private:cli \
+  mcp
 
 # 10) 查看统一 metrics（默认只读；可写 JSON 或 Markdown 报告）
 cargo run -p wiki-cli -- --db wiki.db metrics --json --report wiki/reports/metrics.md
@@ -137,7 +163,7 @@ mempalace consumer → viewer-scope 隔离 → llm-smoke（可选）。
 ### 测试
 
 ```bash
-# 全量（workspace 100+ 个测试）
+# 全量 workspace 测试
 cargo test --workspace
 
 # rust-mempalace crate 级 e2e（8 个 e2e_core 用例，子进程级）

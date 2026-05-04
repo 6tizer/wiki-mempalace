@@ -22,15 +22,15 @@
 
 ## 活跃计划
 
-- [roadmap.md](roadmap.md) — 当前路线图；M10 metrics、M11 dashboard、M12 strategy、Schema T2 tags、J13 LongMemEval 已合入。
-- [automation-issue-batch-3.md](automation-issue-batch-3.md) — M10 metrics、M11 dashboard、M12 strategy、Schema T2 tags、LongMemEval auto benchmark 的批次计划。
+- [roadmap.md](roadmap.md) — 当前路线图与生产状态；Notion 三库重建、Governance/Fixer/Synthesis、xAI web search 均已合入。
+- [automation-issue-batch-3.md](automation-issue-batch-3.md) — 历史 batch-3 任务规划；当前执行入口以 roadmap、PRD 和 spec 索引为准。
 - [dev-workflow.md](dev-workflow.md) — PRD → spec 三件套 → branch → subagent → review → PR → CI → merge 的固定开发流程。
 - [LESSONS.md](LESSONS.md) — 每轮合并后的项目级经验，下一轮 Plan mode 前必读。
 - [prd/](prd/README.md) — PRD 索引；当前下一轮以 [roadmap.md](roadmap.md) 排序为准。
 - [specs/](specs/README.md) — spec 索引；已合入模块和活跃 follow-up 的 spec 三件套。
 - [handovers/](handovers/) — subagent 模块交接文档。
-- [schema-followup-plan.md](schema-followup-plan.md) — T0/T1 已完成；T2/T3 标签治理与延后项仍可继续。
-- [longmemeval.md](longmemeval.md) — LongMemEval / CI 策略。
+- [schema-followup-plan.md](schema-followup-plan.md) — 标签治理历史计划与延后参考。
+- [longmemeval.md](longmemeval.md) — LongMemEval / CI 策略历史参考。
 
 ## 模板
 
