@@ -2,9 +2,9 @@
 
 ## Status
 
-Branch: `codex/notion-full-reimport-20260505`.
+Merged PR #110 from branch `codex/notion-full-reimport-20260505`.
 
-Code fixes, staging rebuild, and production replacement are complete.
+Code fixes, staging rebuild, production replacement, CI, and merge are complete.
 
 ## Scope
 
@@ -68,6 +68,6 @@ Target import:
 - Production consistency audit:
   `db_pages=4765 db_sources=1526 vault_empty_unmanaged=0 palace_missing_page_drawers=0`.
 
-## Remaining
+## Final State
 
-- Commit, push, PR, and CI.
+- No remaining action for this batch.
