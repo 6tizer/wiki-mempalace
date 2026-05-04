@@ -581,3 +581,12 @@
 - Spec changes needed: row-state blob fallback 退役必须拆成下一轮受控 migration/backfill，不能把“代码支持 row-level”误当成“生产已可退 blob”。
 - Tests or reviews that caught issues: focused CLI tests 覆盖 matching rows、JSON、missing rows、legacy blob-only DB；生产只读验证返回 `rows=0 blob_present=true matches_blob=n/a`。
 - Next plan note: Hardening scheduled run `25150878853` 已 green；除非未来 schedule 失败，否则不需要修复 PR。
+
+## 2026-05-05 / Notion Full Reimport
+
+- Scope: 用三个最新 Notion ZIP 重建本地生产 Wiki：Wiki pages `4765`，X sources `943`，WeChat sources `583`。
+- What worked: 先修 scanner/writer/backfill，再 staging 验证，最后生成 clean final artifacts 替换生产，避免把 smoke 事件带进生产初始 DB。
+- What caused rework: `filename_collisions_resolved` 第一版把普通同名 slug 也算进去，实际需要记录的是 macOS 大小写不敏感碰撞；修正后真实值为 `3`。
+- Spec changes needed: 全量重导入流程要明确“验证用 staging”和“替换用 clean final”分开，query/lint smoke 会产生运行痕迹，不能直接拿 smoke 后 DB 当生产初始包。
+- Tests or reviews that caught issues: `cargo test -p wiki-migration-notion`、`cargo test -p wiki-cli --test vault_backfill`、`cargo clippy --workspace --all-targets -- -D warnings`、staging/production consistency audit。
+- Next plan note: 下一步只剩 PR/CI/merge；生产旧目录和备份均保留，可按整目录恢复。

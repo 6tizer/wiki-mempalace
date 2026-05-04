@@ -14,6 +14,7 @@
 
 ## Active Specs
 
+- [notion-full-reimport-20260505/](notion-full-reimport-20260505/) — Full rebuild import from the three latest Notion ZIP exports; scanner filtering, collision-safe writer, metadata-preserving vault backfill, staging/production replacement. Production replacement complete; PR/CI pending.
 - [ai-provider-profiles/](ai-provider-profiles/) — PR1 for Wiki Governance + Evidence Fixer + Multi-provider Synthesis v3: LLM profile resolver plus Exa/xAI web search runtime. Merged PR #101; xAI follow-up merged PR #108.
 - [xai-web-search-provider/](xai-web-search-provider/) — Follow-up: default dual web search moved from Exa/Tavily to Exa/xAI, with Tavily retained for old configs. Merged PR #108.
 - [wiki-governance-scan/](wiki-governance-scan/) — PR2 for Wiki Governance + Evidence Fixer + Multi-provider Synthesis v3: read-only lifecycle/reference/lint/duplicate/retire/synthesis-signal scan. Merged PR #102.

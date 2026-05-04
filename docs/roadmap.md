@@ -7,10 +7,22 @@
 
 | 轨道 | 状态 | 当前事实 |
 | --- | --- | --- |
-| Active implementation | 完成 | Wiki Governance + Evidence Fixer + Multi-provider Synthesis v3 已由 PR #101-#107 完成本轮闭环；xAI web search follow-up PR #108 已将默认双搜索从 Exa/Tavily 换成 Exa/xAI |
-| Production data ops | 稳定 | 最近生产 backfill、consistency、compiler scale-up 都已闭环；新生产写入仍必须 dry-run first |
+| Active implementation | 进行中 | Notion 三库删档重建导入代码与生产替换已完成，等待 PR/CI/merge 收口；Wiki Governance + Evidence Fixer + Multi-provider Synthesis v3 已由 PR #101-#107 完成本轮闭环；xAI web search follow-up PR #108 已将默认双搜索从 Exa/Tavily 换成 Exa/xAI |
+| Production data ops | 已替换 | `/Users/mac-mini/Documents/wiki` 已由 2026-05-05 三库导出重建：pages `4765`，sources `1526`，Notion index `943+583`，production consistency `palace_missing_page_drawers=0`；备份见本页当前执行记录 |
 | Audit / hardening | 处置决策完成 | PR #58 + PR #60-#67 + PR #83-#93 已覆盖上一轮；M-5/L-4/I-8 已由 PR #95/#96/#97 完成；Hardening schedule run `25150878853` 已观察为 green |
 | Docs state | 本页为总入口 | spec 状态见 [specs/README.md](specs/README.md)，经验见 [LESSONS.md](LESSONS.md)，历史计划见 [archive/](archive/README.md) |
+
+## 当前执行：Notion 三库删档重建导入（2026-05-05）
+
+来源：`/Users/mac-mini/wiki-migration/NotionDB导出` 的三个最新 Notion ZIP。
+目标不是增量合并，而是备份旧生产后，用最新导出重建 `wiki.db`、Vault 投影和 `palace.db`。
+Spec：[notion-full-reimport-20260505/](specs/notion-full-reimport-20260505/)。
+
+| 阶段 | 状态 | 验收 |
+| --- | --- | --- |
+| 导入链路修复 | 完成 | Wiki 只扫 `知识 Wiki/` 直接子页；X 只扫 `X书签文章数据库/` 直接子页；微信只扫 `文章数据库/` 直接有效子页；大小写文件名碰撞不覆盖；backfill 保留标签/置信度/source metadata |
+| Staging 重建 | 完成 | dry-run `4765/943/583`；migrate 总对象 `6291`；backfill `sources_seen=1526`、`pages_seen=4765`、`skipped=0`、`warnings=0`；`notion_page_index=1526`；staging consistency `palace_missing_page_drawers=0` |
+| Production 替换 | 完成 | 备份 `/Users/mac-mini/Documents/wiki-backups/notion-full-reimport-20260505-20260505-071121/wiki`；旧目录 `/Users/mac-mini/Documents/wiki-old-notion-full-reimport-20260505-20260505-071121`；生产 query、palace、consistency smoke 通过 |
 
 ## 下一步 1-3 收口（2026-04-30）
 

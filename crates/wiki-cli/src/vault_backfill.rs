@@ -10,7 +10,7 @@ use time::OffsetDateTime;
 use uuid::Uuid;
 use walkdir::WalkDir;
 use wiki_core::{
-    EntryStatus, EntryType, PageId, RawArtifact, Scope, SourceId, WikiEvent, WikiPage,
+    Confidence, EntryStatus, EntryType, PageId, RawArtifact, Scope, SourceId, WikiEvent, WikiPage,
 };
 use wiki_storage::{SqliteRepository, StorageError, WikiRepository};
 
@@ -103,6 +103,7 @@ pub struct BackfillReport {
     pub pages_updated: usize,
     pub page_written_events: usize,
     pub skipped: Vec<BackfillSkip>,
+    pub warnings: Vec<BackfillSkip>,
     pub records: Vec<BackfillRecord>,
 }
 
@@ -148,6 +149,14 @@ struct PlannedPage {
     title: String,
     entry_type: EntryType,
     status: EntryStatus,
+    confidence: Confidence,
+    tags: Vec<String>,
+    source_url: Option<String>,
+    source_tags: Vec<String>,
+    created_at: Option<OffsetDateTime>,
+    updated_at: Option<OffsetDateTime>,
+    last_compiled_at: Option<OffsetDateTime>,
+    warnings: Vec<BackfillSkip>,
 }
 
 #[derive(Debug, Clone)]
@@ -357,6 +366,11 @@ fn empty_report(options: &VaultBackfillOptions, plan: &VaultBackfillPlan) -> Bac
         pages_updated: 0,
         page_written_events: 0,
         skipped: plan.skipped.clone(),
+        warnings: plan
+            .pages
+            .iter()
+            .flat_map(|page| page.warnings.clone())
+            .collect(),
         records,
     }
 }
@@ -460,6 +474,19 @@ fn plan_page(vault_path: &Path, path: PathBuf) -> std::result::Result<PlannedPag
             reason,
         })?
         .unwrap_or(EntryStatus::Draft);
+    let confidence = parse_confidence(markdown.values.get("confidence"));
+    let tags = parse_tags(markdown.values.get("tags"));
+    let source_url = markdown
+        .values
+        .get("source_url")
+        .filter(|value| !value.trim().is_empty())
+        .cloned();
+    let source_tags = parse_tags(markdown.values.get("source_tags"));
+    let mut warnings = Vec::new();
+    let created_at = parse_frontmatter_time(&path, &markdown, "created_at", &mut warnings);
+    let updated_at = parse_frontmatter_time(&path, &markdown, "updated_at", &mut warnings);
+    let last_compiled_at =
+        parse_frontmatter_time(&path, &markdown, "last_compiled_at", &mut warnings);
     let id_was_missing = !has_non_empty(&markdown.values, "page_id");
     Ok(PlannedPage {
         path,
@@ -469,6 +496,14 @@ fn plan_page(vault_path: &Path, path: PathBuf) -> std::result::Result<PlannedPag
         title,
         entry_type,
         status,
+        confidence,
+        tags,
+        source_url,
+        source_tags,
+        created_at,
+        updated_at,
+        last_compiled_at,
+        warnings,
     })
 }
 
@@ -572,23 +607,25 @@ fn apply_plan_to_repo<R: WikiRepository>(
     }
 
     for page in &plan.pages {
+        let desired_created_at = page.created_at.or(Some(now));
+        let desired_updated_at = page.updated_at.unwrap_or(now);
         let mut desired = WikiPage {
             id: page.page_id,
             title: page.title.clone(),
             markdown: page.markdown.body.trim().to_string(),
             scope: scope.clone(),
-            updated_at: now,
+            updated_at: desired_updated_at,
             outbound_page_titles: Vec::new(),
             entry_type: Some(page.entry_type.clone()),
             status: page.status,
-            created_at: Some(now),
-            status_entered_at: Some(now),
-            confidence: wiki_core::Confidence::default(),
-            tags: Vec::new(),
-            source_url: None,
-            source_tags: Vec::new(),
+            created_at: desired_created_at,
+            status_entered_at: page.updated_at.or(Some(now)),
+            confidence: page.confidence.clone(),
+            tags: page.tags.clone(),
+            source_url: page.source_url.clone(),
+            source_tags: page.source_tags.clone(),
             compiled_by: None,
-            last_compiled_at: None,
+            last_compiled_at: page.last_compiled_at,
         };
         desired.refresh_outbound_links();
 
@@ -603,21 +640,40 @@ fn apply_plan_to_repo<R: WikiRepository>(
                     || existing.scope != desired.scope
                     || existing.outbound_page_titles != desired.outbound_page_titles
                     || existing.entry_type != desired.entry_type
-                    || existing.status != desired.status;
+                    || existing.status != desired.status
+                    || existing.confidence != desired.confidence
+                    || existing.tags != desired.tags
+                    || existing.source_url != desired.source_url
+                    || existing.source_tags != desired.source_tags
+                    || existing.last_compiled_at != desired.last_compiled_at
+                    || page
+                        .created_at
+                        .is_some_and(|created_at| existing.created_at != Some(created_at))
+                    || page
+                        .updated_at
+                        .is_some_and(|updated_at| existing.updated_at != updated_at);
                 if changed_record {
                     let status_changed = existing.status != desired.status;
                     existing.title = desired.title;
                     existing.markdown = desired.markdown;
                     existing.scope = desired.scope;
-                    existing.updated_at = now;
+                    existing.updated_at = page.updated_at.unwrap_or(now);
                     existing.outbound_page_titles = desired.outbound_page_titles;
                     existing.entry_type = desired.entry_type;
                     existing.status = desired.status;
+                    existing.confidence = desired.confidence;
+                    existing.tags = desired.tags;
+                    existing.source_url = desired.source_url;
+                    existing.source_tags = desired.source_tags;
+                    existing.last_compiled_at = desired.last_compiled_at;
+                    if page.created_at.is_some() {
+                        existing.created_at = page.created_at;
+                    }
                     if status_changed {
-                        existing.status_entered_at = Some(now);
+                        existing.status_entered_at = page.updated_at.or(Some(now));
                     }
                     if existing.created_at.is_none() {
-                        existing.created_at = Some(now);
+                        existing.created_at = desired_created_at;
                     }
                     report.pages_updated += 1;
                     changed = true;
@@ -631,18 +687,18 @@ fn apply_plan_to_repo<R: WikiRepository>(
                     title: page.title.clone(),
                     markdown: page.markdown.body.trim().to_string(),
                     scope: scope.clone(),
-                    updated_at: now,
+                    updated_at: desired_updated_at,
                     outbound_page_titles: Vec::new(),
                     entry_type: Some(page.entry_type.clone()),
                     status: page.status,
-                    created_at: Some(now),
-                    status_entered_at: Some(now),
-                    confidence: wiki_core::Confidence::default(),
-                    tags: Vec::new(),
-                    source_url: None,
-                    source_tags: Vec::new(),
+                    created_at: desired_created_at,
+                    status_entered_at: page.updated_at.or(Some(now)),
+                    confidence: page.confidence.clone(),
+                    tags: page.tags.clone(),
+                    source_url: page.source_url.clone(),
+                    source_tags: page.source_tags.clone(),
                     compiled_by: None,
-                    last_compiled_at: None,
+                    last_compiled_at: page.last_compiled_at,
                 });
                 if let Some(inserted) = snapshot.pages.iter_mut().find(|p| p.id == page.page_id) {
                     inserted.refresh_outbound_links();
@@ -769,7 +825,7 @@ fn write_report_files(report_dir: &Path, report: &BackfillReport) -> Result<()> 
 
 fn render_markdown_report(report: &BackfillReport) -> String {
     format!(
-        "# Vault Backfill Report\n\n- mode: {}\n- sources_seen: {}\n- pages_seen: {}\n- source_id_writes_planned: {}\n- page_id_writes_planned: {}\n- source_id_writes_applied: {}\n- page_id_writes_applied: {}\n- sources_imported: {}\n- pages_imported: {}\n- sources_updated: {}\n- pages_updated: {}\n- page_written_events: {}\n- skipped: {}\n",
+        "# Vault Backfill Report\n\n- mode: {}\n- sources_seen: {}\n- pages_seen: {}\n- source_id_writes_planned: {}\n- page_id_writes_planned: {}\n- source_id_writes_applied: {}\n- page_id_writes_applied: {}\n- sources_imported: {}\n- pages_imported: {}\n- sources_updated: {}\n- pages_updated: {}\n- page_written_events: {}\n- skipped: {}\n- warnings: {}\n",
         report.mode,
         report.sources_seen,
         report.pages_seen,
@@ -782,7 +838,8 @@ fn render_markdown_report(report: &BackfillReport) -> String {
         report.sources_updated,
         report.pages_updated,
         report.page_written_events,
-        report.skipped.len()
+        report.skipped.len(),
+        report.warnings.len()
     )
 }
 
@@ -790,6 +847,15 @@ fn has_non_empty(values: &HashMap<String, String>, key: &str) -> bool {
     values
         .get(key)
         .is_some_and(|value| !value.trim().is_empty())
+}
+
+fn parse_confidence(raw: Option<&String>) -> Confidence {
+    match raw.map(|value| value.trim().to_ascii_lowercase()) {
+        Some(value) if value == "high" => Confidence::High,
+        Some(value) if value == "low" => Confidence::Low,
+        Some(value) if value == "medium" => Confidence::Medium,
+        _ => Confidence::default(),
+    }
 }
 
 fn parse_tags(raw: Option<&String>) -> Vec<String> {
@@ -802,6 +868,91 @@ fn parse_tags(raw: Option<&String>) -> Vec<String> {
             .collect()
     })
     .unwrap_or_default()
+}
+
+fn parse_frontmatter_time(
+    path: &Path,
+    markdown: &MarkdownDoc,
+    key: &'static str,
+    warnings: &mut Vec<BackfillSkip>,
+) -> Option<OffsetDateTime> {
+    let raw = markdown
+        .values
+        .get(key)
+        .filter(|value| !value.trim().is_empty())?;
+    match parse_export_time(raw) {
+        Some(value) => Some(value),
+        None => {
+            warnings.push(BackfillSkip {
+                path: path.to_path_buf(),
+                reason: format!("invalid {key}: {raw}"),
+            });
+            None
+        }
+    }
+}
+
+fn parse_export_time(raw: &str) -> Option<OffsetDateTime> {
+    if let Ok(value) =
+        OffsetDateTime::parse(raw.trim(), &time::format_description::well_known::Rfc3339)
+    {
+        return Some(value);
+    }
+
+    let normalized = raw
+        .trim()
+        .replace("(GMT+8)", "")
+        .replace("(GMT+08:00)", "")
+        .trim()
+        .to_string();
+
+    parse_chinese_datetime(&normalized).or_else(|| parse_slash_datetime(&normalized))
+}
+
+fn parse_chinese_datetime(raw: &str) -> Option<OffsetDateTime> {
+    let (year, rest) = raw.split_once('年')?;
+    let (month, rest) = rest.split_once('月')?;
+    let (day, rest) = rest.split_once('日')?;
+    let (hour, minute) = parse_hour_minute(rest.trim()).unwrap_or((0, 0));
+    build_offset_datetime(year, month, day, hour, minute, 8)
+}
+
+fn parse_slash_datetime(raw: &str) -> Option<OffsetDateTime> {
+    let mut parts = raw.split_whitespace();
+    let date = parts.next()?;
+    let time = parts.next();
+    let mut date_parts = date.split('/');
+    let year = date_parts.next()?;
+    let month = date_parts.next()?;
+    let day = date_parts.next()?;
+    let (hour, minute) = time.and_then(parse_hour_minute).unwrap_or((0, 0));
+    build_offset_datetime(year, month, day, hour, minute, 8)
+}
+
+fn parse_hour_minute(raw: &str) -> Option<(u8, u8)> {
+    let mut parts = raw.split(':');
+    let hour = parts.next()?.trim().parse::<u8>().ok()?;
+    let minute = parts.next()?.trim().parse::<u8>().ok()?;
+    Some((hour, minute))
+}
+
+fn build_offset_datetime(
+    year: &str,
+    month: &str,
+    day: &str,
+    hour: u8,
+    minute: u8,
+    offset_hours: i8,
+) -> Option<OffsetDateTime> {
+    let date = time::Date::from_calendar_date(
+        year.trim().parse().ok()?,
+        time::Month::try_from(month.trim().parse::<u8>().ok()?).ok()?,
+        day.trim().parse().ok()?,
+    )
+    .ok()?;
+    let time = time::Time::from_hms(hour, minute, 0).ok()?;
+    let offset = time::UtcOffset::from_hms(offset_hours, 0, 0).ok()?;
+    Some(time::PrimitiveDateTime::new(date, time).assume_offset(offset))
 }
 
 fn unquote_yaml_scalar(value: &str) -> String {

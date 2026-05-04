@@ -16,5 +16,6 @@
 
 ## Current Handovers
 
+- [notion-full-reimport-20260505/summary.md](notion-full-reimport-20260505/summary.md) — Full Notion three-DB reimport branch handoff and staging/production replacement checklist.
 - [notion-source-vault-projection/summary.md](notion-source-vault-projection/summary.md) — PR #42 merge and production apply closeout; next workflow is Notion source compilation.
 - [production-wiki-compiler/summary.md](production-wiki-compiler/summary.md) — Notion-equivalent local Wiki Compiler implementation and production tiny-sample handoff.

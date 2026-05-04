@@ -51,6 +51,30 @@ fn page_body_with_id(page_id: &str) -> String {
     page_body().replacen("---\n", &format!("---\npage_id: \"{page_id}\"\n"), 1)
 }
 
+fn page_body_with_metadata(page_id: &str) -> String {
+    format!(
+        r#"---
+page_id: "{page_id}"
+title: "Concept A"
+notion_uuid: "22222222-2222-2222-2222-222222222222"
+entry_type: concept
+status: approved
+confidence: high
+tags: [知识管理, "Agent 协作模式"]
+source_url: "https://www.notion.so/source-page"
+source_tags: "LLM, Agent"
+created_at: "2026年4月24日 01:48"
+updated_at: "2026年5月2日 05:08"
+last_compiled_at: "2026/04/24 1:42 (GMT+8)"
+---
+
+# Concept A
+
+[[Related]]
+"#
+    )
+}
+
 fn run_backfill(
     vault: &Path,
     db_path: &Path,
@@ -272,6 +296,83 @@ fn rerun_repairs_existing_records_with_same_id() {
     assert_eq!(page.entry_type, Some(wiki_core::EntryType::Concept));
     assert_eq!(page.status, wiki_core::EntryStatus::Approved);
     assert!(page.markdown.contains("[[Related]]"));
+}
+
+#[test]
+fn page_backfill_preserves_frontmatter_metadata() {
+    let temp = tempfile::tempdir().unwrap();
+    let vault = temp.path().join("vault");
+    let db_path = temp.path().join("wiki.db");
+    let report_dir = temp.path().join("reports");
+    let page_id = uuid::Uuid::parse_str("77777777-7777-5777-8777-777777777777").unwrap();
+    write_file(
+        &vault.join("pages/concept/concept-a.md"),
+        &page_body_with_metadata(&page_id.to_string()),
+    );
+
+    let report = run_backfill(&vault, &db_path, &report_dir, BackfillMode::Apply).unwrap();
+
+    assert_eq!(report.warnings.len(), 0);
+    let repo = SqliteRepository::open(&db_path).unwrap();
+    let snapshot = repo.load_snapshot().unwrap();
+    let page = &snapshot.pages[0];
+    assert_eq!(page.confidence, wiki_core::Confidence::High);
+    assert_eq!(page.tags, vec!["知识管理", "Agent 协作模式"]);
+    assert_eq!(
+        page.source_url.as_deref(),
+        Some("https://www.notion.so/source-page")
+    );
+    assert_eq!(page.source_tags, vec!["LLM", "Agent"]);
+    assert!(page.created_at.is_some());
+    assert!(page.last_compiled_at.is_some());
+}
+
+#[test]
+fn page_backfill_updates_existing_metadata_from_frontmatter() {
+    let temp = tempfile::tempdir().unwrap();
+    let vault = temp.path().join("vault");
+    let db_path = temp.path().join("wiki.db");
+    let report_dir = temp.path().join("reports");
+    let page_id = uuid::Uuid::parse_str("88888888-8888-5888-8888-888888888888").unwrap();
+    write_file(
+        &vault.join("pages/concept/concept-a.md"),
+        &page_body_with_metadata(&page_id.to_string()),
+    );
+
+    let repo = SqliteRepository::open(&db_path).unwrap();
+    repo.save_snapshot(&StorageSnapshot {
+        pages: vec![wiki_core::WikiPage {
+            id: wiki_core::PageId(page_id),
+            title: "Concept A".to_string(),
+            markdown: "# Concept A\n\n[[Related]]".to_string(),
+            scope: wiki_core::Scope::Shared {
+                team_id: "wiki".to_string(),
+            },
+            updated_at: time::OffsetDateTime::now_utc(),
+            outbound_page_titles: Vec::new(),
+            entry_type: Some(wiki_core::EntryType::Concept),
+            status: wiki_core::EntryStatus::Approved,
+            created_at: Some(time::OffsetDateTime::now_utc()),
+            status_entered_at: Some(time::OffsetDateTime::now_utc()),
+            confidence: wiki_core::Confidence::Low,
+            tags: vec!["旧标签".into()],
+            source_url: None,
+            source_tags: Vec::new(),
+            compiled_by: None,
+            last_compiled_at: None,
+        }],
+        ..StorageSnapshot::default()
+    })
+    .unwrap();
+
+    let report = run_backfill(&vault, &db_path, &report_dir, BackfillMode::Apply).unwrap();
+
+    assert_eq!(report.pages_updated, 1);
+    let snapshot = repo.load_snapshot().unwrap();
+    let page = &snapshot.pages[0];
+    assert_eq!(page.confidence, wiki_core::Confidence::High);
+    assert_eq!(page.tags, vec!["知识管理", "Agent 协作模式"]);
+    assert_eq!(page.source_tags, vec!["LLM", "Agent"]);
 }
 
 #[test]

@@ -85,7 +85,7 @@ pub fn write_all(pages: &[RawPage], opts: &WriteOptions) -> Result<WriteStats> {
     }
 
     // --- 1. 预分配位置（决定每条记录落到哪个相对路径） ---
-    let locations = allocate_locations(pages);
+    let (locations, filename_collisions_resolved) = allocate_locations(pages);
 
     // --- 2. 预计算：被引用过的 source UUID 集合（用于 orphan 标记） ---
     let referenced_sources = compute_referenced_sources(pages, &locations);
@@ -110,7 +110,10 @@ pub fn write_all(pages: &[RawPage], opts: &WriteOptions) -> Result<WriteStats> {
         url_multi.iter().map(|(k, v)| (k.clone(), v[0])).collect();
 
     // --- 4. 逐条写文件 ---
-    let mut stats = WriteStats::default();
+    let mut stats = WriteStats {
+        filename_collisions_resolved,
+        ..Default::default()
+    };
     for v in url_multi.values() {
         if v.len() > 1 {
             stats.duplicate_urls += v.len() - 1;
@@ -165,7 +168,7 @@ pub fn write_all(pages: &[RawPage], opts: &WriteOptions) -> Result<WriteStats> {
 }
 
 /// 分配每页的落地位置。确保所有文件名在其 bucket 内 unique。
-fn allocate_locations(pages: &[RawPage]) -> HashMap<String, PageLocation> {
+fn allocate_locations(pages: &[RawPage]) -> (HashMap<String, PageLocation>, usize) {
     let mut by_bucket: BTreeMap<String, Vec<&RawPage>> = BTreeMap::new();
     for p in pages {
         let bucket = bucket_of(p);
@@ -173,13 +176,15 @@ fn allocate_locations(pages: &[RawPage]) -> HashMap<String, PageLocation> {
     }
 
     let mut out: HashMap<String, PageLocation> = HashMap::new();
+    let mut collisions = 0usize;
     for (bucket, group) in by_bucket {
         let kind = if bucket.starts_with("pages/") {
             PageLocationKind::WikiPage
         } else {
             PageLocationKind::Source
         };
-        let mut used: HashSet<String> = HashSet::new();
+        let mut exact_used: HashSet<String> = HashSet::new();
+        let mut filename_used: HashSet<String> = HashSet::new();
         for p in group {
             let mut base = slugify(&p.title);
             if base.is_empty() {
@@ -193,14 +198,23 @@ fn allocate_locations(pages: &[RawPage]) -> HashMap<String, PageLocation> {
                 format!("{}-{}.md", base, &p.notion_uuid),
             ];
             let mut chosen: Option<String> = None;
-            for c in &candidates {
-                if !used.contains(c) {
+            let mut had_case_insensitive_collision = false;
+            for (idx, c) in candidates.iter().enumerate() {
+                let key = filename_key(c);
+                if !filename_used.contains(&key) {
+                    if idx > 0 && had_case_insensitive_collision {
+                        collisions += 1;
+                    }
                     chosen = Some(c.clone());
                     break;
                 }
+                if !exact_used.contains(c) {
+                    had_case_insensitive_collision = true;
+                }
             }
             let name = chosen.unwrap_or_else(|| format!("{}.md", p.notion_uuid));
-            used.insert(name.clone());
+            exact_used.insert(name.clone());
+            filename_used.insert(filename_key(&name));
             let relative_path = format!("{}/{}", bucket, name);
             out.insert(
                 p.notion_uuid.clone(),
@@ -213,7 +227,11 @@ fn allocate_locations(pages: &[RawPage]) -> HashMap<String, PageLocation> {
             );
         }
     }
-    out
+    (out, collisions)
+}
+
+fn filename_key(name: &str) -> String {
+    name.to_lowercase()
 }
 
 fn bucket_of(p: &RawPage) -> String {
@@ -639,5 +657,44 @@ mod tests {
     fn host_of_提取() {
         assert_eq!(host_of("https://x.com/foo?bar"), Some("x.com".into()));
         assert_eq!(host_of("http://claude.md"), Some("claude.md".into()));
+    }
+
+    #[test]
+    fn allocate_locations_处理大小写不敏感碰撞() {
+        let page_a = RawPage {
+            library: LibraryKind::Wiki,
+            source_path: PathBuf::from("a.md"),
+            notion_uuid: "11111111111111111111111111111111".into(),
+            title: "Human-In-The-Loop".into(),
+            properties: vec![
+                ("类型".into(), "concept".into()),
+                ("状态".into(), "草稿".into()),
+            ],
+            body: String::new(),
+            links: Vec::new(),
+        };
+        let page_b = RawPage {
+            library: LibraryKind::Wiki,
+            source_path: PathBuf::from("b.md"),
+            notion_uuid: "22222222222222222222222222222222".into(),
+            title: "Human-in-the-Loop".into(),
+            properties: vec![
+                ("类型".into(), "concept".into()),
+                ("状态".into(), "草稿".into()),
+            ],
+            body: String::new(),
+            links: Vec::new(),
+        };
+
+        let (locations, collisions) = allocate_locations(&[page_a, page_b]);
+
+        assert_eq!(collisions, 1);
+        let a = locations.get("11111111111111111111111111111111").unwrap();
+        let b = locations.get("22222222222222222222222222222222").unwrap();
+        assert_ne!(
+            a.relative_path.to_lowercase(),
+            b.relative_path.to_lowercase()
+        );
+        assert!(b.relative_path.contains("22222222"));
     }
 }
