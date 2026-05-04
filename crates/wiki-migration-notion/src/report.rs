@@ -2,11 +2,12 @@
 
 use crate::model::{LibraryKind, RawPage};
 use crate::resolver::{get_property, Resolved};
+use crate::scanner::ScanSkip;
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
 use wiki_core::schema::{EntryStatus, EntryType};
 
-pub fn render_report(pages: &[RawPage], resolved: &Resolved) -> String {
+pub fn render_report(pages: &[RawPage], resolved: &Resolved, skipped: &[ScanSkip]) -> String {
     let mut out = String::new();
 
     // --- 标题 + 总览 ---
@@ -50,6 +51,33 @@ pub fn render_report(pages: &[RawPage], resolved: &Resolved) -> String {
         let _ = writeln!(out, "| {} | {} |", lib, n);
     }
     let _ = writeln!(out);
+
+    let _ = writeln!(out, "## 扫描跳过\n");
+    if skipped.is_empty() {
+        let _ = writeln!(out, "- 跳过：**0**\n");
+    } else {
+        let mut skipped_by_reason: BTreeMap<String, usize> = BTreeMap::new();
+        for item in skipped {
+            let key = format!("{} / {}", item.library.as_str(), item.reason);
+            *skipped_by_reason.entry(key).or_default() += 1;
+        }
+        let _ = writeln!(out, "- 跳过总数：**{}**\n", skipped.len());
+        let _ = writeln!(out, "| 原因 | 数量 |");
+        let _ = writeln!(out, "| --- | ---: |");
+        for (reason, count) in skipped_by_reason {
+            let _ = writeln!(out, "| {} | {} |", reason, count);
+        }
+        let _ = writeln!(out, "\n抽样：");
+        for item in skipped.iter().take(10) {
+            let _ = writeln!(
+                out,
+                "- `{}`: {}",
+                item.path.display(),
+                item.reason.replace('|', "\\|")
+            );
+        }
+        let _ = writeln!(out);
+    }
 
     // --- Wiki 类型×状态矩阵 ---
     let _ = writeln!(out, "## Wiki 类型 × 状态矩阵\n");

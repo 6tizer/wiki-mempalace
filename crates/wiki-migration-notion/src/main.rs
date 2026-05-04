@@ -104,9 +104,12 @@ fn migrate(
     out: &std::path::Path,
 ) -> Result<()> {
     eprintln!("扫描 3 个库...");
-    let mut all = scanner::scan_dir(wiki, LibraryKind::Wiki)?;
-    all.extend(scanner::scan_dir(x, LibraryKind::XBookmark)?);
-    all.extend(scanner::scan_dir(wechat, LibraryKind::WeChat)?);
+    let wiki_scan = scanner::scan_dir_with_report(wiki, LibraryKind::Wiki)?;
+    let x_scan = scanner::scan_dir_with_report(x, LibraryKind::XBookmark)?;
+    let wechat_scan = scanner::scan_dir_with_report(wechat, LibraryKind::WeChat)?;
+    let mut all = wiki_scan.pages;
+    all.extend(x_scan.pages);
+    all.extend(wechat_scan.pages);
     eprintln!("  → 共 {} 条", all.len());
 
     let opts = writer::WriteOptions {
@@ -128,17 +131,23 @@ fn dry_run(
     jsonl_dir: Option<&std::path::Path>,
 ) -> Result<()> {
     eprintln!("扫描 Wiki...");
-    let mut all = scanner::scan_dir(wiki, LibraryKind::Wiki)?;
+    let wiki_scan = scanner::scan_dir_with_report(wiki, LibraryKind::Wiki)?;
+    let mut all = wiki_scan.pages;
+    let mut skipped = wiki_scan.skipped;
     eprintln!("  → {} 条", all.len());
 
     eprintln!("扫描 X书签...");
-    let x_pages = scanner::scan_dir(x, LibraryKind::XBookmark)?;
+    let x_scan = scanner::scan_dir_with_report(x, LibraryKind::XBookmark)?;
+    let x_pages = x_scan.pages;
     eprintln!("  → {} 条", x_pages.len());
+    skipped.extend(x_scan.skipped);
     all.extend(x_pages);
 
     eprintln!("扫描 微信...");
-    let wc_pages = scanner::scan_dir(wechat, LibraryKind::WeChat)?;
+    let wc_scan = scanner::scan_dir_with_report(wechat, LibraryKind::WeChat)?;
+    let wc_pages = wc_scan.pages;
     eprintln!("  → {} 条", wc_pages.len());
+    skipped.extend(wc_scan.skipped);
     all.extend(wc_pages);
 
     eprintln!("Resolve 跨库引用...");
@@ -151,7 +160,7 @@ fn dry_run(
         resolved.stats.external_unresolved,
     );
 
-    let md = report::render_report(&all, &resolved);
+    let md = report::render_report(&all, &resolved, &skipped);
     std::fs::write(out, md)?;
     eprintln!("报告已写入：{}", out.display());
 
@@ -160,6 +169,7 @@ fn dry_run(
         write_jsonl(&dir.join("pages.jsonl"), &all)?;
         write_jsonl(&dir.join("edges.jsonl"), &resolved.edges)?;
         write_jsonl(&dir.join("unresolved.jsonl"), &resolved.unresolved)?;
+        write_jsonl(&dir.join("scan-skipped.jsonl"), &skipped)?;
         eprintln!("JSONL 已写入：{}", dir.display());
     }
     Ok(())
