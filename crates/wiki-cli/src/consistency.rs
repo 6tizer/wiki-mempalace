@@ -811,6 +811,7 @@ fn entry_type_label(kind: &EntryType) -> &'static str {
         EntryType::Qa => "qa",
         EntryType::LintReport => "lint_report",
         EntryType::Index => "index",
+        EntryType::Skill => "skill",
     }
 }
 

@@ -995,6 +995,8 @@ fn entry_type_from_path(rel_path: &str) -> EntryType {
         EntryType::Qa
     } else if lower.contains("/lint-report/") || lower.contains("/lint_report/") {
         EntryType::LintReport
+    } else if lower.contains("/skill/") || lower.starts_with("pages/skill/") {
+        EntryType::Skill
     } else if lower.ends_with("/index.md") || lower == "index.md" {
         EntryType::Index
     } else {
@@ -1011,6 +1013,7 @@ fn entry_type_name(entry_type: &EntryType) -> &'static str {
         EntryType::Qa => "qa",
         EntryType::LintReport => "lint_report",
         EntryType::Index => "index",
+        EntryType::Skill => "skill",
     }
 }
 

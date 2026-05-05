@@ -10,6 +10,13 @@ pub struct SessionRecord {
     pub updated_at: String,
 }
 
+#[derive(Clone, Debug)]
+pub struct MessageRecord {
+    pub role: String,
+    pub content: String,
+    pub created_at: String,
+}
+
 #[derive(Debug)]
 pub struct SessionStore {
     path: PathBuf,
@@ -125,23 +132,34 @@ CREATE TABLE IF NOT EXISTS agent_messages (
     }
 
     pub fn render_session(&self, session_id: &str) -> Result<String, Box<dyn std::error::Error>> {
+        let mut out = format!("session {session_id}\n");
+        for message in self.messages(session_id)? {
+            out.push_str(&format!(
+                "[{}] {}: {}\n",
+                message.created_at, message.role, message.content
+            ));
+        }
+        Ok(out)
+    }
+
+    pub fn messages(
+        &self,
+        session_id: &str,
+    ) -> Result<Vec<MessageRecord>, Box<dyn std::error::Error>> {
         self.with_conn(|conn| {
-            let mut out = format!("session {session_id}\n");
             let mut stmt = conn.prepare(
                 "SELECT role,content,created_at FROM agent_messages WHERE session_id=?1 ORDER BY id ASC",
             )?;
-            let rows = stmt.query_map(params![session_id], |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, String>(2)?,
-                ))
-            })?;
-            for row in rows {
-                let (role, content, created_at) = row?;
-                out.push_str(&format!("[{created_at}] {role}: {content}\n"));
-            }
-            Ok::<_, rusqlite::Error>(out)
+            let rows = stmt
+                .query_map(params![session_id], |row| {
+                    Ok(MessageRecord {
+                        role: row.get(0)?,
+                        content: row.get(1)?,
+                        created_at: row.get(2)?,
+                    })
+                })?
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok::<_, rusqlite::Error>(rows)
         })
         .map_err(Into::into)
     }

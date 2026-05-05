@@ -193,10 +193,7 @@ impl<'a> WorkerRuntime<'a> {
             WorkerRole::Governance => self.native_governance(task),
             WorkerRole::Fixer => self.native_fixer(task),
             WorkerRole::Synthesis => self.native_synthesis(task),
-            WorkerRole::MemoryCurator => Ok(WorkerReport::blocked(
-                task,
-                "memory curator writes durable memory in PR6",
-            )),
+            WorkerRole::MemoryCurator => self.native_memory_curator(task),
         }
     }
 
@@ -367,6 +364,23 @@ impl<'a> WorkerRuntime<'a> {
                 native_call("run_governance_scan"),
                 native_call("discover_synthesis_candidates"),
             ],
+        ))
+    }
+
+    fn native_memory_curator(
+        &self,
+        task: &AgentTask,
+    ) -> Result<WorkerReport, Box<dyn std::error::Error>> {
+        let store = crate::session_store::SessionStore::open(self.config.session_db_path())?;
+        let Some(session) = store.list_sessions()?.into_iter().next() else {
+            return Ok(WorkerReport::blocked(task, "no sessions available"));
+        };
+        let report = crate::memory::curate_session(self.config, &store, &session.id, task.apply)?;
+        let output = serde_json::to_value(report)?;
+        Ok(WorkerReport::completed(
+            task,
+            output,
+            vec![native_call("memory_curate_session")],
         ))
     }
 }

@@ -1201,6 +1201,7 @@ fn entry_type_name(entry_type: &EntryType) -> &'static str {
         EntryType::Qa => "qa",
         EntryType::LintReport => "lint_report",
         EntryType::Index => "index",
+        EntryType::Skill => "skill",
     }
 }
 

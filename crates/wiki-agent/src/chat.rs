@@ -2,6 +2,7 @@ use crate::answer;
 use crate::config::AgentConfig;
 use crate::evidence::{EvidencePack, InternalEvidence};
 use crate::llm_adapter::{ChatModel, FakeChatModel, WikiAiChatModel};
+use crate::memory;
 use crate::planner::{self, WebMode};
 use crate::render_cli;
 use crate::session_store::SessionStore;
@@ -47,6 +48,7 @@ pub fn run(options: ChatOptions) -> Result<(), Box<dyn std::error::Error>> {
     if let Some(prompt) = options.one_shot_prompt {
         let model = build_model(&runtime.config, &runtime.profile, options.fake_llm_response)?;
         runtime.handle_user_message(&prompt, model.as_ref())?;
+        runtime.curate_memory_on_close()?;
         return Ok(());
     }
 
@@ -66,6 +68,7 @@ pub fn run(options: ChatOptions) -> Result<(), Box<dyn std::error::Error>> {
             break;
         }
     }
+    runtime.curate_memory_on_close()?;
     Ok(())
 }
 
@@ -226,6 +229,20 @@ impl ChatRuntime {
             })
             .collect();
         Ok(out)
+    }
+
+    fn curate_memory_on_close(&self) -> Result<(), Box<dyn std::error::Error>> {
+        let report = memory::curate_session(&self.config, &self.store, &self.session_id, true)?;
+        if report.summary.total > 0 || !report.blockers.is_empty() {
+            render_cli::render_system_line(&format!(
+                "memory_curator total={} written={} rejected={} duplicates={}",
+                report.summary.total,
+                report.summary.written,
+                report.summary.rejected,
+                report.summary.duplicates
+            ));
+        }
+        Ok(())
     }
 }
 

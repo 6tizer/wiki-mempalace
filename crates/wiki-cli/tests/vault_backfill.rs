@@ -51,6 +51,35 @@ fn page_body_with_id(page_id: &str) -> String {
     page_body().replacen("---\n", &format!("---\npage_id: \"{page_id}\"\n"), 1)
 }
 
+fn skill_page_body() -> &'static str {
+    r#"---
+title: "技能：跑测试"
+notion_uuid: "22222222-2222-2222-2222-222222222223"
+entry_type: skill
+status: approved
+tags: "agent-skill"
+---
+
+# 技能：跑测试
+
+## 触发条件
+需要验证改动。
+
+## 操作步骤
+串行运行相关 cargo 命令。
+
+## 输入输出
+- 输入：改动范围。
+- 输出：测试结果。
+
+## 验证方式
+- 检查命令退出码。
+
+## 失败处理
+- 报告失败原因。
+"#
+}
+
 fn page_body_with_metadata(page_id: &str) -> String {
     format!(
         r#"---
@@ -185,6 +214,24 @@ fn rerun_repairs_missing_page_written_after_interrupted_apply() {
     let rerun = run_backfill(&vault, &db_path, &report_dir, BackfillMode::Apply).unwrap();
     assert_eq!(rerun.page_written_events, 0);
     assert_eq!(repo.export_outbox_ndjson().unwrap().lines().count(), 1);
+}
+
+#[test]
+fn page_backfill_imports_skill_pages_from_skill_directory() {
+    let temp = tempfile::tempdir().unwrap();
+    let vault = temp.path().join("vault");
+    let db_path = temp.path().join("wiki.db");
+    let report_dir = temp.path().join("reports");
+    write_file(&vault.join("pages/skill/run-tests.md"), skill_page_body());
+
+    let report = run_backfill(&vault, &db_path, &report_dir, BackfillMode::Apply).unwrap();
+
+    assert_eq!(report.pages_imported, 1);
+    let repo = SqliteRepository::open(&db_path).unwrap();
+    let snapshot = repo.load_snapshot().unwrap();
+    let page = snapshot.pages.first().expect("skill page");
+    assert_eq!(page.entry_type, Some(wiki_core::EntryType::Skill));
+    assert_eq!(page.tags, vec!["agent-skill".to_string()]);
 }
 
 #[test]

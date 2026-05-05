@@ -59,6 +59,7 @@ pub enum EntryType {
     Qa,
     LintReport,
     Index,
+    Skill,
 }
 
 impl EntryType {
@@ -73,6 +74,7 @@ impl EntryType {
             "qa" => Ok(Self::Qa),
             "lint-report" | "lint_report" => Ok(Self::LintReport),
             "index" => Ok(Self::Index),
+            "skill" => Ok(Self::Skill),
             other => Err(SchemaValidationError::ParseEntryType(other.to_string())),
         }
     }
@@ -105,6 +107,7 @@ impl EntryType {
             Self::Qa => &["问题", "回答"],
             Self::Synthesis => &["研究问题", "综合分析", "关键发现", "来源列表"],
             Self::LintReport => &["检查日期", "总体健康度", "问题清单", "建议"],
+            Self::Skill => &["触发条件", "操作步骤", "输入输出", "验证方式", "失败处理"],
             Self::Index => &[],
         }
     }
