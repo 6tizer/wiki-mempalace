@@ -3,6 +3,7 @@
 ## Scope
 
 Branch: `codex/wiki-agent-manager-workers`.
+PR: #117.
 
 Implemented PR5 local draft:
 
