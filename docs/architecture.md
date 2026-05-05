@@ -53,6 +53,7 @@
 | Notion DB (X书签) | `notion-sync` + 历史离线迁移 | ✅ 已接入 | 支持 cursor 增量同步、已有 source refresh、Vault source projection |
 | Notion DB (微信文章) | `notion-sync` + 历史离线迁移 | ✅ 已接入 | 同上 |
 | Agent MCP 写入 | `wiki_ingest` / `wiki_file_claim` / `wiki_ingest_llm` | ✅ 实时生效 | 通过 MCP server 实时写 wiki.db |
+| Agent Chat / TUI | `wiki-agent chat` / `wiki-agent tui` | ✅ 已接入 | 默认 native Rust direct-call，不启动 MCP 子进程 |
 | CLI 手动写入 | `ingest` / `file-claim` / `batch-ingest` | ✅ 实时生效 | 直接调 CLI |
 | Notion API 增量同步 | `wiki-cli notion-sync` / automation `notion-sync` | ✅ 已合入 | PR #36/#38/#42；archived source retirement 已由 PR #68/#69 收敛 |
 | Governance / Fixer | `governance scan` / `fixer-plan` / `fixer-apply` / `restore` | ✅ 已接入 | 只以 `wiki.db` 为真源；Fixer apply 写 DB/outbox/projection，不直接改 palace |
@@ -62,18 +63,28 @@
 
 ```text
 wiki-cli
-  ├─ wiki-kernel
-  │   ├─ wiki-core
-  │   └─ wiki-storage
-  ├─ wiki-mempalace-bridge
-  │   └─ rust-mempalace (live feature)
-  └─ MCP server (22 tools)
+  └─ MCP JSON-RPC adapter
+      └─ wiki-tools::ToolRegistry
+          ├─ wiki-kernel
+          │   ├─ wiki-core
+          │   └─ wiki-storage
+          └─ wiki-mempalace-bridge
+              └─ rust-mempalace (live feature)
+
+wiki-agent
+  ├─ chat / tui / manager-worker / memory
+  ├─ wiki-ai (LLM profiles + Exa/xAI web search)
+  └─ wiki-tools::ToolRegistry (native direct-call first)
 ```
 
-`wiki-cli` 是统一 CLI 与 MCP 入口。wiki 侧能力通过 `wiki-kernel` / `wiki-storage`
-完成；mempalace 侧能力通过 `wiki-mempalace-bridge` 完成。10 个 `mempalace_*`
-MCP 工具通过 `wiki_mempalace_bridge::make_tools` 进入 `MempalaceTools` 抽象，
-不由 `wiki-cli` 直接调用 `rust_mempalace::service`。
+`wiki-tools::ToolRegistry` 是 22 个工具的唯一实现。`wiki-cli mcp` 只是 stdio
+JSON-RPC adapter；`wiki-agent` 默认在进程内直接调用同一份 handler。`rmcp`
+child-process 只作为兼容 fallback，不是默认路径。
+
+wiki 侧能力通过 `wiki-kernel` / `wiki-storage` 完成；mempalace 侧能力通过
+`wiki-mempalace-bridge` 完成。10 个 `mempalace_*` 工具通过
+`wiki_mempalace_bridge::make_tools` 进入 `MempalaceTools` 抽象，不由 `wiki-cli`
+或 `wiki-agent` 直接调用 `rust_mempalace::service`。
 
 ## 2. 数据存储
 
@@ -177,10 +188,34 @@ notion-sync
 `synthesis-discover` 和 `synthesis-run` 是 manual automation jobs，不进入 daily
 lane。原因是 synthesis 可能发起外部搜索和较长 LLM 写作，应该按研究节奏单独触发。
 
+`wiki-agent agent run --task lint|governance|fixer|synthesis|search|memory-curator`
+可把这些能力封装成 native worker 调用。worker 默认走 Rust core / ToolRegistry；
+只有显式 `--tool-backend mcp-child` 时才尝试 MCP fallback，且 batch 型
+Governance/Fixer/Synthesis worker 在 fallback 下会明确 blocked。
+
 `--graph-extras-file` 中的 `claim:` / `page:` / `entity:` / `source:` 会按
 `--viewer-scope` 过滤；外部 `mp_drawer:` / `mp_kg:` 注入默认拒绝，避免绕过 mempalace bank/scope。
 
-## 7. MCP Server 工具清单
+## 7. wiki-agent Runtime
+
+```text
+wiki-agent chat/tui
+  -> session store .wiki/wiki-agent.db
+  -> local evidence: wiki_query + mempalace_search via native ToolRegistry
+  -> optional web evidence: Exa/xAI via wiki-ai
+  -> profile-selected LLM
+  -> assistant answer
+  -> memory curator
+  -> verified memory/skill pages in wiki.db
+  -> outbox -> palace.db
+```
+
+`wiki-agent` 的 raw chat transcript 只存在 `.wiki/wiki-agent.db`。只有通过
+verifier 的长期事实或 skill 才写入 `wiki.db`，随后通过 outbox 投影到
+Obsidian Vault 和 `palace.db`。TUI 使用同一 runtime，不绕过 ToolRegistry
+或 writer policy。
+
+## 8. MCP Server 工具清单
 
 | 前缀 | 工具 | 实现路径 |
 | --- | --- | --- |
@@ -198,7 +233,7 @@ cargo run -p wiki-cli -- \
   mcp
 ```
 
-## 8. 当前架构债
+## 9. 当前架构债
 
 - workspace 统一使用 `edition = "2021"`；`rust-mempalace` 通过 `edition.workspace = true` 继承，不再独立声明 edition。
 - `wiki.db` 与 `palace.db` 仍是最终一致；准实时同步可在未来通过内核 hook 直连 bridge live sink。

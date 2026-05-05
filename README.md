@@ -2,7 +2,12 @@
 
 本地优先（local-first）的**统一知识底座**——把 `llm-wiki`（知识生命周期内核）与
 `rust-mempalace`（记忆宫殿 / FTS5 全文检索 / 时序知识图谱）合并为单一 Cargo workspace，
-对 AI Agent 暴露一个 **22 工具的统一 MCP Server**：12 个 `wiki_`* + 10 个 `mempalace_`*。
+对 AI Agent 暴露两种入口：
+
+- `wiki-agent`：默认交互入口。native Rust direct-call 调用共享 ToolRegistry、`wiki.db`
+  和 `palace.db`，支持 CLI chat、TUI、manager-worker sub agents、web RAG 和持久记忆。
+- `wiki-cli mcp`：完全兼容的 22 工具 MCP Server。它也是同一套 ToolRegistry 的
+  JSON-RPC adapter，不是第二份工具实现。
 
 两个引擎的合体意味着：知识**可累积、可衰减、可 supersede、可审计**，同时**可
 全文检索、可按时间回放、可按实体遍历**。
@@ -58,10 +63,13 @@ wiki-mempalace/
 │   └── blog/
 │       └── article2.md        # 两仓合并前的工程长文
 └── crates/
+    ├── wiki-ai/               # 共享 LLM profile / embedding / Exa/xAI web search runtime
     ├── wiki-core/             # 领域模型：Claim / Entity / Event / Schema
     ├── wiki-kernel/           # 引擎：ingest / query / lint / promote / crystallize
     ├── wiki-storage/          # SQLite 持久化
     ├── wiki-cli/              # 统一 CLI + MCP Server（22 工具）
+    ├── wiki-tools/            # 22 个 MCP/native tools 的唯一 Rust 实现
+    ├── wiki-agent/            # CLI chat / TUI / manager-worker / memory entrypoint
     ├── wiki-mempalace-bridge/ # 事件桥 + 搜索 ports（live feature 连 palace）
     ├── wiki-migration-notion/ # Notion Export → 本地 Obsidian vault 一次性迁移工具（含 audit-orphans / fix-orphans）
     └── rust-mempalace/        # 记忆宫殿（lib + bin）；保留独立 README 与 e2e 测试
@@ -83,6 +91,33 @@ cargo build --workspace --release
 > 无需手动调用 `save_snapshot` / `flush_outbox`。
 
 ### 生产 vault-local 启动
+
+#### wiki-agent 交互入口
+
+```bash
+cargo run -p wiki-agent -- \
+  --db /Users/mac-mini/Documents/wiki/.wiki/wiki.db \
+  --wiki-dir /Users/mac-mini/Documents/wiki \
+  --viewer-scope shared:wiki \
+  --palace /Users/mac-mini/Documents/wiki/.wiki/palace.db \
+  chat --profile agent_manager
+```
+
+TUI：
+
+```bash
+cargo run -p wiki-agent -- \
+  --db /Users/mac-mini/Documents/wiki/.wiki/wiki.db \
+  --wiki-dir /Users/mac-mini/Documents/wiki \
+  --viewer-scope shared:wiki \
+  --palace /Users/mac-mini/Documents/wiki/.wiki/palace.db \
+  tui --profile agent_manager
+```
+
+`wiki-agent` 默认 `--tool-backend native`，直接调用 `wiki-tools::ToolRegistry`。
+`--tool-backend mcp-child` 只用于兼容外部 MCP 子进程 fallback。
+
+#### MCP Server
 
 ```bash
 cargo run -p wiki-cli -- \
@@ -144,7 +179,11 @@ cargo run -p wiki-cli -- \
   --viewer-scope private:cli \
   mcp
 
-# 10) 查看统一 metrics（默认只读；可写 JSON 或 Markdown 报告）
+# 10) wiki-agent native doctor / chat
+cargo run -p wiki-agent -- --db wiki.db doctor --tool-backend native
+cargo run -p wiki-agent -- --db wiki.db chat "Redis 缓存怎么查？" --web off
+
+# 11) 查看统一 metrics（默认只读；可写 JSON 或 Markdown 报告）
 cargo run -p wiki-cli -- --db wiki.db metrics --json --report wiki/reports/metrics.md
 ```
 
@@ -158,7 +197,8 @@ cargo run -p wiki-cli -- --db wiki.db metrics --json --report wiki/reports/metri
 ```
 
 覆盖：ingest → file-claim → supersede → query write-page → lint → outbox export/ack →
-mempalace consumer → viewer-scope 隔离 → llm-smoke（可选）。
+mempalace consumer → viewer-scope 隔离 → wiki-agent native/mcp-child doctor →
+wiki-agent fake chat + memory extraction → llm-smoke（可选）。
 
 ### 测试
 
@@ -176,7 +216,10 @@ cargo test -p rust-mempalace --test e2e_core
 
 ```
 wiki-cli (binary)
-  └─ MCP Server（22 tools）
+  └─ MCP adapter → wiki-tools::ToolRegistry（22 tools）
+
+wiki-agent (binary)
+  └─ native ToolRegistry + chat/TUI + manager-worker + memory
        ├─ wiki_*  (12) → wiki-kernel → wiki-core / wiki-storage
        └─ mempalace_* (10) → wiki-mempalace-bridge → rust-mempalace::service
 

@@ -639,3 +639,12 @@
 - Spec changes needed: 持久记忆必须区分 raw session transcript 和 verified durable page；raw transcript 留在 `.wiki/wiki-agent.db`，只有验证后的 memory/skill 才写入 `wiki.db`。
 - Tests or reviews that caught issues: `cargo test -p wiki-agent` 覆盖 chat close、unsafe rejection、duplicate guard、status；`cargo test -p wiki-cli --test vault_backfill` 覆盖 `pages/skill/` 回读；bridge live sink 测试覆盖 Skill page 进入 palace。
 - Next plan note: PR #118 合入后进入 PR7 TUI；TUI 只能复用同一 agent runtime 和 ToolRegistry，不直接绕过 memory/write policy。
+
+## 2026-05-05 / wiki-agent Docs + E2E
+
+- Scope: 更新 README、architecture、MCP reference、Notion workflow matrix、dev workflow，并扩展 `scripts/e2e.sh` 覆盖 wiki-agent native/fallback/memory/palace smoke。
+- What worked: E2E 直接用 `wiki-agent doctor` 验 22 个 native 和 mcp-child tools，再用 fake chat 写入可验证 memory，最后消费到 palace 并查 FTS。
+- What caused rework: standalone `rust-mempalace --palace <palace.db> search` 把 `--palace` 当目录语义；E2E 改用 palace SQLite FTS 直接验派生结果。
+- Spec changes needed: 文档必须区分真实 CLI task 名称 `lint|governance|fixer|synthesis|search|memory-curator` 和内部 worker owner 字符串。
+- Tests or reviews that caught issues: `./scripts/e2e.sh` 捕捉 consume 输出字段和 mempalace CLI 参数语义；`rg` 捕捉旧 worker 名称残留。
+- Next plan note: PR8 合入后，wiki-agent 8 个 PR 的实现闭环完成；下一轮应只做实际使用反馈或新能力增量，不再混入本批 closeout。
