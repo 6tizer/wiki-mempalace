@@ -10,4 +10,4 @@
 - [x] Run PR8 gate.
 - [x] Self-review.
 - [x] Open PR #120.
-- [ ] Merge after CI.
+- [x] Merge after CI.

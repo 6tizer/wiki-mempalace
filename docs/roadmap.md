@@ -111,7 +111,7 @@ PRD：[wiki-agent.md](prd/wiki-agent.md)。
 | 5 | Manager-worker sub agents | Merged PR #117 | Lint/Governance/Fixer/Synthesis/Search/Memory workers | `codex/wiki-agent-manager-workers` |
 | 6 | Persistent memory + skills | Merged PR #118 | `.wiki/wiki-agent.db` 会话记忆，验证后写入 `wiki.db`/`palace.db` | `codex/wiki-agent-memory-skills` |
 | 7 | TUI | Merged PR #119 | ratatui + crossterm 分屏、状态栏、流式输出、键盘导航 | `codex/wiki-agent-tui` |
-| 8 | Docs + E2E | PR #120 已打开 | README、架构、MCP/API 对照、Notion 能力矩阵、端到端 smoke | `codex/wiki-agent-docs-e2e` |
+| 8 | Docs + E2E | Merged PR #120 | README、架构、MCP/API 对照、Notion 能力矩阵、端到端 smoke | `codex/wiki-agent-docs-e2e` |
 
 ## Audit Report Follow-up v2 Closeout
 
