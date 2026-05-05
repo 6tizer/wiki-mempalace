@@ -55,6 +55,50 @@ model = "deepseek-chat"
 reasoning_effort = "medium"
 temperature = 0.0
 
+[llm_profiles.agent_manager]
+# Used by wiki-agent to plan tool calls and sub-agent delegation.
+inherits = "default"
+model = "deepseek-reasoner"
+reasoning_effort = "high"
+temperature = 0.0
+max_output_tokens = 12000
+
+[llm_profiles.agent_worker_lint]
+# Used by wiki-agent lint worker for concise issue triage.
+inherits = "default"
+model = "deepseek-chat"
+reasoning_effort = "medium"
+temperature = 0.0
+
+[llm_profiles.agent_worker_governance]
+# Used by wiki-agent governance worker to summarize scan evidence.
+inherits = "default"
+model = "deepseek-chat"
+reasoning_effort = "medium"
+temperature = 0.0
+
+[llm_profiles.agent_worker_fixer]
+# Used by wiki-agent fixer worker for evidence-sensitive repair decisions.
+inherits = "fixer_judge"
+
+[llm_profiles.agent_worker_synthesis]
+# Used by wiki-agent synthesis worker to coordinate discovery and composition.
+inherits = "synthesis_research"
+
+[llm_profiles.agent_worker_search]
+# Used by wiki-agent search worker to plan local/web evidence gathering.
+inherits = "default"
+model = "deepseek-reasoner"
+reasoning_effort = "high"
+temperature = 0.0
+
+[llm_profiles.agent_memory_curator]
+# Used after chat sessions to extract verified durable memories and skills.
+inherits = "default"
+model = "deepseek-chat"
+reasoning_effort = "medium"
+temperature = 0.0
+
 [web_search.providers.exa]
 kind = "exa"
 api_key_env = "EXA_API_KEY"

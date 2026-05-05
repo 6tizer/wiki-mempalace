@@ -2117,6 +2117,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "wiki-ai"
+version = "0.1.0"
+dependencies = [
+ "mockito",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "time",
+ "toml",
+ "wiki-core",
+]
+
+[[package]]
 name = "wiki-cli"
 version = "0.1.0"
 dependencies = [
@@ -2137,6 +2152,7 @@ dependencies = [
  "toml",
  "uuid",
  "walkdir",
+ "wiki-ai",
  "wiki-core",
  "wiki-kernel",
  "wiki-mempalace-bridge",
