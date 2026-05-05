@@ -4,6 +4,8 @@ use wiki_ai::web_search::{WebSearchEvidence, WebSearchRun};
 pub struct InternalEvidence {
     pub doc_id: String,
     pub score: f64,
+    pub title: Option<String>,
+    pub excerpt: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -29,7 +31,18 @@ impl EvidencePack {
             out.push_str("- none\n");
         } else {
             for item in &self.internal {
-                out.push_str(&format!("- {} score={:.6}\n", item.doc_id, item.score));
+                out.push_str(&format!(
+                    "- {} score={:.6}{}\n",
+                    item.doc_id,
+                    item.score,
+                    item.title
+                        .as_deref()
+                        .map(|title| format!(" title={title}"))
+                        .unwrap_or_default()
+                ));
+                if let Some(excerpt) = item.excerpt.as_deref() {
+                    out.push_str(&format!("  excerpt: {}\n", excerpt));
+                }
             }
         }
         out.push_str("web evidence:\n");
