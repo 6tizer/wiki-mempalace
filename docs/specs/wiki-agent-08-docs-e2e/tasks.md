@@ -9,5 +9,5 @@
 - [x] Extend `scripts/e2e.sh` with wiki-agent native/fallback/memory/palace smoke.
 - [x] Run PR8 gate.
 - [x] Self-review.
-- [ ] Open PR.
+- [x] Open PR #120.
 - [ ] Merge after CI.
