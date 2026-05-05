@@ -5,17 +5,23 @@ mod doctor;
 mod events;
 mod evidence;
 mod llm_adapter;
+mod manager;
 mod mcp_fallback;
 mod planner;
 mod render_cli;
+mod roles;
 mod session_store;
 mod slash;
+mod task;
 mod tool_backend;
 mod web_tool;
+mod worker;
+mod worker_tools;
 
 use clap::{Parser, Subcommand};
 use config::AgentConfig;
 use planner::WebMode;
+use roles::WorkerRole;
 use std::path::PathBuf;
 use tool_backend::ToolBackendKind;
 
@@ -77,12 +83,46 @@ enum Command {
         #[command(subcommand)]
         command: SessionCommand,
     },
+    /// Run a manager-worker task.
+    Agent {
+        #[command(subcommand)]
+        command: AgentCommand,
+    },
 }
 
 #[derive(Debug, Subcommand)]
 enum SessionCommand {
     List,
     Show { session_id: String },
+}
+
+#[derive(Debug, Subcommand)]
+enum AgentCommand {
+    Run {
+        /// Goal for the manager. If omitted, uses a generic inspect goal.
+        prompt: Vec<String>,
+        /// Optional role override. If omitted, the manager routes from prompt.
+        #[arg(long, value_enum)]
+        task: Option<WorkerRole>,
+        #[arg(long, value_enum, default_value_t = ToolBackendKind::Native)]
+        tool_backend: ToolBackendKind,
+        #[arg(long, value_enum, default_value_t = WebMode::Auto)]
+        web: WebMode,
+        #[arg(long, value_delimiter = ',')]
+        web_providers: Vec<String>,
+        #[arg(long, default_value_t = false)]
+        allow_private_web_search: bool,
+        /// Allow fixer apply behind the writer lease.
+        #[arg(long, default_value_t = false)]
+        apply: bool,
+        #[arg(long, default_value_t = false)]
+        json: bool,
+        /// Optional wiki-cli binary path for mcp-child fallback calls.
+        #[arg(long)]
+        wiki_cli: Option<PathBuf>,
+        #[arg(long, hide = true)]
+        web_evidence_json: Option<PathBuf>,
+    },
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -146,6 +186,41 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
         }
+        Command::Agent { command } => match command {
+            AgentCommand::Run {
+                prompt,
+                task,
+                tool_backend,
+                web,
+                web_providers,
+                allow_private_web_search,
+                apply,
+                json,
+                wiki_cli,
+                web_evidence_json,
+            } => {
+                let goal = if prompt.is_empty() {
+                    "inspect wiki".to_string()
+                } else {
+                    prompt.join(" ")
+                };
+                let task = manager::Manager.plan(&goal, task, apply);
+                let options = worker::WorkerRuntimeOptions {
+                    backend: tool_backend,
+                    web,
+                    web_providers,
+                    allow_private_web_search,
+                    wiki_cli,
+                    web_evidence_json,
+                };
+                let report = worker::WorkerRuntime::new(&config, options).execute(&task);
+                if json {
+                    println!("{}", serde_json::to_string_pretty(&report)?);
+                } else {
+                    print!("{}", report.render_text());
+                }
+            }
+        },
     }
     Ok(())
 }
