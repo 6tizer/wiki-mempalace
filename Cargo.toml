@@ -6,6 +6,8 @@ members = [
   "crates/wiki-kernel",
   "crates/wiki-mempalace-bridge",
   "crates/wiki-storage",
+  "crates/wiki-tools",
+  "crates/wiki-agent",
   "crates/wiki-cli",
   "crates/rust-mempalace",
   "crates/wiki-migration-notion",

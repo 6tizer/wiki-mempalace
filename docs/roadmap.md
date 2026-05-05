@@ -97,6 +97,22 @@ PRD：[wiki-governance-evidence-synthesis-v3.md](prd/wiki-governance-evidence-sy
 | CI / hardening | ✅ 完成 | Reliability matrix PR #65、dependency audit PR #66、required CI PR #89、hardening lane PR #93 |
 | DX / maintainability | ✅ 完成 | CLI modularization PR #78/#79、time unification PR #80、MCP API reference PR #58/#97 |
 
+## Wiki Agent Native Runtime（2026-05-05）
+
+目标：新增 `wiki-agent`，默认通过 native Rust ToolRegistry 直接调用 wiki/mempalace 工具；`wiki-cli mcp` 保持兼容入口，MCP child-process 只作 fallback。
+PRD：[wiki-agent.md](prd/wiki-agent.md)。
+
+| 顺序 | PR 主题 | 状态 | 范围 | 分支 |
+| --- | --- | --- | --- | --- |
+| 1 | Shared AI core | Merged PR #113 | 抽出 `wiki-ai`，共享 LLM profile / embedding / web search runtime | `codex/wiki-agent-shared-ai-core` |
+| 2 | Native ToolRegistry + MCP adapter | 本地完成，待 PR | 新增 `wiki-tools`；`wiki-cli mcp` 转调共享实现；新增 `wiki-agent doctor` native / mcp-child discovery | `codex/wiki-agent-native-tool-registry` |
+| 3 | Pure CLI chat | 待做 | `wiki-agent chat` REPL、profile、slash commands、session history | `codex/wiki-agent-cli-chat` |
+| 4 | Local + Web RAG | 待做 | 本地 wiki/palace 检索 + Exa/xAI web evidence 综合回答 | `codex/wiki-agent-web-rag` |
+| 5 | Manager-worker sub agents | 待做 | Lint/Governance/Fixer/Synthesis/Search/Memory workers | `codex/wiki-agent-manager-workers` |
+| 6 | Persistent memory + skills | 待做 | `.wiki/wiki-agent.db` 会话记忆，验证后写入 `wiki.db`/`palace.db` | `codex/wiki-agent-memory-skills` |
+| 7 | TUI | 待做 | ratatui + crossterm 分屏、状态栏、流式输出、键盘导航 | `codex/wiki-agent-tui` |
+| 8 | Docs + E2E | 待做 | README、架构、MCP/API 对照、Notion 能力矩阵、端到端 smoke | `codex/wiki-agent-docs-e2e` |
+
 ## Audit Report Follow-up v2 Closeout
 
 来源：Notion《wiki-mempalace 全方位代码审计报告》2026-04-29 复核。

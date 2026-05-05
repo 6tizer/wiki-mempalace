@@ -26,8 +26,8 @@ The agent should combine:
 
 This batch is split into eight PRs:
 
-1. Shared AI core.
-2. Native ToolRegistry plus MCP adapter.
+1. Shared AI core. Merged PR #113.
+2. Native ToolRegistry plus MCP adapter. In local implementation.
 3. CLI chat.
 4. Local + web RAG answering.
 5. Manager-worker sub agents.
