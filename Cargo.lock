@@ -2117,6 +2117,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "wiki-agent"
+version = "0.1.0"
+dependencies = [
+ "assert_cmd",
+ "clap",
+ "predicates",
+ "serde_json",
+ "tempfile",
+ "thiserror",
+ "wiki-core",
+ "wiki-kernel",
+ "wiki-storage",
+ "wiki-tools",
+]
+
+[[package]]
 name = "wiki-ai"
 version = "0.1.0"
 dependencies = [
@@ -2157,6 +2173,7 @@ dependencies = [
  "wiki-kernel",
  "wiki-mempalace-bridge",
  "wiki-storage",
+ "wiki-tools",
 ]
 
 [[package]]
@@ -2225,6 +2242,22 @@ dependencies = [
  "time",
  "uuid",
  "wiki-core",
+]
+
+[[package]]
+name = "wiki-tools"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+ "tempfile",
+ "thiserror",
+ "time",
+ "uuid",
+ "wiki-ai",
+ "wiki-core",
+ "wiki-kernel",
+ "wiki-mempalace-bridge",
+ "wiki-storage",
 ]
 
 [[package]]

@@ -26,6 +26,22 @@
 - Agent-facing CLI 默认值不要依赖 cwd；只要语义属于 vault 输出，相对路径应在
   `--wiki-dir` 存在时解析为 vault-relative，并用测试固定。
 
+## 2026-05-05 / wiki-agent PR1 Shared AI Core
+
+- Scope: Start `wiki-agent` batch by extracting reusable LLM profile, embedding, and web search code from `wiki-cli` into `wiki-ai`.
+- What worked: Re-exporting `wiki-ai` from `wiki-cli` kept existing command behavior stable while creating a clean dependency for future agent code.
+- What caused rework: Clippy caught `items_after_test_module` after the mechanical move; helper functions should live before test modules when extracting shared crates.
+- Tests or reviews that caught issues: `cargo test -p wiki-ai`, `cargo test -p wiki-cli`, workspace test, clippy, deny, and GitHub `quick`.
+- Next plan note: PR2 should move MCP tool handlers into one shared native registry before adding chat logic.
+
+## 2026-05-05 / wiki-agent PR2 Native ToolRegistry
+
+- Scope: Move MCP-compatible tool definitions and handlers into `wiki-tools`, add `wiki-agent doctor`, and keep `wiki-cli mcp` as compatibility entrypoint.
+- What worked: Moving the existing MCP tests with the implementation proved typed errors, scope rules, bank derivation, storage-backed query, and docs sync did not regress.
+- What caused rework: A public re-export in the thin CLI wrapper produced unused import warnings; the adapter should expose only the functions it uses until external callers need more.
+- Tests or reviews that caught issues: `wiki-agent doctor` native/mcp-child smoke both found 22 tools; workspace test and clippy passed after the wrapper cleanup.
+- Next plan note: PR3 can build the chat REPL on top of `ToolRegistry` instead of spawning MCP by default.
+
 ## 2026-04-30 / AI Provider Profiles
 
 - Scope: PR1 of Wiki Governance + Evidence Fixer + Multi-provider Synthesis v3; task-level LLM profiles and Exa/Tavily web search evidence runtime. A later xAI follow-up changes the checked-in default pair while keeping Tavily legacy-compatible.

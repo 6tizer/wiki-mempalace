@@ -18,6 +18,7 @@ wiki-core = { path = "../wiki-core" }
 wiki-kernel = { path = "../wiki-kernel" }
 wiki-mempalace-bridge = { path = "../wiki-mempalace-bridge", features = ["live"] }
 wiki-storage = { path = "../wiki-storage" }
+wiki-tools = { path = "../wiki-tools" }
 uuid = { version = "1", features = ["v4"] }
 walkdir = "2"
 regex = "1"
