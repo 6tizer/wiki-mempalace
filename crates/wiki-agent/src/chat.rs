@@ -29,25 +29,16 @@ pub struct ChatOptions {
     pub web_evidence_json: Option<PathBuf>,
 }
 
-pub fn run(options: ChatOptions) -> Result<(), Box<dyn std::error::Error>> {
-    let store = SessionStore::open(options.config.session_db_path())?;
-    let title_hint = options.one_shot_prompt.as_deref().unwrap_or("chat session");
-    let session_id = store.ensure_session(options.session_id, title_hint, &options.profile)?;
-    let mut runtime = ChatRuntime {
-        config: options.config,
-        profile: options.profile,
-        tool_backend: options.tool_backend,
-        web: options.web,
-        web_providers: options.web_providers,
-        allow_private_web_search: options.allow_private_web_search,
-        web_evidence_json: options.web_evidence_json,
-        session_id,
-        store,
-    };
+pub(crate) struct ChatTurn {
+    pub evidence: String,
+    pub answer: String,
+}
 
-    if let Some(prompt) = options.one_shot_prompt {
-        let model = build_model(&runtime.config, &runtime.profile, options.fake_llm_response)?;
-        runtime.handle_user_message(&prompt, model.as_ref())?;
+pub fn run(options: ChatOptions) -> Result<(), Box<dyn std::error::Error>> {
+    let mut runtime = init_runtime(&options)?;
+
+    if let Some(prompt) = options.one_shot_prompt.clone() {
+        runtime.handle_user_message(&prompt, options.fake_llm_response.clone())?;
         runtime.curate_memory_on_close()?;
         return Ok(());
     }
@@ -72,7 +63,27 @@ pub fn run(options: ChatOptions) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-struct ChatRuntime {
+pub(crate) fn init_runtime(
+    options: &ChatOptions,
+) -> Result<ChatRuntime, Box<dyn std::error::Error>> {
+    let store = SessionStore::open(options.config.session_db_path())?;
+    let title_hint = options.one_shot_prompt.as_deref().unwrap_or("chat session");
+    let session_id =
+        store.ensure_session(options.session_id.clone(), title_hint, &options.profile)?;
+    Ok(ChatRuntime {
+        config: options.config.clone(),
+        profile: options.profile.clone(),
+        tool_backend: options.tool_backend,
+        web: options.web,
+        web_providers: options.web_providers.clone(),
+        allow_private_web_search: options.allow_private_web_search,
+        web_evidence_json: options.web_evidence_json.clone(),
+        session_id,
+        store,
+    })
+}
+
+pub(crate) struct ChatRuntime {
     config: AgentConfig,
     profile: String,
     tool_backend: ToolBackendKind,
@@ -85,6 +96,10 @@ struct ChatRuntime {
 }
 
 impl ChatRuntime {
+    pub(crate) fn profile(&self) -> &str {
+        &self.profile
+    }
+
     fn handle_input_line(
         &mut self,
         input: &str,
@@ -94,7 +109,9 @@ impl ChatRuntime {
             return self.handle_slash(command);
         }
         let model = build_model(&self.config, &self.profile, fake_response)?;
-        self.handle_user_message(input, model.as_ref())?;
+        let turn = self.run_turn(input, model.as_ref())?;
+        render_cli::render_system_line(&turn.evidence);
+        render_cli::render_assistant_message(&turn.answer)?;
         Ok(false)
     }
 
@@ -117,7 +134,7 @@ impl ChatRuntime {
                 render_cli::render_system_line(&format!("web={}", self.web));
             }
             SlashCommand::Memory => {
-                render_cli::render_system_line("memory=session-store; durable memory lands in PR6");
+                render_cli::render_system_line("memory=session-store; durable memory enabled");
             }
             SlashCommand::Sessions => print!("{}", self.store.render_list()?),
             SlashCommand::Exit => return Ok(true),
@@ -131,18 +148,41 @@ impl ChatRuntime {
     fn handle_user_message(
         &mut self,
         prompt: &str,
-        model: &dyn ChatModel,
+        fake_response: Option<String>,
     ) -> Result<(), Box<dyn std::error::Error>> {
+        let model = build_model(&self.config, &self.profile, fake_response)?;
+        let turn = self.run_turn(prompt, model.as_ref())?;
+        render_cli::render_system_line(&turn.evidence);
+        render_cli::render_assistant_message(&turn.answer)?;
+        Ok(())
+    }
+
+    pub(crate) fn run_prompt(
+        &mut self,
+        prompt: &str,
+        fake_response: Option<String>,
+    ) -> Result<ChatTurn, Box<dyn std::error::Error>> {
+        let model = build_model(&self.config, &self.profile, fake_response)?;
+        self.run_turn(prompt, model.as_ref())
+    }
+
+    fn run_turn(
+        &mut self,
+        prompt: &str,
+        model: &dyn ChatModel,
+    ) -> Result<ChatTurn, Box<dyn std::error::Error>> {
         self.store.add_message(&self.session_id, "user", prompt)?;
         let evidence = self.collect_evidence(prompt)?;
-        render_cli::render_system_line(&evidence.render());
+        let evidence_rendered = evidence.render();
         let system = system_prompt(&self.profile, self.tool_backend);
         let user_prompt = answer::build_user_prompt(prompt, &evidence);
         let answer = model.complete(&system, &user_prompt)?;
         self.store
             .add_message(&self.session_id, "assistant", &answer)?;
-        render_cli::render_assistant_message(&answer)?;
-        Ok(())
+        Ok(ChatTurn {
+            evidence: evidence_rendered,
+            answer,
+        })
     }
 
     fn render_tools(&self) {
@@ -231,7 +271,7 @@ impl ChatRuntime {
         Ok(out)
     }
 
-    fn curate_memory_on_close(&self) -> Result<(), Box<dyn std::error::Error>> {
+    pub(crate) fn curate_memory_on_close(&self) -> Result<(), Box<dyn std::error::Error>> {
         let report = memory::curate_session(&self.config, &self.store, &self.session_id, true)?;
         if report.summary.total > 0 || !report.blockers.is_empty() {
             render_cli::render_system_line(&format!(

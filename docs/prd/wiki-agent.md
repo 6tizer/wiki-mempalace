@@ -32,7 +32,7 @@ This batch is split into eight PRs:
 4. Local + web RAG answering. Merged PR #116.
 5. Manager-worker sub agents. Merged PR #117.
 6. Persistent memory + skill loop. Merged PR #118.
-7. TUI.
+7. TUI. In local implementation.
 8. Docs and E2E.
 
 ## Non-Goals

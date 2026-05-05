@@ -37,9 +37,20 @@ skip = [
   { crate = "getrandom@0.2.17", reason = "transitive rustls/ring stack is not aligned with uuid/tempfile getrandom yet" },
   { crate = "getrandom@0.3.4", reason = "transitive rand stack is not aligned with uuid/tempfile getrandom yet" },
   { crate = "hashbrown@0.14.5", reason = "transitive rusqlite/hashlink stack lags indexmap hashbrown" },
+  { crate = "hashbrown@0.16.1", reason = "transitive ratatui-core stack lags indexmap hashbrown" },
   { crate = "r-efi@5.3.0", reason = "transitive getrandom v0.3 stack differs from getrandom v0.4" },
   { crate = "webpki-roots@0.26.11", reason = "transitive ureq v2 stack lags reqwest rustls root store" },
   { crate = "windows-sys@0.52.0", reason = "transitive ring stack lags windows-sys used by async/dev tooling" },
+  { crate = "windows-sys@0.61.2", reason = "transitive crossterm/mio Windows target stack differs from clap/socket2 stack" },
+  { crate = "windows-targets@0.53.5", reason = "transitive Windows-only target package differs across rustls/crossterm stacks" },
+  { crate = "windows_aarch64_gnullvm@0.53.1", reason = "transitive Windows-only target package differs across rustls/crossterm stacks" },
+  { crate = "windows_aarch64_msvc@0.53.1", reason = "transitive Windows-only target package differs across rustls/crossterm stacks" },
+  { crate = "windows_i686_gnu@0.53.1", reason = "transitive Windows-only target package differs across rustls/crossterm stacks" },
+  { crate = "windows_i686_gnullvm@0.53.1", reason = "transitive Windows-only target package differs across rustls/crossterm stacks" },
+  { crate = "windows_i686_msvc@0.53.1", reason = "transitive Windows-only target package differs across rustls/crossterm stacks" },
+  { crate = "windows_x86_64_gnu@0.53.1", reason = "transitive Windows-only target package differs across rustls/crossterm stacks" },
+  { crate = "windows_x86_64_gnullvm@0.53.1", reason = "transitive Windows-only target package differs across rustls/crossterm stacks" },
+  { crate = "windows_x86_64_msvc@0.53.1", reason = "transitive Windows-only target package differs across rustls/crossterm stacks" },
 ]
 skip-tree = []
 

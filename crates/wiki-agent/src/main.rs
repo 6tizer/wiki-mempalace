@@ -15,6 +15,7 @@ mod session_store;
 mod slash;
 mod task;
 mod tool_backend;
+mod tui;
 mod web_tool;
 mod worker;
 mod worker_tools;
@@ -66,6 +67,27 @@ enum Command {
         session: Option<String>,
         #[arg(long, default_value_t = false)]
         tui: bool,
+        #[arg(long, hide = true)]
+        fake_llm_response: Option<String>,
+        #[arg(long, hide = true)]
+        web_evidence_json: Option<PathBuf>,
+    },
+    /// Start the terminal UI chat.
+    Tui {
+        /// Optional startup prompt. If omitted, starts an interactive TUI.
+        prompt: Vec<String>,
+        #[arg(long, default_value = "agent_manager")]
+        profile: String,
+        #[arg(long, value_enum, default_value_t = ToolBackendKind::Native)]
+        tool_backend: ToolBackendKind,
+        #[arg(long, value_enum, default_value_t = WebMode::Auto)]
+        web: WebMode,
+        #[arg(long, value_delimiter = ',')]
+        web_providers: Vec<String>,
+        #[arg(long, default_value_t = false)]
+        allow_private_web_search: bool,
+        #[arg(long)]
+        session: Option<String>,
         #[arg(long, hide = true)]
         fake_llm_response: Option<String>,
         #[arg(long, hide = true)]
@@ -176,15 +198,46 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             fake_llm_response,
             web_evidence_json,
         } => {
-            if tui {
-                eprintln!("wiki-agent tui is not implemented in PR3; falling back to CLI chat.");
-            }
             let input = if prompt.is_empty() {
                 None
             } else {
                 Some(prompt.join(" "))
             };
-            chat::run(chat::ChatOptions {
+            let options = chat::ChatOptions {
+                config,
+                profile,
+                tool_backend,
+                web,
+                web_providers,
+                allow_private_web_search,
+                session_id: session,
+                one_shot_prompt: input,
+                fake_llm_response,
+                web_evidence_json,
+            };
+            if tui {
+                tui::run(options)?;
+            } else {
+                chat::run(options)?;
+            }
+        }
+        Command::Tui {
+            prompt,
+            profile,
+            tool_backend,
+            web,
+            web_providers,
+            allow_private_web_search,
+            session,
+            fake_llm_response,
+            web_evidence_json,
+        } => {
+            let input = if prompt.is_empty() {
+                None
+            } else {
+                Some(prompt.join(" "))
+            };
+            tui::run(chat::ChatOptions {
                 config,
                 profile,
                 tool_backend,
