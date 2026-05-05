@@ -3,6 +3,11 @@
 统一 MCP server 通过 stdio JSON-RPC 暴露 wiki 与 mempalace 工具。本文描述
 `cargo run -p wiki-cli -- ... mcp` 入口的当前合同。
 
+实现说明：22 个工具的 handler 只实现一份，位于 `wiki-tools::ToolRegistry`。
+`wiki-cli mcp` 是 JSON-RPC adapter；`wiki-agent` 默认直接 native 调用同一份
+ToolRegistry。`rmcp` child-process 只作为 `wiki-agent --tool-backend mcp-child`
+兼容 fallback。
+
 启动示例：
 
 ```bash
@@ -36,6 +41,8 @@ cargo run -p wiki-cli -- \
 - Governance/Fixer/Synthesis automation is CLI-only in this version. MCP does
   not expose `fixer-apply` or `research-synthesis run` because those are batch
   jobs with reports, writer lease semantics, and optional web/LLM calls.
+- `wiki-agent` can wrap Lint/Governance/Fixer/Synthesis as native workers, but
+  this does not add new MCP tools or change the MCP schema.
 
 ## Wiki Tools
 

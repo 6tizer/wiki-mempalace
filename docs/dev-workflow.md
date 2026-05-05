@@ -110,6 +110,29 @@ wiki-cli ... automation run synthesis-run
 
 这些命令仍遵守 DB-first：写入只进 `wiki.db`，再投影 Vault / Mempalace。
 
+## wiki-agent Workflow
+
+`wiki-agent` 是本地交互入口；默认用 native Rust direct-call 调用
+`wiki-tools::ToolRegistry`，不启动 MCP 子进程。
+
+常用入口：
+
+```bash
+wiki-agent ... chat --profile agent_manager
+wiki-agent ... tui --profile agent_manager
+wiki-agent ... agent run --task governance "scan current wiki"
+wiki-agent ... memory status
+```
+
+规则：
+
+- `wiki-agent` 写入仍以 `wiki.db` 为真源；Vault / `palace.db` 仍是投影。
+- `--tool-backend native` 是默认值；`mcp-child` 只用于兼容外部 MCP server。
+- Lint / Governance / Fixer / Synthesis worker 默认调用 Rust core 或
+  ToolRegistry，不通过 MCP 子进程。
+- raw chat transcript 存 `.wiki/wiki-agent.db`；只有 verifier 通过的 memory /
+  skill 写入 `wiki.db`。
+
 ## Plain Architecture Dialogue
 
 PRD 之后先做白话架构对话，不直接写技术 spec。

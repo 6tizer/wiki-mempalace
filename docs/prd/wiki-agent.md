@@ -33,7 +33,7 @@ This batch is split into eight PRs:
 5. Manager-worker sub agents. Merged PR #117.
 6. Persistent memory + skill loop. Merged PR #118.
 7. TUI. Merged PR #119.
-8. Docs and E2E.
+8. Docs and E2E. In local implementation.
 
 ## Non-Goals
 
