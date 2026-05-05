@@ -3,6 +3,7 @@
 ## Scope
 
 Branch: `codex/wiki-agent-web-rag`.
+PR: #116.
 
 Implemented PR4 of the wiki-agent batch:
 
