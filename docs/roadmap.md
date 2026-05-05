@@ -106,8 +106,8 @@ PRD：[wiki-agent.md](prd/wiki-agent.md)。
 | --- | --- | --- | --- | --- |
 | 1 | Shared AI core | Merged PR #113 | 抽出 `wiki-ai`，共享 LLM profile / embedding / web search runtime | `codex/wiki-agent-shared-ai-core` |
 | 2 | Native ToolRegistry + MCP adapter | Merged PR #114 | 新增 `wiki-tools`；`wiki-cli mcp` 转调共享实现；新增 `wiki-agent doctor` native / mcp-child discovery | `codex/wiki-agent-native-tool-registry` |
-| 3 | Pure CLI chat | 本地完成，待 PR | `wiki-agent chat` REPL、profile、slash commands、session history | `codex/wiki-agent-cli-chat` |
-| 4 | Local + Web RAG | 待做 | 本地 wiki/palace 检索 + Exa/xAI web evidence 综合回答 | `codex/wiki-agent-web-rag` |
+| 3 | Pure CLI chat | Merged PR #115 | `wiki-agent chat` REPL、profile、slash commands、session history | `codex/wiki-agent-cli-chat` |
+| 4 | Local + Web RAG | 本地完成，待 PR | 本地 wiki/palace 检索 + Exa/xAI web evidence 综合回答 | `codex/wiki-agent-web-rag` |
 | 5 | Manager-worker sub agents | 待做 | Lint/Governance/Fixer/Synthesis/Search/Memory workers | `codex/wiki-agent-manager-workers` |
 | 6 | Persistent memory + skills | 待做 | `.wiki/wiki-agent.db` 会话记忆，验证后写入 `wiki.db`/`palace.db` | `codex/wiki-agent-memory-skills` |
 | 7 | TUI | 待做 | ratatui + crossterm 分屏、状态栏、流式输出、键盘导航 | `codex/wiki-agent-tui` |

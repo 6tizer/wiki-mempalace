@@ -28,8 +28,8 @@ This batch is split into eight PRs:
 
 1. Shared AI core. Merged PR #113.
 2. Native ToolRegistry plus MCP adapter. Merged PR #114.
-3. CLI chat. In local implementation.
-4. Local + web RAG answering.
+3. CLI chat. Merged PR #115.
+4. Local + web RAG answering. In local implementation.
 5. Manager-worker sub agents.
 6. Persistent memory + skill loop.
 7. TUI.
