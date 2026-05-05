@@ -1,6 +1,12 @@
+mod chat;
 mod config;
 mod doctor;
+mod events;
+mod llm_adapter;
 mod mcp_fallback;
+mod render_cli;
+mod session_store;
+mod slash;
 mod tool_backend;
 
 use clap::{Parser, Subcommand};
@@ -30,6 +36,21 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Command {
+    /// Start pure CLI chat.
+    Chat {
+        /// Optional one-shot prompt. If omitted, starts an interactive REPL.
+        prompt: Vec<String>,
+        #[arg(long, default_value = "agent_manager")]
+        profile: String,
+        #[arg(long, value_enum, default_value_t = ToolBackendKind::Native)]
+        tool_backend: ToolBackendKind,
+        #[arg(long)]
+        session: Option<String>,
+        #[arg(long, default_value_t = false)]
+        tui: bool,
+        #[arg(long, hide = true)]
+        fake_llm_response: Option<String>,
+    },
     /// Inspect agent runtime and tool backend availability.
     Doctor {
         #[arg(long, value_enum, default_value_t = ToolBackendKind::Native)]
@@ -38,6 +59,17 @@ enum Command {
         #[arg(long)]
         wiki_cli: Option<PathBuf>,
     },
+    /// Inspect saved chat sessions.
+    Session {
+        #[command(subcommand)]
+        command: SessionCommand,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum SessionCommand {
+    List,
+    Show { session_id: String },
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -52,12 +84,46 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     match cli.command {
+        Command::Chat {
+            prompt,
+            profile,
+            tool_backend,
+            session,
+            tui,
+            fake_llm_response,
+        } => {
+            if tui {
+                eprintln!("wiki-agent tui is not implemented in PR3; falling back to CLI chat.");
+            }
+            let input = if prompt.is_empty() {
+                None
+            } else {
+                Some(prompt.join(" "))
+            };
+            chat::run(chat::ChatOptions {
+                config,
+                profile,
+                tool_backend,
+                session_id: session,
+                one_shot_prompt: input,
+                fake_llm_response,
+            })?;
+        }
         Command::Doctor {
             tool_backend,
             wiki_cli,
         } => {
             let report = doctor::run(&config, tool_backend, wiki_cli.as_deref())?;
             print!("{report}");
+        }
+        Command::Session { command } => {
+            let store = session_store::SessionStore::open(config.session_db_path())?;
+            match command {
+                SessionCommand::List => print!("{}", store.render_list()?),
+                SessionCommand::Show { session_id } => {
+                    print!("{}", store.render_session(&session_id)?)
+                }
+            }
         }
     }
     Ok(())
