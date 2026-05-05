@@ -13,4 +13,5 @@
 - [x] Add tests.
 - [x] Run PR6 gate.
 - [x] Self-review.
-- [ ] Open PR and merge after CI.
+- [x] Open PR #118.
+- [ ] Merge after CI.

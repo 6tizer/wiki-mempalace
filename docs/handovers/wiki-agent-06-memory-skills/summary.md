@@ -3,6 +3,7 @@
 ## Scope
 
 Branch: `codex/wiki-agent-memory-skills`.
+PR: [#118](https://github.com/6tizer/wiki-mempalace/pull/118).
 
 Implemented:
 
