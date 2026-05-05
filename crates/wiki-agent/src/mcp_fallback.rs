@@ -25,6 +25,49 @@ pub fn discover_child_tools(
     config: &AgentConfig,
     wiki_cli_override: Option<&Path>,
 ) -> Result<DiscoveredTools, McpFallbackError> {
+    let response = call_child_method(config, wiki_cli_override, "tools/list", json!({}))?;
+    let raw = response
+        .get("result")
+        .cloned()
+        .ok_or_else(|| McpFallbackError::InvalidResponse("missing result".to_string()))?;
+    let tools = raw
+        .get("tools")
+        .and_then(Value::as_array)
+        .ok_or_else(|| McpFallbackError::InvalidResponse("missing result.tools".to_string()))?
+        .iter()
+        .filter_map(|tool| tool.get("name").and_then(Value::as_str))
+        .map(ToString::to_string)
+        .collect::<Vec<_>>();
+    Ok(DiscoveredTools {
+        backend: "mcp-child",
+        tools,
+    })
+}
+
+pub fn call_child_tool(
+    config: &AgentConfig,
+    wiki_cli_override: Option<&Path>,
+    tool_name: &str,
+    arguments: Value,
+) -> Result<Value, McpFallbackError> {
+    let response = call_child_method(
+        config,
+        wiki_cli_override,
+        "tools/call",
+        json!({"name": tool_name, "arguments": arguments}),
+    )?;
+    response
+        .get("result")
+        .cloned()
+        .ok_or_else(|| McpFallbackError::InvalidResponse("missing result".to_string()))
+}
+
+fn call_child_method(
+    config: &AgentConfig,
+    wiki_cli_override: Option<&Path>,
+    method: &str,
+    params: Value,
+) -> Result<Value, McpFallbackError> {
     let wiki_cli = wiki_cli_override
         .map(Path::to_path_buf)
         .unwrap_or_else(default_wiki_cli_path);
@@ -59,8 +102,8 @@ pub fn discover_child_tools(
     let request = json!({
         "jsonrpc": "2.0",
         "id": 1,
-        "method": "tools/list",
-        "params": {}
+        "method": method,
+        "params": params
     });
     if let Some(stdin) = child.stdin.as_mut() {
         writeln!(stdin, "{request}").map_err(McpFallbackError::Write)?;
@@ -83,22 +126,7 @@ pub fn discover_child_tools(
     if let Some(error) = response.get("error") {
         return Err(McpFallbackError::InvalidResponse(error.to_string()));
     }
-    let raw = response
-        .get("result")
-        .cloned()
-        .ok_or_else(|| McpFallbackError::InvalidResponse("missing result".to_string()))?;
-    let tools = raw
-        .get("tools")
-        .and_then(Value::as_array)
-        .ok_or_else(|| McpFallbackError::InvalidResponse("missing result.tools".to_string()))?
-        .iter()
-        .filter_map(|tool| tool.get("name").and_then(Value::as_str))
-        .map(ToString::to_string)
-        .collect::<Vec<_>>();
-    Ok(DiscoveredTools {
-        backend: "mcp-child",
-        tools,
-    })
+    Ok(response)
 }
 
 fn default_wiki_cli_path() -> PathBuf {
