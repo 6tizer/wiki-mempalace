@@ -42,6 +42,14 @@
 - Tests or reviews that caught issues: `wiki-agent doctor` native/mcp-child smoke both found 22 tools; workspace test and clippy passed after the wrapper cleanup.
 - Next plan note: PR3 can build the chat REPL on top of `ToolRegistry` instead of spawning MCP by default.
 
+## 2026-05-05 / wiki-agent PR3 CLI Chat
+
+- Scope: Add first pure CLI chat surface, slash commands, fake LLM tests, and SQLite-backed session history.
+- What worked: Keeping real LLM behind `ChatModel` and using a hidden fake response flag made chat/session behavior testable without provider keys.
+- What caused rework: REPL prompts must be printed before `read_line`; iterator-based stdin reading prints prompts too late for a terminal chat.
+- Tests or reviews that caught issues: focused `wiki-agent` tests cover one-shot chat, session list, `/tools`, and `/profile`; clippy caught needless borrowing in the REPL path.
+- Next plan note: PR4 should add real local/wiki + web evidence routing without changing the session DB contract.
+
 ## 2026-04-30 / AI Provider Profiles
 
 - Scope: PR1 of Wiki Governance + Evidence Fixer + Multi-provider Synthesis v3; task-level LLM profiles and Exa/Tavily web search evidence runtime. A later xAI follow-up changes the checked-in default pair while keeping Tavily legacy-compatible.

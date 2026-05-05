@@ -9,3 +9,15 @@ pub struct AgentConfig {
     pub vectors: bool,
     pub palace: Option<PathBuf>,
 }
+
+impl AgentConfig {
+    pub fn session_db_path(&self) -> PathBuf {
+        if let Some(wiki_dir) = &self.wiki_dir {
+            return wiki_dir.join(".wiki").join("wiki-agent.db");
+        }
+        self.db
+            .parent()
+            .map(|parent| parent.join("wiki-agent.db"))
+            .unwrap_or_else(|| PathBuf::from("wiki-agent.db"))
+    }
+}
