@@ -50,6 +50,14 @@
 - Tests or reviews that caught issues: focused `wiki-agent` tests cover one-shot chat, session list, `/tools`, and `/profile`; clippy caught needless borrowing in the REPL path.
 - Next plan note: PR4 should add real local/wiki + web evidence routing without changing the session DB contract.
 
+## 2026-05-05 / wiki-agent PR7 TUI
+
+- Scope: Add `wiki-agent tui` and `wiki-agent chat --tui` with ratatui/crossterm panels, status line, keyboard navigation, history, and non-TTY fallback.
+- What worked: Sharing `ChatRuntime` kept CLI and TUI on the same evidence/session/memory path instead of creating a second chat implementation.
+- What caused rework: New TUI dependencies tripped `cargo deny`; `ratatui` needs a narrow feature set and `ratatui-crossterm` should stay on the `crossterm_0_28` feature for this workspace.
+- Tests or reviews that caught issues: TUI state tests covered panel switching, scroll, history, interrupt, resize drawing, and non-TTY fallback; self-review caught terminal cleanup on failed TUI startup.
+- Next plan note: PR8 should update user-facing docs and E2E around `wiki-agent` native chat/TUI/memory rather than changing runtime behavior.
+
 ## 2026-05-05 / wiki-agent PR4 Web RAG
 
 - Scope: Add internal wiki evidence collection and policy-gated Exa/xAI web evidence for CLI chat.

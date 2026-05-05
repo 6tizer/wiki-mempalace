@@ -10,5 +10,5 @@
 - [x] Add TUI state/fallback tests.
 - [x] Run PR7 gate.
 - [x] Self-review.
-- [ ] Open PR.
-- [ ] Merge after CI.
+- [x] Open PR #119.
+- [x] Merge after CI.
