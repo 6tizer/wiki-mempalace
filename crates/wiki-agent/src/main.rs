@@ -7,6 +7,7 @@ mod evidence;
 mod llm_adapter;
 mod manager;
 mod mcp_fallback;
+mod memory;
 mod planner;
 mod render_cli;
 mod roles;
@@ -88,6 +89,11 @@ enum Command {
         #[command(subcommand)]
         command: AgentCommand,
     },
+    /// Inspect or curate durable agent memory.
+    Memory {
+        #[command(subcommand)]
+        command: MemoryCommand,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -122,6 +128,27 @@ enum AgentCommand {
         wiki_cli: Option<PathBuf>,
         #[arg(long, hide = true)]
         web_evidence_json: Option<PathBuf>,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum MemoryCommand {
+    Curate {
+        #[arg(long)]
+        session: Option<String>,
+        #[arg(long, default_value_t = false)]
+        apply: bool,
+        #[arg(long, default_value_t = false)]
+        json: bool,
+    },
+    Status {
+        #[arg(long, default_value_t = false)]
+        json: bool,
+    },
+    Search {
+        query: Vec<String>,
+        #[arg(long, default_value_t = false)]
+        json: bool,
     },
 }
 
@@ -214,6 +241,61 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     web_evidence_json,
                 };
                 let report = worker::WorkerRuntime::new(&config, options).execute(&task);
+                if json {
+                    println!("{}", serde_json::to_string_pretty(&report)?);
+                } else {
+                    print!("{}", report.render_text());
+                }
+            }
+        },
+        Command::Memory { command } => match command {
+            MemoryCommand::Curate {
+                session,
+                apply,
+                json,
+            } => {
+                let store = session_store::SessionStore::open(config.session_db_path())?;
+                let session_id = match session {
+                    Some(id) => id,
+                    None => {
+                        store
+                            .list_sessions()?
+                            .into_iter()
+                            .next()
+                            .ok_or("no sessions available for memory curation")?
+                            .id
+                    }
+                };
+                let report = memory::curate_session(&config, &store, &session_id, apply)?;
+                if json {
+                    println!("{}", serde_json::to_string_pretty(&report)?);
+                } else {
+                    print!("{}", report.render_text());
+                }
+            }
+            MemoryCommand::Status { json } => {
+                let report = memory::memory_status(&config)?;
+                if json {
+                    println!("{}", serde_json::to_string_pretty(&report)?);
+                } else {
+                    print!("{}", report.render_text());
+                }
+            }
+            MemoryCommand::Search { query, json } => {
+                let goal = query.join(" ");
+                let task = manager::Manager.plan(&goal, Some(WorkerRole::Search), false);
+                let report = worker::WorkerRuntime::new(
+                    &config,
+                    worker::WorkerRuntimeOptions {
+                        backend: ToolBackendKind::Native,
+                        web: WebMode::Off,
+                        web_providers: Vec::new(),
+                        allow_private_web_search: false,
+                        wiki_cli: None,
+                        web_evidence_json: None,
+                    },
+                )
+                .execute(&task);
                 if json {
                     println!("{}", serde_json::to_string_pretty(&report)?);
                 } else {

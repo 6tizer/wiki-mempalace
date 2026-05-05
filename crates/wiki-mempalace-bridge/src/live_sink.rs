@@ -178,6 +178,7 @@ fn is_palace_eligible_page(entry_type: Option<&EntryType>) -> bool {
                 | EntryType::Entity
                 | EntryType::Synthesis
                 | EntryType::Qa
+                | EntryType::Skill
         )
     )
 }

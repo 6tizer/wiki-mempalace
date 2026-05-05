@@ -52,6 +52,25 @@ fn page_written_creates_drawer_and_rerun_does_not_duplicate() {
 }
 
 #[test]
+fn skill_page_written_creates_drawer() {
+    let path = temp_db_path("skill-page-written");
+    let sink = LiveMempalaceSink::open(&path, "wiki").unwrap();
+    let mut page = WikiPage::new(
+        "Skill Page",
+        "## 触发条件\n需要复用操作技能",
+        Scope::Shared {
+            team_id: "wiki".into(),
+        },
+    );
+    page.entry_type = Some(EntryType::Skill);
+
+    sink.on_page_written(&page).unwrap();
+
+    assert_eq!(count_drawers(&path), 1);
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
 fn same_page_content_can_exist_in_different_banks() {
     let path = temp_db_path("cross-bank-page-written");
     let sink_a = LiveMempalaceSink::open(&path, "bank_a").unwrap();

@@ -13,6 +13,7 @@
 | `pages/entity/`       | `entry_type: entity`。                                                       |
 | `pages/synthesis/`    | `entry_type: synthesis`。                                                    |
 | `pages/qa/`           | `entry_type: qa`。                                                           |
+| `pages/skill/`        | `entry_type: skill`，可复用的操作技能。                                      |
 | `pages/index/`        | `entry_type: index`。                                                        |
 | `pages/lint-report/`  | `entry_type: lint_report`。                                                  |
 | `pages/_unspecified/` | 引擎投影时 `entry_type` 为空的页面（应避免长期停留）。                                          |
@@ -138,6 +139,19 @@ Wiki Compiler 产出的重要概念和实体必须成为可见页面，而不是
 - 每个关键发现必须有内部 page/source evidence 或外部 evidence 支撑。
 - 外部 evidence 必须能追溯到 provider、url、domain、retrieved_at 和 content_hash。
 - Synthesis 只能通过 `wiki.db` 写入；不要手工在 `pages/synthesis/` 下新建投影页来绕过 verifier。
+
+## Skill 页面契约
+
+`pages/skill/*.md`：
+
+- `entry_type: skill`
+- 固定包含：
+  - `## 触发条件`
+  - `## 操作步骤`
+  - `## 输入输出`
+  - `## 验证方式`
+  - `## 失败处理`
+- 只通过 verified memory/skill curator 写入；不要把普通聊天原文直接当 skill。
 
 ---
 

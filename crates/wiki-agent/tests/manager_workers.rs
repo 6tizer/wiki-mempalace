@@ -79,7 +79,7 @@ fn agent_run_search_is_read_only_when_writer_lease_is_busy() {
 }
 
 #[test]
-fn memory_curator_is_routed_but_blocked_until_pr6() {
+fn memory_curator_is_routed_and_blocks_without_sessions() {
     let tmp = tempdir().expect("tempdir");
     let db_dir = tmp.path().join(".wiki");
     std::fs::create_dir_all(&db_dir).expect("create db dir");
@@ -98,9 +98,7 @@ fn memory_curator_is_routed_but_blocked_until_pr6() {
             "\"role_name\": \"memory_curator\"",
         ))
         .stdout(predicate::str::contains("\"status\": \"blocked\""))
-        .stdout(predicate::str::contains(
-            "memory curator writes durable memory in PR6",
-        ));
+        .stdout(predicate::str::contains("no sessions available"));
 }
 
 #[test]

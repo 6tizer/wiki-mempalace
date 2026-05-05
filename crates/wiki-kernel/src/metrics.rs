@@ -144,6 +144,7 @@ fn collect_lifecycle_metrics(
         EntryType::Qa,
         EntryType::LintReport,
         EntryType::Index,
+        EntryType::Skill,
     ] {
         lifecycle.add_entry_type(
             entry_type.clone(),

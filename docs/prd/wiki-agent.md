@@ -30,8 +30,8 @@ This batch is split into eight PRs:
 2. Native ToolRegistry plus MCP adapter. Merged PR #114.
 3. CLI chat. Merged PR #115.
 4. Local + web RAG answering. Merged PR #116.
-5. Manager-worker sub agents. PR #117.
-6. Persistent memory + skill loop.
+5. Manager-worker sub agents. Merged PR #117.
+6. Persistent memory + skill loop. In local implementation.
 7. TUI.
 8. Docs and E2E.
 

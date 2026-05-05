@@ -248,6 +248,7 @@ fn bucket_of(p: &RawPage) -> String {
                 Ok(wiki_core::schema::EntryType::Qa) => "qa",
                 Ok(wiki_core::schema::EntryType::LintReport) => "lint-report",
                 Ok(wiki_core::schema::EntryType::Index) => "index",
+                Ok(wiki_core::schema::EntryType::Skill) => "skill",
                 // 未识别类型（`None` 等）统一归 index（用户确认的默认方案）
                 Err(_) => "index",
             };

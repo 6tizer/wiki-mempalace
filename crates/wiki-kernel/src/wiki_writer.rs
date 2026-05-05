@@ -566,6 +566,7 @@ fn entry_type_str(t: &wiki_core::EntryType) -> &'static str {
         wiki_core::EntryType::Qa => "qa",
         wiki_core::EntryType::LintReport => "lint_report",
         wiki_core::EntryType::Index => "index",
+        wiki_core::EntryType::Skill => "skill",
     }
 }
 
@@ -587,6 +588,7 @@ fn page_subdir_for_entry_type(et: Option<&wiki_core::EntryType>) -> &'static str
         Some(wiki_core::EntryType::Qa) => "qa",
         Some(wiki_core::EntryType::LintReport) => "lint-report",
         Some(wiki_core::EntryType::Index) => "index",
+        Some(wiki_core::EntryType::Skill) => "skill",
         None => "_unspecified",
     }
 }
