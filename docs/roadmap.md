@@ -109,7 +109,7 @@ PRD：[wiki-agent.md](prd/wiki-agent.md)。
 | 3 | Pure CLI chat | Merged PR #115 | `wiki-agent chat` REPL、profile、slash commands、session history | `codex/wiki-agent-cli-chat` |
 | 4 | Local + Web RAG | Merged PR #116 | 本地 wiki/palace 检索 + Exa/xAI web evidence 综合回答 | `codex/wiki-agent-web-rag` |
 | 5 | Manager-worker sub agents | Merged PR #117 | Lint/Governance/Fixer/Synthesis/Search/Memory workers | `codex/wiki-agent-manager-workers` |
-| 6 | Persistent memory + skills | PR #118 open | `.wiki/wiki-agent.db` 会话记忆，验证后写入 `wiki.db`/`palace.db` | `codex/wiki-agent-memory-skills` |
+| 6 | Persistent memory + skills | Merged PR #118 | `.wiki/wiki-agent.db` 会话记忆，验证后写入 `wiki.db`/`palace.db` | `codex/wiki-agent-memory-skills` |
 | 7 | TUI | 待做 | ratatui + crossterm 分屏、状态栏、流式输出、键盘导航 | `codex/wiki-agent-tui` |
 | 8 | Docs + E2E | 待做 | README、架构、MCP/API 对照、Notion 能力矩阵、端到端 smoke | `codex/wiki-agent-docs-e2e` |
 

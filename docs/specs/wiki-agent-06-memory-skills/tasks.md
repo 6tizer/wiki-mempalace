@@ -14,4 +14,4 @@
 - [x] Run PR6 gate.
 - [x] Self-review.
 - [x] Open PR #118.
-- [ ] Merge after CI.
+- [x] Merge after CI.

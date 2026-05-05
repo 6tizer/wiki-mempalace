@@ -622,3 +622,12 @@
 - Spec changes needed: 全量重导入流程要明确“验证用 staging”和“替换用 clean final”分开，query/lint smoke 会产生运行痕迹，不能直接拿 smoke 后 DB 当生产初始包。
 - Tests or reviews that caught issues: `cargo test -p wiki-migration-notion`、`cargo test -p wiki-cli --test vault_backfill`、`cargo clippy --workspace --all-targets -- -D warnings`、staging/production consistency audit。
 - Next plan note: PR #110 已合入；生产旧目录和备份均保留，可按整目录恢复。
+
+## 2026-05-05 / wiki-agent Persistent Memory + Skills
+
+- Scope: 新增 `EntryType::Skill`、`pages/skill/` 投影、Skill palace eligibility，以及 `wiki-agent memory curate|status|search`。
+- What worked: 只从显式 `记住:` / `remember:` / `技能:` / `skill:` 行提取长期记忆，避免把普通聊天误写进 `wiki.db`。
+- What caused rework: dry-run 初版把候选计入 `written`，且为了查重会打开并创建缺失的 wiki DB；修正为 `would_write`，DB 不存在时 dry-run 不创建。
+- Spec changes needed: 持久记忆必须区分 raw session transcript 和 verified durable page；raw transcript 留在 `.wiki/wiki-agent.db`，只有验证后的 memory/skill 才写入 `wiki.db`。
+- Tests or reviews that caught issues: `cargo test -p wiki-agent` 覆盖 chat close、unsafe rejection、duplicate guard、status；`cargo test -p wiki-cli --test vault_backfill` 覆盖 `pages/skill/` 回读；bridge live sink 测试覆盖 Skill page 进入 palace。
+- Next plan note: PR #118 合入后进入 PR7 TUI；TUI 只能复用同一 agent runtime 和 ToolRegistry，不直接绕过 memory/write policy。

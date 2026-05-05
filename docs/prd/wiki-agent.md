@@ -31,7 +31,7 @@ This batch is split into eight PRs:
 3. CLI chat. Merged PR #115.
 4. Local + web RAG answering. Merged PR #116.
 5. Manager-worker sub agents. Merged PR #117.
-6. Persistent memory + skill loop. PR #118 open.
+6. Persistent memory + skill loop. Merged PR #118.
 7. TUI.
 8. Docs and E2E.
 
