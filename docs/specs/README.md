@@ -17,6 +17,7 @@
 - [wiki-agent-01-shared-ai-core/](wiki-agent-01-shared-ai-core/) — PR1 for `wiki-agent`: extract reusable LLM profile, embedding, and web search runtime into `wiki-ai`.
 - [wiki-agent-02-native-tool-registry/](wiki-agent-02-native-tool-registry/) — PR2 for `wiki-agent`: shared native ToolRegistry plus MCP compatibility adapter.
 - [wiki-agent-03-cli-chat/](wiki-agent-03-cli-chat/) — PR3 for `wiki-agent`: pure CLI chat, slash commands, and session history.
+- [wiki-agent-04-web-rag/](wiki-agent-04-web-rag/) — PR4 for `wiki-agent`: internal wiki evidence plus Exa/xAI web evidence routing.
 - [notion-full-reimport-20260505/](notion-full-reimport-20260505/) — Full rebuild import from the three latest Notion ZIP exports; scanner filtering, collision-safe writer, metadata-preserving vault backfill, staging/production replacement. Merged PR #110.
 - [ai-provider-profiles/](ai-provider-profiles/) — PR1 for Wiki Governance + Evidence Fixer + Multi-provider Synthesis v3: LLM profile resolver plus Exa/xAI web search runtime. Merged PR #101; xAI follow-up merged PR #108.
 - [xai-web-search-provider/](xai-web-search-provider/) — Follow-up: default dual web search moved from Exa/Tavily to Exa/xAI, with Tavily retained for old configs. Merged PR #108.

@@ -1,18 +1,31 @@
+use crate::answer;
 use crate::config::AgentConfig;
+use crate::evidence::{EvidencePack, InternalEvidence};
 use crate::llm_adapter::{ChatModel, FakeChatModel, WikiAiChatModel};
+use crate::planner::{self, WebMode};
 use crate::render_cli;
 use crate::session_store::SessionStore;
 use crate::slash::{self, SlashCommand};
 use crate::tool_backend::{discover_native_tools, ToolBackendKind};
+use serde_json::json;
 use std::io::{self, BufRead, Write};
+use std::path::PathBuf;
+use wiki_core::DomainSchema;
+use wiki_kernel::{LlmWikiEngine, NoopWikiHook};
+use wiki_storage::SqliteRepository;
+use wiki_tools::{ToolContext, ToolRegistry};
 
 pub struct ChatOptions {
     pub config: AgentConfig,
     pub profile: String,
     pub tool_backend: ToolBackendKind,
+    pub web: WebMode,
+    pub web_providers: Vec<String>,
+    pub allow_private_web_search: bool,
     pub session_id: Option<String>,
     pub one_shot_prompt: Option<String>,
     pub fake_llm_response: Option<String>,
+    pub web_evidence_json: Option<PathBuf>,
 }
 
 pub fn run(options: ChatOptions) -> Result<(), Box<dyn std::error::Error>> {
@@ -23,6 +36,10 @@ pub fn run(options: ChatOptions) -> Result<(), Box<dyn std::error::Error>> {
         config: options.config,
         profile: options.profile,
         tool_backend: options.tool_backend,
+        web: options.web,
+        web_providers: options.web_providers,
+        allow_private_web_search: options.allow_private_web_search,
+        web_evidence_json: options.web_evidence_json,
         session_id,
         store,
     };
@@ -56,6 +73,10 @@ struct ChatRuntime {
     config: AgentConfig,
     profile: String,
     tool_backend: ToolBackendKind,
+    web: WebMode,
+    web_providers: Vec<String>,
+    allow_private_web_search: bool,
+    web_evidence_json: Option<PathBuf>,
     session_id: String,
     store: SessionStore,
 }
@@ -85,10 +106,12 @@ impl ChatRuntime {
                 render_cli::render_system_line(&format!("profile={}", self.profile));
             }
             SlashCommand::Web(mode) => {
-                render_cli::render_system_line(&format!(
-                    "web={}",
-                    mode.as_deref().unwrap_or("auto")
-                ));
+                if let Some(mode) = mode {
+                    if let Ok(parsed) = mode.parse::<WebMode>() {
+                        self.web = parsed;
+                    }
+                }
+                render_cli::render_system_line(&format!("web={}", self.web));
             }
             SlashCommand::Memory => {
                 render_cli::render_system_line("memory=session-store; durable memory lands in PR6");
@@ -108,8 +131,11 @@ impl ChatRuntime {
         model: &dyn ChatModel,
     ) -> Result<(), Box<dyn std::error::Error>> {
         self.store.add_message(&self.session_id, "user", prompt)?;
+        let evidence = self.collect_evidence(prompt)?;
+        render_cli::render_system_line(&evidence.render());
         let system = system_prompt(&self.profile, self.tool_backend);
-        let answer = model.complete(&system, prompt)?;
+        let user_prompt = answer::build_user_prompt(prompt, &evidence);
+        let answer = model.complete(&system, &user_prompt)?;
         self.store
             .add_message(&self.session_id, "assistant", &answer)?;
         render_cli::render_assistant_message(&answer)?;
@@ -126,6 +152,80 @@ impl ChatRuntime {
         for name in discovered.tools {
             render_cli::render_system_line(&format!("- {name}"));
         }
+    }
+
+    fn collect_evidence(&self, prompt: &str) -> Result<EvidencePack, Box<dyn std::error::Error>> {
+        let internal = self.collect_internal_evidence(prompt)?;
+        let mut pack = EvidencePack::new(internal);
+        if !planner::should_use_web(prompt, self.web) {
+            pack.web_status = Some("off".to_string());
+            return Ok(pack);
+        }
+        if planner::private_scope_blocks_web(
+            &self.config.viewer_scope,
+            self.allow_private_web_search,
+        ) {
+            pack.web_status = Some("blocked: private scope".to_string());
+            return Ok(pack);
+        }
+        let web = crate::web_tool::run_web_search(
+            &self.config,
+            prompt,
+            &self.web_providers,
+            self.web_evidence_json.as_deref(),
+        )?;
+        if !web.cross_verified {
+            return Err(format!(
+                "web search evidence is not cross-verified: providers={} domains={}",
+                web.providers_succeeded.len(),
+                web.distinct_domains
+            )
+            .into());
+        }
+        pack.web = Some(web);
+        Ok(pack)
+    }
+
+    fn collect_internal_evidence(
+        &self,
+        prompt: &str,
+    ) -> Result<Vec<InternalEvidence>, Box<dyn std::error::Error>> {
+        let repo = SqliteRepository::open(&self.config.db)?;
+        let schema = DomainSchema::permissive_default();
+        let mut eng = LlmWikiEngine::load_from_repo(schema, &repo, NoopWikiHook)?;
+        let viewer = wiki_tools::parse_scope(&self.config.viewer_scope);
+        let palace = self
+            .config
+            .palace
+            .as_ref()
+            .map(|path| path.to_string_lossy().to_string());
+        let registry = ToolRegistry;
+        let value = registry.call(
+            "wiki_query",
+            json!({"query": prompt, "per_stream_limit": 5}),
+            ToolContext {
+                eng: &mut eng,
+                repo: &repo,
+                viewer: &viewer,
+                llm_config_path: &self.config.llm_config,
+                vectors: self.config.vectors,
+                wiki_dir: None,
+                palace_path: palace.as_deref(),
+            },
+        )?;
+        let out = value
+            .get("results")
+            .and_then(serde_json::Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(|item| {
+                Some(InternalEvidence {
+                    doc_id: item.get("doc_id")?.as_str()?.to_string(),
+                    score: item.get("score")?.as_f64().unwrap_or_default(),
+                })
+            })
+            .collect();
+        Ok(out)
     }
 }
 

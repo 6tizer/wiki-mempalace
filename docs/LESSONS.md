@@ -50,6 +50,14 @@
 - Tests or reviews that caught issues: focused `wiki-agent` tests cover one-shot chat, session list, `/tools`, and `/profile`; clippy caught needless borrowing in the REPL path.
 - Next plan note: PR4 should add real local/wiki + web evidence routing without changing the session DB contract.
 
+## 2026-05-05 / wiki-agent PR4 Web RAG
+
+- Scope: Add internal wiki evidence collection and policy-gated Exa/xAI web evidence for CLI chat.
+- What worked: Reusing native `wiki_query` kept agent retrieval aligned with MCP/query behavior and avoided a second retrieval implementation.
+- Pitfall avoided: Private scope must block before even fake web evidence is read; tests should prove no private query leaves the boundary.
+- Tests or reviews that caught issues: focused chat tests cover `--web off`, shared `--web always`, and private-scope blocking.
+- Next plan note: PR5 can move this evidence collector behind a search worker and add manager-worker routing.
+
 ## 2026-04-30 / AI Provider Profiles
 
 - Scope: PR1 of Wiki Governance + Evidence Fixer + Multi-provider Synthesis v3; task-level LLM profiles and Exa/Tavily web search evidence runtime. A later xAI follow-up changes the checked-in default pair while keeping Tavily legacy-compatible.

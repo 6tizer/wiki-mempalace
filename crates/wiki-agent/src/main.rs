@@ -1,16 +1,21 @@
+mod answer;
 mod chat;
 mod config;
 mod doctor;
 mod events;
+mod evidence;
 mod llm_adapter;
 mod mcp_fallback;
+mod planner;
 mod render_cli;
 mod session_store;
 mod slash;
 mod tool_backend;
+mod web_tool;
 
 use clap::{Parser, Subcommand};
 use config::AgentConfig;
+use planner::WebMode;
 use std::path::PathBuf;
 use tool_backend::ToolBackendKind;
 
@@ -44,12 +49,20 @@ enum Command {
         profile: String,
         #[arg(long, value_enum, default_value_t = ToolBackendKind::Native)]
         tool_backend: ToolBackendKind,
+        #[arg(long, value_enum, default_value_t = WebMode::Auto)]
+        web: WebMode,
+        #[arg(long, value_delimiter = ',')]
+        web_providers: Vec<String>,
+        #[arg(long, default_value_t = false)]
+        allow_private_web_search: bool,
         #[arg(long)]
         session: Option<String>,
         #[arg(long, default_value_t = false)]
         tui: bool,
         #[arg(long, hide = true)]
         fake_llm_response: Option<String>,
+        #[arg(long, hide = true)]
+        web_evidence_json: Option<PathBuf>,
     },
     /// Inspect agent runtime and tool backend availability.
     Doctor {
@@ -88,9 +101,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             prompt,
             profile,
             tool_backend,
+            web,
+            web_providers,
+            allow_private_web_search,
             session,
             tui,
             fake_llm_response,
+            web_evidence_json,
         } => {
             if tui {
                 eprintln!("wiki-agent tui is not implemented in PR3; falling back to CLI chat.");
@@ -104,9 +121,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 config,
                 profile,
                 tool_backend,
+                web,
+                web_providers,
+                allow_private_web_search,
                 session_id: session,
                 one_shot_prompt: input,
                 fake_llm_response,
+                web_evidence_json,
             })?;
         }
         Command::Doctor {
