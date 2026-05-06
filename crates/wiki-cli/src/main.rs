@@ -65,19 +65,18 @@ use strategy_render::{
 
 use automation::{
     acquire_cli_writer_lease, automation_all_jobs, automation_health_level_name,
-    automation_job_name, automation_job_needs_writer_lease, automation_run_daily_jobs,
-    collect_automation_health_report, collect_restore_verify_report, emit_automation_health_alert,
-    format_automation_record, format_automation_time, format_outbox_consumer_progress,
-    format_outbox_stats, print_automation_doctor, print_automation_jobs,
-    print_automation_last_failures, print_automation_status, render_automation_health_report,
-    render_restore_verify_report, run_automation_plan, run_verify_row_state, AutomationHealthLevel,
-    AutomationHealthReport, AutomationHeartbeat,
+    automation_run_daily_jobs, collect_automation_health_report, collect_restore_verify_report,
+    emit_automation_health_alert, format_automation_record, format_automation_time,
+    format_outbox_consumer_progress, format_outbox_stats, print_automation_doctor,
+    print_automation_jobs, print_automation_last_failures, print_automation_status,
+    render_automation_health_report, render_restore_verify_report, run_automation_plan,
+    run_verify_row_state, AutomationHealthLevel, AutomationHealthReport, AutomationHeartbeat,
 };
 #[cfg(test)]
 use automation::{
-    automation_health_thresholds, automation_job_spec, automation_job_specs, classify_backlog,
-    classify_consecutive_failures, classify_stale_heartbeat, prune_scheduled_report_runs,
-    AutomationHealthIssue, AutomationHealthThresholds, AutomationJob,
+    automation_health_thresholds, automation_job_name, automation_job_spec, automation_job_specs,
+    classify_backlog, classify_consecutive_failures, classify_stale_heartbeat,
+    prune_scheduled_report_runs, AutomationHealthIssue, AutomationHealthThresholds, AutomationJob,
 };
 #[cfg(test)]
 use automation_jobs::{
@@ -102,116 +101,6 @@ use wiki_compiler::preflight_llm_plan_tags;
 use wiki_compiler::{batch_source_tags_for_ingest, BatchIngestContext};
 
 use cli::*;
-
-fn cmd_writer_lease_label(cmd: &Cmd) -> &'static str {
-    match cmd {
-        Cmd::Automation {
-            cmd: AutomationCmd::RunDaily { .. },
-        } => "automation-run-daily",
-        Cmd::Automation {
-            cmd: AutomationCmd::Run { job },
-        } => automation_job_name(*job),
-        Cmd::BatchIngest { .. } => "batch-ingest",
-        Cmd::CompilerResolveDeferred { .. } => "compiler-resolve-deferred",
-        Cmd::ConsistencyApply { .. } => "consistency-apply",
-        Cmd::Mcp { .. } => "mcp",
-        Cmd::NotionArchivedRetirement { .. } => "notion-archived-retirement",
-        Cmd::NotionSync { .. } => "notion-sync",
-        Cmd::NotionSyncIndexBackfill { .. } => "notion-sync-index-backfill",
-        Cmd::SuggestExecutorApply { .. } => "suggest-executor-apply",
-        Cmd::Governance {
-            cmd: GovernanceCmd::FixerApply { .. },
-        } => "governance-fixer-apply",
-        Cmd::Governance {
-            cmd: GovernanceCmd::Restore { .. },
-        } => "governance-restore",
-        Cmd::ResearchSynthesis {
-            cmd: ResearchSynthesisCmd::Compose { .. },
-        } => "research-synthesis-compose",
-        Cmd::ResearchSynthesis {
-            cmd: ResearchSynthesisCmd::Run { .. },
-        } => "research-synthesis-run",
-        Cmd::VaultBackfill { .. } => "vault-backfill",
-        _ => "wiki-cli",
-    }
-}
-
-fn cmd_needs_writer_lease(cmd: &Cmd) -> bool {
-    match cmd {
-        Cmd::Ingest { .. }
-        | Cmd::FileClaim { .. }
-        | Cmd::SupersedeClaim { .. }
-        | Cmd::Query { .. }
-        | Cmd::Lint
-        | Cmd::Gap { .. }
-        | Cmd::Promote { .. }
-        | Cmd::PromotePage { .. }
-        | Cmd::Crystallize { .. }
-        | Cmd::Qa { .. }
-        | Cmd::Synthesis { .. }
-        | Cmd::AckOutbox { .. }
-        | Cmd::ConsumeToMempalace { .. }
-        | Cmd::PalaceInit { .. }
-        | Cmd::Maintenance
-        | Cmd::Mcp { .. } => true,
-        Cmd::IngestLlm { dry_run, .. } => !dry_run,
-        Cmd::Fix { dry_run, write, .. } => *write && !dry_run,
-        Cmd::SuggestExecutorApply { apply, .. } => *apply,
-        Cmd::Governance {
-            cmd: GovernanceCmd::FixerApply { apply, .. },
-        } => *apply,
-        Cmd::Governance {
-            cmd: GovernanceCmd::Restore { apply, .. },
-        } => *apply,
-        Cmd::ResearchSynthesis {
-            cmd: ResearchSynthesisCmd::Compose { apply, .. },
-        } => *apply,
-        Cmd::ResearchSynthesis {
-            cmd: ResearchSynthesisCmd::Run { apply, .. },
-        } => *apply,
-        Cmd::VaultBackfill { apply, .. } => *apply,
-        Cmd::ConsistencyApply { apply, .. } => *apply,
-        Cmd::BatchIngest { dry_run, .. } => !dry_run,
-        Cmd::CompilerResolveDeferred { apply, .. } => *apply,
-        Cmd::Automation {
-            cmd: AutomationCmd::RunDaily { dry_run },
-        } => !dry_run,
-        Cmd::Automation {
-            cmd: AutomationCmd::Run { job },
-        } => automation_job_needs_writer_lease(*job),
-        Cmd::NotionSync { dry_run, .. } => !dry_run,
-        Cmd::NotionSyncIndexBackfill { apply, .. } => *apply,
-        Cmd::NotionSourceVaultSync { apply, .. } => *apply,
-        Cmd::NotionArchivedRetirement {
-            command: NotionArchivedRetirementCmd::Apply { apply, .. },
-        } => *apply,
-        Cmd::Automation { .. }
-        | Cmd::NotionArchivedRetirement {
-            command: NotionArchivedRetirementCmd::Plan { .. },
-        }
-        | Cmd::ExportOutboxNdjson
-        | Cmd::VerifyRowState { .. }
-        | Cmd::ExportOutboxNdjsonFrom { .. }
-        | Cmd::Explain { .. }
-        | Cmd::VaultAudit { .. }
-        | Cmd::OrphanGovernance { .. }
-        | Cmd::ConsistencyAudit
-        | Cmd::ConsistencyPlan { .. }
-        | Cmd::Metrics { .. }
-        | Cmd::Dashboard { .. }
-        | Cmd::Suggest { .. }
-        | Cmd::Governance {
-            cmd: GovernanceCmd::Scan { .. } | GovernanceCmd::FixerPlan { .. },
-        }
-        | Cmd::ResearchSynthesis {
-            cmd: ResearchSynthesisCmd::Discover { .. },
-        }
-        | Cmd::AiProfile { .. }
-        | Cmd::WebSearch { .. }
-        | Cmd::LlmSmoke { .. }
-        | Cmd::SchemaValidate { .. } => false,
-    }
-}
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = match Cli::try_parse() {
@@ -2188,6 +2077,10 @@ mod tests {
         OutboxConsumerProgress, OutboxStats,
     };
 
+    fn cmd_needs_writer_lease(cmd: &Cmd) -> bool {
+        cmd.needs_writer_lease()
+    }
+
     fn sample_record(
         status: AutomationRunStatus,
         heartbeat_at: OffsetDateTime,
@@ -2506,7 +2399,7 @@ mod tests {
             palace_db: None,
             palace_bank: "wiki".into(),
         }));
-        assert!(cmd_needs_writer_lease(&Cmd::Lint));
+        assert!(Cmd::Lint.needs_writer_lease());
         assert!(cmd_needs_writer_lease(&Cmd::Fix {
             dry_run: false,
             auto_only: false,

@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use clap::{Parser, Subcommand, ValueEnum};
 use wiki_core::StrategyExecutionActionKind;
 
-use crate::automation::AutomationJob;
+use crate::automation::{automation_job_name, automation_job_needs_writer_lease, AutomationJob};
 use crate::cli_utils::DEFAULT_MEMPALACE_CONSUMER_TAG;
 
 #[derive(Parser)]
@@ -605,6 +605,118 @@ pub enum GovernanceCmd {
         #[arg(long)]
         report_dir: Option<PathBuf>,
     },
+}
+
+impl Cmd {
+    pub fn writer_lease_label(&self) -> &'static str {
+        match self {
+            Cmd::Automation {
+                cmd: AutomationCmd::RunDaily { .. },
+            } => "automation-run-daily",
+            Cmd::Automation {
+                cmd: AutomationCmd::Run { job },
+            } => automation_job_name(*job),
+            Cmd::BatchIngest { .. } => "batch-ingest",
+            Cmd::CompilerResolveDeferred { .. } => "compiler-resolve-deferred",
+            Cmd::ConsistencyApply { .. } => "consistency-apply",
+            Cmd::Mcp { .. } => "mcp",
+            Cmd::NotionArchivedRetirement { .. } => "notion-archived-retirement",
+            Cmd::NotionSync { .. } => "notion-sync",
+            Cmd::NotionSyncIndexBackfill { .. } => "notion-sync-index-backfill",
+            Cmd::SuggestExecutorApply { .. } => "suggest-executor-apply",
+            Cmd::Governance {
+                cmd: GovernanceCmd::FixerApply { .. },
+            } => "governance-fixer-apply",
+            Cmd::Governance {
+                cmd: GovernanceCmd::Restore { .. },
+            } => "governance-restore",
+            Cmd::ResearchSynthesis {
+                cmd: ResearchSynthesisCmd::Compose { .. },
+            } => "research-synthesis-compose",
+            Cmd::ResearchSynthesis {
+                cmd: ResearchSynthesisCmd::Run { .. },
+            } => "research-synthesis-run",
+            Cmd::VaultBackfill { .. } => "vault-backfill",
+            _ => "wiki-cli",
+        }
+    }
+
+    pub fn needs_writer_lease(&self) -> bool {
+        match self {
+            Cmd::Ingest { .. }
+            | Cmd::FileClaim { .. }
+            | Cmd::SupersedeClaim { .. }
+            | Cmd::Query { .. }
+            | Cmd::Lint
+            | Cmd::Gap { .. }
+            | Cmd::Promote { .. }
+            | Cmd::PromotePage { .. }
+            | Cmd::Crystallize { .. }
+            | Cmd::Qa { .. }
+            | Cmd::Synthesis { .. }
+            | Cmd::AckOutbox { .. }
+            | Cmd::ConsumeToMempalace { .. }
+            | Cmd::PalaceInit { .. }
+            | Cmd::Maintenance
+            | Cmd::Mcp { .. } => true,
+            Cmd::IngestLlm { dry_run, .. } => !dry_run,
+            Cmd::Fix { dry_run, write, .. } => *write && !dry_run,
+            Cmd::SuggestExecutorApply { apply, .. } => *apply,
+            Cmd::Governance {
+                cmd: GovernanceCmd::FixerApply { apply, .. },
+            } => *apply,
+            Cmd::Governance {
+                cmd: GovernanceCmd::Restore { apply, .. },
+            } => *apply,
+            Cmd::ResearchSynthesis {
+                cmd: ResearchSynthesisCmd::Compose { apply, .. },
+            } => *apply,
+            Cmd::ResearchSynthesis {
+                cmd: ResearchSynthesisCmd::Run { apply, .. },
+            } => *apply,
+            Cmd::VaultBackfill { apply, .. } => *apply,
+            Cmd::ConsistencyApply { apply, .. } => *apply,
+            Cmd::BatchIngest { dry_run, .. } => !dry_run,
+            Cmd::CompilerResolveDeferred { apply, .. } => *apply,
+            Cmd::Automation {
+                cmd: AutomationCmd::RunDaily { dry_run },
+            } => !dry_run,
+            Cmd::Automation {
+                cmd: AutomationCmd::Run { job },
+            } => automation_job_needs_writer_lease(*job),
+            Cmd::NotionSync { dry_run, .. } => !dry_run,
+            Cmd::NotionSyncIndexBackfill { apply, .. } => *apply,
+            Cmd::NotionSourceVaultSync { apply, .. } => *apply,
+            Cmd::NotionArchivedRetirement {
+                command: NotionArchivedRetirementCmd::Apply { apply, .. },
+            } => *apply,
+            Cmd::Automation { .. }
+            | Cmd::NotionArchivedRetirement {
+                command: NotionArchivedRetirementCmd::Plan { .. },
+            }
+            | Cmd::ExportOutboxNdjson
+            | Cmd::VerifyRowState { .. }
+            | Cmd::ExportOutboxNdjsonFrom { .. }
+            | Cmd::Explain { .. }
+            | Cmd::VaultAudit { .. }
+            | Cmd::OrphanGovernance { .. }
+            | Cmd::ConsistencyAudit
+            | Cmd::ConsistencyPlan { .. }
+            | Cmd::Metrics { .. }
+            | Cmd::Dashboard { .. }
+            | Cmd::Suggest { .. }
+            | Cmd::Governance {
+                cmd: GovernanceCmd::Scan { .. } | GovernanceCmd::FixerPlan { .. },
+            }
+            | Cmd::ResearchSynthesis {
+                cmd: ResearchSynthesisCmd::Discover { .. },
+            }
+            | Cmd::AiProfile { .. }
+            | Cmd::WebSearch { .. }
+            | Cmd::LlmSmoke { .. }
+            | Cmd::SchemaValidate { .. } => false,
+        }
+    }
 }
 
 #[derive(Subcommand)]
