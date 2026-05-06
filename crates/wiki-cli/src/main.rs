@@ -87,10 +87,10 @@ use automation_jobs::{
 };
 use automation_jobs::{
     apply_notion_sync_tag_policy, build_strategy_executor_apply_report, maybe_sync_projection,
-    query_to_page, read_graph_extras_lines, run_consume_to_mempalace_job, run_daily_automation,
-    run_fix_job, run_gap_job, run_lint_job, run_maintenance_job, run_notion_sync_cmd,
-    run_research_synthesis_compose, run_single_automation_job,
-    save_to_repo_and_flush_outbox_with_embeddings, EngineResolver, ResearchSynthesisComposeInputs,
+    query_to_page, run_consume_to_mempalace_job, run_daily_automation, run_fix_job, run_gap_job,
+    run_lint_job, run_maintenance_job, run_notion_sync_cmd, run_research_synthesis_compose,
+    run_single_automation_job, save_to_repo_and_flush_outbox_with_embeddings, EngineResolver,
+    ResearchSynthesisComposeInputs,
 };
 #[cfg(test)]
 use cli_utils::effective_ingest_entry_type;
@@ -386,31 +386,16 @@ fn run_with_engine(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                 .with_rrf_k(rrf_k)
                 .with_per_stream_limit(per_stream_limit)
                 .with_viewer_scope(viewer.clone());
-            let vec_override = if cli.vectors {
-                let app = llm::load_app_config(&cli.llm_config)?;
-                let qv = llm::embed_first(&app, &query)?;
-                let raw = repo.search_embeddings_cosine(&qv, per_stream_limit.saturating_mul(8))?;
-                let ids: Vec<String> = raw
-                    .into_iter()
-                    .filter(|(id, _)| doc_id_visible_to_viewer(id, &eng.store, &viewer))
-                    .map(|(id, _)| id)
-                    .take(per_stream_limit)
-                    .collect();
-                if ids.is_empty() {
-                    None
-                } else {
-                    Some(ids)
-                }
-            } else {
-                None
-            };
-            let graph_extras = if let Some(ref path) = cli.graph_extras_file {
-                let extras = read_graph_extras_lines(path)?;
-                let extras = filter_graph_extras_for_viewer(extras, &eng.store, &viewer);
-                Some(extras)
-            } else {
-                None
-            };
+            let overrides = commands::query::prepare_query_overrides(
+                cli.vectors,
+                &cli.llm_config,
+                &cli.graph_extras_file,
+                &query,
+                per_stream_limit,
+                &eng,
+                &repo,
+                &viewer,
+            )?;
             let ranked = run_fusion_query(
                 palace_db.as_deref(),
                 &palace_bank,
@@ -419,8 +404,8 @@ fn run_with_engine(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                 &viewer,
                 &ctx,
                 OffsetDateTime::now_utc(),
-                vec_override,
-                graph_extras,
+                overrides.vec_override,
+                overrides.graph_extras,
             );
             let top: Vec<String> = ranked.iter().take(24).map(|(id, _)| id.clone()).collect();
             eng.record_query(&query, Some(&viewer), top, "cli");
@@ -453,35 +438,21 @@ fn run_with_engine(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                 .with_rrf_k(rrf_k)
                 .with_per_stream_limit(per_stream_limit)
                 .with_viewer_scope(viewer.clone());
-            let vec_override = if cli.vectors {
-                let app = llm::load_app_config(&cli.llm_config)?;
-                let qv = llm::embed_first(&app, &query)?;
-                let raw = repo.search_embeddings_cosine(&qv, per_stream_limit.saturating_mul(8))?;
-                let ids: Vec<String> = raw
-                    .into_iter()
-                    .filter(|(id, _)| doc_id_visible_to_viewer(id, &eng.store, &viewer))
-                    .map(|(id, _)| id)
-                    .take(per_stream_limit)
-                    .collect();
-                if ids.is_empty() {
-                    None
-                } else {
-                    Some(ids)
-                }
-            } else {
-                None
-            };
-            let graph_extras = if let Some(ref path) = cli.graph_extras_file {
-                let extras = read_graph_extras_lines(path)?;
-                let extras = filter_graph_extras_for_viewer(extras, &eng.store, &viewer);
-                Some(extras)
-            } else {
-                None
-            };
+            let overrides = commands::query::prepare_query_overrides(
+                cli.vectors,
+                &cli.llm_config,
+                &cli.graph_extras_file,
+                &query,
+                per_stream_limit,
+                &eng,
+                &repo,
+                &viewer,
+            )?;
+            let vec_override = overrides.vec_override;
+            let graph_extras = overrides.graph_extras;
 
             println!("\n查询: \"{}\"", query);
 
-            // wiki 各路结果
             let wiki_ports = build_wiki_search_ports(&repo, &eng, &viewer);
             let wiki_bm25 =
                 SearchPorts::bm25_ranked_ids(wiki_ports.as_ref(), &query, per_stream_limit);
@@ -1928,14 +1899,12 @@ fn run_with_engine(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-use commands::query::{
-    build_wiki_search_ports, doc_id_visible_to_viewer, filter_graph_extras_for_viewer,
-    merge_optional_graph_extras, run_fusion_query,
-};
+use commands::query::{build_wiki_search_ports, merge_optional_graph_extras, run_fusion_query};
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use commands::query::filter_graph_extras_for_viewer;
     use time::Duration;
     use wiki_core::DomainSchema;
     use wiki_storage::{

@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use time::OffsetDateTime;
 use wiki_core::{
@@ -10,6 +10,55 @@ use wiki_kernel::{
 };
 use wiki_mempalace_bridge::MempalaceSearchPorts;
 use wiki_storage::{SqliteRepository, SqliteSearchPorts};
+
+use crate::automation_jobs::read_graph_extras_lines;
+use crate::llm;
+
+pub(crate) struct QueryOverrides {
+    pub vec_override: Option<Vec<String>>,
+    pub graph_extras: Option<Vec<String>>,
+}
+
+pub(crate) fn prepare_query_overrides(
+    cli_vectors: bool,
+    cli_llm_config: &Path,
+    cli_graph_extras_file: &Option<PathBuf>,
+    query: &str,
+    per_stream_limit: usize,
+    eng: &LlmWikiEngine<NoopWikiHook>,
+    repo: &SqliteRepository,
+    viewer: &Scope,
+) -> Result<QueryOverrides, Box<dyn std::error::Error>> {
+    let vec_override = if cli_vectors {
+        let app = llm::load_app_config(cli_llm_config)?;
+        let qv = llm::embed_first(&app, query)?;
+        let raw = repo.search_embeddings_cosine(&qv, per_stream_limit.saturating_mul(8))?;
+        let ids: Vec<String> = raw
+            .into_iter()
+            .filter(|(id, _)| doc_id_visible_to_viewer(id, &eng.store, viewer))
+            .map(|(id, _)| id)
+            .take(per_stream_limit)
+            .collect();
+        if ids.is_empty() {
+            None
+        } else {
+            Some(ids)
+        }
+    } else {
+        None
+    };
+    let graph_extras = if let Some(ref path) = cli_graph_extras_file {
+        let extras = read_graph_extras_lines(path)?;
+        let extras = filter_graph_extras_for_viewer(extras, &eng.store, viewer);
+        Some(extras)
+    } else {
+        None
+    };
+    Ok(QueryOverrides {
+        vec_override,
+        graph_extras,
+    })
+}
 
 pub(crate) fn doc_id_visible_to_viewer(
     doc_id: &str,
