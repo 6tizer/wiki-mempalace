@@ -7,10 +7,10 @@ use std::path::{Path, PathBuf};
 use time::OffsetDateTime;
 use wiki_core::{
     build_strategy_execution_plan, document_visible_to_viewer, parse_memory_tier, AuditOperation,
-    AuditRecord, ClaimId, CompositeSearchPorts, Confidence, DomainSchema, Entity, EntityId,
-    EntityKind, EntryType, FusionConfig, LlmIngestPlanV1, MemoryTier, PageContract, PageId,
-    QueryContext, RelationKind, Scope, SessionCrystallizationInput, SourceId,
-    StrategyExecutionActionKind, StrategyExecutionPlan, TypedEdge, WikiPage,
+    AuditRecord, ClaimId, CompositeSearchPorts, Confidence, Entity, EntityId, EntityKind,
+    EntryType, FusionConfig, LlmIngestPlanV1, MemoryTier, PageContract, PageId, QueryContext,
+    RelationKind, Scope, SessionCrystallizationInput, SourceId, StrategyExecutionActionKind,
+    StrategyExecutionPlan, TypedEdge, WikiPage,
 };
 #[cfg(test)]
 use wiki_core::{EntryStatus, FixAction, FixActionType, FixPatch, WikiEvent};
@@ -67,17 +67,16 @@ use automation::{
     automation_job_name, automation_job_needs_writer_lease, automation_run_daily_jobs,
     collect_automation_health_report, collect_restore_verify_report, emit_automation_health_alert,
     format_automation_record, format_automation_time, format_outbox_consumer_progress,
-    format_outbox_stats, path_for_report, print_automation_doctor, print_automation_jobs,
-    print_automation_last_failures, print_automation_status, prune_scheduled_report_runs,
-    render_automation_health_report, render_restore_verify_report, run_automation_plan,
-    run_verify_row_state, scheduled_report_keep_count, scheduled_report_timestamp,
-    AutomationHealthLevel, AutomationHealthReport, AutomationHeartbeat, AutomationJob,
+    format_outbox_stats, print_automation_doctor, print_automation_jobs,
+    print_automation_last_failures, print_automation_status, render_automation_health_report,
+    render_restore_verify_report, run_automation_plan, run_verify_row_state, AutomationHealthLevel,
+    AutomationHealthReport, AutomationHeartbeat, AutomationJob,
 };
 #[cfg(test)]
 use automation::{
     automation_health_thresholds, automation_job_spec, automation_job_specs, classify_backlog,
-    classify_consecutive_failures, classify_stale_heartbeat, AutomationHealthIssue,
-    AutomationHealthThresholds,
+    classify_consecutive_failures, classify_stale_heartbeat, prune_scheduled_report_runs,
+    AutomationHealthIssue, AutomationHealthThresholds,
 };
 #[cfg(test)]
 use automation_jobs::{
@@ -1024,130 +1023,6 @@ fn cmd_needs_writer_lease(cmd: &Cmd) -> bool {
         | Cmd::LlmSmoke { .. }
         | Cmd::SchemaValidate { .. } => false,
     }
-}
-
-pub(crate) fn run_scheduled_vault_reports_job(
-    eng: &LlmWikiEngine<NoopWikiHook>,
-    repo: &SqliteRepository,
-    viewer: &Scope,
-    schema: &DomainSchema,
-    wiki_root: Option<&std::path::Path>,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let vault = wiki_root
-        .map(PathBuf::from)
-        .unwrap_or_else(wiki_compiler::default_vault_path);
-    let now = OffsetDateTime::now_utc();
-    let keep = scheduled_report_keep_count();
-    let reports_root = vault.join("reports").join("scheduled");
-    let run_dir = reports_root.join(format!("{}-scheduled", scheduled_report_timestamp(now)));
-
-    let vault_report = vault_audit::scan_vault(&vault)?;
-    std::fs::create_dir_all(&run_dir)?;
-    let audit_files =
-        vault_audit::write_json_and_markdown(&vault_report, run_dir.join("vault-audit"))
-            .map_err(|err| -> Box<dyn std::error::Error> { err.to_string().into() })?;
-
-    let outbox_stats = repo.get_outbox_stats()?;
-    let outbox_progress = repo.get_outbox_consumer_progress(DEFAULT_MEMPALACE_CONSUMER_TAG)?;
-    let metrics = collect_wiki_metrics(
-        &eng.store,
-        schema,
-        Some(viewer),
-        Some(&outbox_stats),
-        Some(&outbox_progress),
-        2,
-        now,
-    );
-    let metrics_json = run_dir.join("metrics.json");
-    let metrics_md = run_dir.join("metrics.md");
-    std::fs::write(&metrics_json, serde_json::to_string_pretty(&metrics)?)?;
-    std::fs::write(&metrics_md, render_metrics_markdown(&metrics))?;
-
-    let health = collect_automation_health_report(
-        repo,
-        &automation_all_jobs(),
-        DEFAULT_MEMPALACE_CONSUMER_TAG,
-        now,
-    )?;
-    let health_txt = run_dir.join("automation-health.txt");
-    std::fs::write(
-        &health_txt,
-        render_automation_health_report(&health, DEFAULT_MEMPALACE_CONSUMER_TAG),
-    )?;
-
-    let dashboard_html = run_dir.join("dashboard.html");
-    std::fs::write(
-        &dashboard_html,
-        dashboard::render_dashboard_html(&health, &metrics, DEFAULT_MEMPALACE_CONSUMER_TAG),
-    )?;
-
-    let query_events = parse_outbox_events(&repo.export_outbox_ndjson()?)?;
-    let strategy_report = run_strategy_scan(
-        &eng.store,
-        schema,
-        &metrics,
-        &query_events,
-        StrategyScanOptions {
-            viewer_scope: Some(viewer),
-            low_coverage_threshold: 2,
-            generated_at: now,
-            report_id: strategy_report_prefix(now),
-        },
-    );
-    let suggestions_dir = run_dir.join("suggestions");
-    std::fs::create_dir_all(&suggestions_dir)?;
-    let suggest_json_name = format!("{}.json", strategy_report.report_id);
-    let suggest_md_name = format!("{}.md", strategy_report.report_id);
-    let suggest_json = suggestions_dir.join(&suggest_json_name);
-    let suggest_md = suggestions_dir.join(&suggest_md_name);
-    std::fs::write(
-        &suggest_json,
-        serde_json::to_string_pretty(&strategy_report)?,
-    )?;
-    std::fs::write(
-        &suggest_md,
-        render_strategy_report_markdown(&strategy_report, &suggest_json_name),
-    )?;
-
-    let latest_json = reports_root.join("latest.json");
-    let latest_md = reports_root.join("latest.md");
-    let latest = serde_json::json!({
-        "generated_at": format_automation_time(now),
-        "run_dir": path_for_report(&run_dir),
-        "retention_keep": keep,
-        "files": {
-            "vault_audit_json": path_for_report(&audit_files.json_path),
-            "vault_audit_markdown": path_for_report(&audit_files.markdown_path),
-            "metrics_json": path_for_report(&metrics_json),
-            "metrics_markdown": path_for_report(&metrics_md),
-            "automation_health": path_for_report(&health_txt),
-            "dashboard_html": path_for_report(&dashboard_html),
-            "suggest_json": path_for_report(&suggest_json),
-            "suggest_markdown": path_for_report(&suggest_md),
-        }
-    });
-    std::fs::write(&latest_json, serde_json::to_string_pretty(&latest)?)?;
-    std::fs::write(
-        &latest_md,
-        format!(
-            "# Scheduled Vault Reports\n\n- generated_at: `{}`\n- run_dir: `{}`\n- latest_json: `{}`\n- retention_keep: `{}`\n",
-            format_automation_time(now),
-            run_dir.display(),
-            latest_json.display(),
-            keep
-        ),
-    )?;
-    let pruned = prune_scheduled_report_runs(&reports_root, keep)?;
-
-    println!(
-        "scheduled_vault_reports generated_at={} run_dir={} pruned={}",
-        format_automation_time(now),
-        run_dir.display(),
-        pruned
-    );
-    println!("latest_json={}", latest_json.display());
-    println!("latest_markdown={}", latest_md.display());
-    Ok(())
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -3119,6 +2994,7 @@ fn run_fusion_query<'a>(
 mod tests {
     use super::*;
     use time::Duration;
+    use wiki_core::DomainSchema;
     use wiki_storage::{
         AutomationJobFailureSummary, AutomationRunRecord, AutomationRunStatus,
         OutboxConsumerProgress, OutboxStats,

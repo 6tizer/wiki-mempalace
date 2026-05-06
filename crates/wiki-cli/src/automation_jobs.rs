@@ -12,11 +12,12 @@ use wiki_core::{
     StrategyExecutionPlan, WikiPage,
 };
 use wiki_kernel::{
-    apply_evidence_fixer_plan, build_evidence_fixer_plan, discover_synthesis_candidates,
-    duplicate_web_verification_key, finalize_consumed_page, initial_status_for,
-    map_findings_to_fixes, run_governance_scan, write_lint_report, write_projection,
-    EvidenceFixerApplyOptions, EvidenceFixerPlanOptions, GovernanceScanOptions, InMemoryStore,
-    LlmWikiEngine, NoopWikiHook, SynthesisDiscoveryOptions,
+    apply_evidence_fixer_plan, build_evidence_fixer_plan, collect_wiki_metrics,
+    discover_synthesis_candidates, duplicate_web_verification_key, finalize_consumed_page,
+    initial_status_for, map_findings_to_fixes, run_governance_scan, run_strategy_scan,
+    write_lint_report, write_projection, EvidenceFixerApplyOptions, EvidenceFixerPlanOptions,
+    GovernanceScanOptions, InMemoryStore, LlmWikiEngine, NoopWikiHook, StrategyScanOptions,
+    SynthesisDiscoveryOptions,
 };
 use wiki_mempalace_bridge::{
     consume_outbox_ndjson_with_resolver_and_stats, LiveMempalaceSink, MempalaceError,
@@ -25,9 +26,11 @@ use wiki_mempalace_bridge::{
 use wiki_storage::{EmbeddingWrite, SqliteRepository, WikiRepository};
 
 use crate::automation::{
-    automation_job_name, automation_job_spec, automation_run_daily_jobs, format_automation_record,
-    latest_automation_run_or_error, run_automation_job, run_automation_plan, AutomationHeartbeat,
-    AutomationJob,
+    automation_all_jobs, automation_job_name, automation_job_spec, automation_run_daily_jobs,
+    collect_automation_health_report, format_automation_record, format_automation_time,
+    latest_automation_run_or_error, path_for_report, prune_scheduled_report_runs,
+    render_automation_health_report, run_automation_job, run_automation_plan,
+    scheduled_report_keep_count, scheduled_report_timestamp, AutomationHeartbeat, AutomationJob,
 };
 use crate::cli_utils::{
     default_fixer_report_dir, default_governance_report_dir, default_synthesis_report_dir, env_or,
@@ -35,10 +38,12 @@ use crate::cli_utils::{
 };
 use crate::commands;
 use crate::strategy_render::{
-    strategy_execution_action_kind_name, strategy_executor_report_prefix,
+    parse_outbox_events, render_metrics_markdown, render_strategy_report_markdown,
+    strategy_execution_action_kind_name, strategy_executor_report_prefix, strategy_report_prefix,
     StrategyExecutorActionStatus, StrategyExecutorApplyActionReport, StrategyExecutorApplyReport,
     StrategyExecutorApplySummary, StrategyExecutorRunMode,
 };
+use crate::{dashboard, vault_audit, wiki_compiler};
 use crate::{Cli, ExecutorAllow, NotionDbTarget, NotionSyncTagPolicy};
 
 // ---------------------------------------------------------------------------
@@ -1190,7 +1195,7 @@ pub(crate) fn dispatch_automation_job(
             Ok(())
         }
         AutomationJob::VaultReports => {
-            crate::run_scheduled_vault_reports_job(eng, repo, viewer, schema, wiki_root)
+            run_scheduled_vault_reports_job(eng, repo, viewer, schema, wiki_root)
         }
         AutomationJob::SynthesisDiscover => {
             run_automation_synthesis_discover_job(eng, schema, viewer, wiki_root)
@@ -1426,4 +1431,128 @@ pub(crate) fn read_graph_extras_lines(
         .filter(|l| !l.is_empty() && !l.starts_with('#'))
         .map(|l| l.to_string())
         .collect())
+}
+
+pub(crate) fn run_scheduled_vault_reports_job(
+    eng: &LlmWikiEngine<NoopWikiHook>,
+    repo: &SqliteRepository,
+    viewer: &Scope,
+    schema: &DomainSchema,
+    wiki_root: Option<&Path>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let vault = wiki_root
+        .map(PathBuf::from)
+        .unwrap_or_else(wiki_compiler::default_vault_path);
+    let now = OffsetDateTime::now_utc();
+    let keep = scheduled_report_keep_count();
+    let reports_root = vault.join("reports").join("scheduled");
+    let run_dir = reports_root.join(format!("{}-scheduled", scheduled_report_timestamp(now)));
+
+    let vault_report = vault_audit::scan_vault(&vault)?;
+    std::fs::create_dir_all(&run_dir)?;
+    let audit_files =
+        vault_audit::write_json_and_markdown(&vault_report, run_dir.join("vault-audit"))
+            .map_err(|err| -> Box<dyn std::error::Error> { err.to_string().into() })?;
+
+    let outbox_stats = repo.get_outbox_stats()?;
+    let outbox_progress = repo.get_outbox_consumer_progress(DEFAULT_MEMPALACE_CONSUMER_TAG)?;
+    let metrics = collect_wiki_metrics(
+        &eng.store,
+        schema,
+        Some(viewer),
+        Some(&outbox_stats),
+        Some(&outbox_progress),
+        2,
+        now,
+    );
+    let metrics_json = run_dir.join("metrics.json");
+    let metrics_md = run_dir.join("metrics.md");
+    std::fs::write(&metrics_json, serde_json::to_string_pretty(&metrics)?)?;
+    std::fs::write(&metrics_md, render_metrics_markdown(&metrics))?;
+
+    let health = collect_automation_health_report(
+        repo,
+        &automation_all_jobs(),
+        DEFAULT_MEMPALACE_CONSUMER_TAG,
+        now,
+    )?;
+    let health_txt = run_dir.join("automation-health.txt");
+    std::fs::write(
+        &health_txt,
+        render_automation_health_report(&health, DEFAULT_MEMPALACE_CONSUMER_TAG),
+    )?;
+
+    let dashboard_html = run_dir.join("dashboard.html");
+    std::fs::write(
+        &dashboard_html,
+        dashboard::render_dashboard_html(&health, &metrics, DEFAULT_MEMPALACE_CONSUMER_TAG),
+    )?;
+
+    let query_events = parse_outbox_events(&repo.export_outbox_ndjson()?)?;
+    let strategy_report = run_strategy_scan(
+        &eng.store,
+        schema,
+        &metrics,
+        &query_events,
+        StrategyScanOptions {
+            viewer_scope: Some(viewer),
+            low_coverage_threshold: 2,
+            generated_at: now,
+            report_id: strategy_report_prefix(now),
+        },
+    );
+    let suggestions_dir = run_dir.join("suggestions");
+    std::fs::create_dir_all(&suggestions_dir)?;
+    let suggest_json_name = format!("{}.json", strategy_report.report_id);
+    let suggest_md_name = format!("{}.md", strategy_report.report_id);
+    let suggest_json = suggestions_dir.join(&suggest_json_name);
+    let suggest_md = suggestions_dir.join(&suggest_md_name);
+    std::fs::write(
+        &suggest_json,
+        serde_json::to_string_pretty(&strategy_report)?,
+    )?;
+    std::fs::write(
+        &suggest_md,
+        render_strategy_report_markdown(&strategy_report, &suggest_json_name),
+    )?;
+
+    let latest_json = reports_root.join("latest.json");
+    let latest_md = reports_root.join("latest.md");
+    let latest = serde_json::json!({
+        "generated_at": format_automation_time(now),
+        "run_dir": path_for_report(&run_dir),
+        "retention_keep": keep,
+        "files": {
+            "vault_audit_json": path_for_report(&audit_files.json_path),
+            "vault_audit_markdown": path_for_report(&audit_files.markdown_path),
+            "metrics_json": path_for_report(&metrics_json),
+            "metrics_markdown": path_for_report(&metrics_md),
+            "automation_health": path_for_report(&health_txt),
+            "dashboard_html": path_for_report(&dashboard_html),
+            "suggest_json": path_for_report(&suggest_json),
+            "suggest_markdown": path_for_report(&suggest_md),
+        }
+    });
+    std::fs::write(&latest_json, serde_json::to_string_pretty(&latest)?)?;
+    std::fs::write(
+        &latest_md,
+        format!(
+            "# Scheduled Vault Reports\n\n- generated_at: `{}`\n- run_dir: `{}`\n- latest_json: `{}`\n- retention_keep: `{}`\n",
+            format_automation_time(now),
+            run_dir.display(),
+            latest_json.display(),
+            keep
+        ),
+    )?;
+    let pruned = prune_scheduled_report_runs(&reports_root, keep)?;
+
+    println!(
+        "scheduled_vault_reports generated_at={} run_dir={} pruned={}",
+        format_automation_time(now),
+        run_dir.display(),
+        pruned
+    );
+    println!("latest_json={}", latest_json.display());
+    println!("latest_markdown={}", latest_md.display());
+    Ok(())
 }
