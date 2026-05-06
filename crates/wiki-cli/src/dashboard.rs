@@ -1,6 +1,7 @@
+use crate::cli_utils::{entry_status_name, entry_type_name, format_optional_i64};
 use crate::{
-    automation_health_level_name, entry_status_name, entry_type_name, format_automation_record,
-    format_automation_time, format_optional_i64, format_outbox_consumer_progress,
+    automation_health_level_name, format_automation_record,
+    format_automation_time, format_outbox_consumer_progress,
     format_outbox_stats, AutomationHealthReport,
 };
 use wiki_core::WikiMetricsReport;
