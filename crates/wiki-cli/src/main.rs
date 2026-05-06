@@ -6,10 +6,9 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use time::OffsetDateTime;
 use wiki_core::{
-    build_strategy_execution_plan, parse_memory_tier, AuditOperation, AuditRecord, Confidence,
-    Entity, EntityId, EntityKind, EntryType, LlmIngestPlanV1, MemoryTier, PageContract,
-    QueryContext, RelationKind, Scope, SessionCrystallizationInput, StrategyExecutionPlan,
-    TypedEdge, WikiPage,
+    build_strategy_execution_plan, parse_memory_tier, Confidence, Entity, EntityId, EntityKind,
+    EntryType, LlmIngestPlanV1, MemoryTier, PageContract, QueryContext, RelationKind, Scope,
+    SessionCrystallizationInput, StrategyExecutionPlan, TypedEdge, WikiPage,
 };
 #[cfg(test)]
 use wiki_core::{CompositeSearchPorts, FusionConfig};
@@ -1839,30 +1838,12 @@ fn run_with_engine(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                     .collect();
 
                 if apply {
-                    for source_id in &apply_plan.source_ids {
-                        eng.store.sources.remove(source_id);
-                        eng.audits.push(AuditRecord::new(
-                            AuditOperation::RetireSource,
-                            "notion-archived-retirement",
-                            format!("retired notion source {}", source_id.0),
-                        ));
-                    }
-                    let snapshot = eng.store.to_snapshot(&eng.audits);
-                    let deleted_index_rows = repo.save_snapshot_and_delete_notion_page_indexes(
-                        &snapshot,
-                        &apply_plan.notion_page_ids,
+                    notion_archived_retirement::apply_retirement(
+                        &mut eng,
+                        &repo,
+                        &mut apply_plan,
+                        &vault_files,
                     )?;
-                    let deleted_vault_files =
-                        notion_archived_retirement::delete_retired_source_files(&vault_files)?;
-                    apply_plan.report.sources_removed = apply_plan.source_ids.len();
-                    apply_plan.report.index_rows_deleted = deleted_index_rows;
-                    apply_plan.report.vault_files_deleted = deleted_vault_files;
-                    apply_plan.report.applied_source_ids = apply_plan
-                        .source_ids
-                        .iter()
-                        .map(|source_id| source_id.0.to_string())
-                        .collect();
-                    apply_plan.report.applied_notion_page_ids = apply_plan.notion_page_ids.clone();
                 }
 
                 let report_dir = report_dir
