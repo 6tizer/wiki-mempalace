@@ -5,28 +5,28 @@ use serde::Serialize;
 use std::collections::BTreeMap;
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use time::{Duration, OffsetDateTime};
+use time::OffsetDateTime;
 use wiki_core::{
     build_strategy_execution_plan, document_visible_to_viewer, parse_memory_tier, AuditOperation,
     AuditRecord, ClaimId, CompositeSearchPorts, Confidence, DomainSchema, Entity, EntityId,
-    EntityKind, EntryStatus, EntryType, FixAction, FixActionType, FixPatch, FusionConfig,
-    LlmIngestPlanV1, MemoryTier, PageContract, PageId, QueryContext, RelationKind, Scope,
-    SessionCrystallizationInput, SourceId, StrategyExecutionActionKind, StrategyExecutionPlan,
-    StrategyReport, TypedEdge, WikiEvent, WikiPage,
+    EntityKind, EntryType, FusionConfig, LlmIngestPlanV1, MemoryTier, PageContract, PageId,
+    QueryContext, RelationKind, Scope, SessionCrystallizationInput, SourceId,
+    StrategyExecutionActionKind, StrategyExecutionPlan, StrategyReport, TypedEdge, WikiPage,
 };
+#[cfg(test)]
+use wiki_core::{EntryStatus, FixAction, FixActionType, FixPatch, WikiEvent};
+#[cfg(test)]
+use wiki_kernel::map_findings_to_fixes;
 use wiki_kernel::{
     apply_evidence_fixer_plan, collect_wiki_metrics, discover_synthesis_candidates,
-    finalize_consumed_page, format_claim_doc_id, initial_status_for, map_findings_to_fixes,
-    merge_graph_rankings, restore_evidence_fixer_tombstone, run_governance_scan, run_strategy_scan,
-    write_projection, EvidenceFixerApplyOptions, GovernanceScanOptions, InMemorySearchPorts,
-    InMemoryStore, LlmWikiEngine, NoopWikiHook, SearchPorts, StrategyScanOptions,
-    SynthesisDiscoveryOptions,
+    finalize_consumed_page, format_claim_doc_id, initial_status_for, merge_graph_rankings,
+    restore_evidence_fixer_tombstone, run_governance_scan, run_strategy_scan, write_projection,
+    EvidenceFixerApplyOptions, GovernanceScanOptions, InMemorySearchPorts, InMemoryStore,
+    LlmWikiEngine, NoopWikiHook, SearchPorts, StrategyScanOptions, SynthesisDiscoveryOptions,
 };
 use wiki_mempalace_bridge::MempalaceSearchPorts;
 use wiki_storage::{
-    canonical_notion_page_id, AutomationJobFailureSummary, AutomationRunRecord,
-    AutomationRunStatus, EmbeddingWrite, OutboxConsumerProgress, OutboxStats, SqliteRepository,
-    SqliteSearchPorts, SqliteWriterLease, WikiRepository, WikiStateRowVerification,
+    canonical_notion_page_id, EmbeddingWrite, SqliteRepository, SqliteSearchPorts, WikiRepository,
 };
 
 mod automation;
@@ -64,26 +64,31 @@ use strategy_render::{
 
 use automation::{
     acquire_cli_writer_lease, automation_all_jobs, automation_health_level_name,
-    automation_health_thresholds, automation_job_name, automation_job_needs_writer_lease,
-    automation_job_spec, automation_job_specs, automation_run_daily_jobs, classify_backlog,
-    classify_consecutive_failures, classify_stale_heartbeat, collect_automation_health_report,
-    collect_restore_verify_report, emit_automation_health_alert, format_automation_record,
-    format_automation_time, format_outbox_consumer_progress, format_outbox_stats, path_for_report,
-    print_automation_doctor, print_automation_jobs, print_automation_last_failures,
-    print_automation_status, prune_scheduled_report_runs, render_automation_health_report,
-    render_restore_verify_report, run_automation_plan, run_verify_row_state,
-    scheduled_report_keep_count, scheduled_report_timestamp, AutomationHealthIssue,
-    AutomationHealthLevel, AutomationHealthReport, AutomationHealthThresholds, AutomationHeartbeat,
-    AutomationJob,
+    automation_job_name, automation_job_needs_writer_lease, automation_run_daily_jobs,
+    collect_automation_health_report, collect_restore_verify_report, emit_automation_health_alert,
+    format_automation_record, format_automation_time, format_outbox_consumer_progress,
+    format_outbox_stats, path_for_report, print_automation_doctor, print_automation_jobs,
+    print_automation_last_failures, print_automation_status, prune_scheduled_report_runs,
+    render_automation_health_report, render_restore_verify_report, run_automation_plan,
+    run_verify_row_state, scheduled_report_keep_count, scheduled_report_timestamp,
+    AutomationHealthLevel, AutomationHealthReport, AutomationHeartbeat, AutomationJob,
+};
+#[cfg(test)]
+use automation::{
+    automation_health_thresholds, automation_job_spec, automation_job_specs, classify_backlog,
+    classify_consecutive_failures, classify_stale_heartbeat, AutomationHealthIssue,
+    AutomationHealthThresholds,
+};
+#[cfg(test)]
+use automation_jobs::{
+    apply_auto_fixes, automation_notion_refresh_existing, gap_report_markdown, write_gap_report,
 };
 use automation_jobs::{
-    apply_auto_fixes, apply_notion_sync_tag_policy, automation_notion_refresh_existing,
-    build_strategy_executor_apply_report, gap_report_markdown, maybe_sync_projection,
+    apply_notion_sync_tag_policy, build_strategy_executor_apply_report, maybe_sync_projection,
     query_to_page, read_graph_extras_lines, run_consume_to_mempalace_job, run_daily_automation,
     run_fix_job, run_gap_job, run_lint_job, run_maintenance_job, run_notion_sync_cmd,
     run_research_synthesis_compose, run_single_automation_job,
-    save_to_repo_and_flush_outbox_with_embeddings, write_gap_report, EngineResolver,
-    ResearchSynthesisComposeInputs,
+    save_to_repo_and_flush_outbox_with_embeddings, EngineResolver, ResearchSynthesisComposeInputs,
 };
 #[cfg(test)]
 use cli_utils::effective_ingest_entry_type;
@@ -1161,20 +1166,6 @@ fn serialize_strategy_suggest_json(
             executor_plan: plan,
         }),
         None => serde_json::to_string_pretty(report),
-    }
-}
-
-fn format_duration_compact(duration: Duration) -> String {
-    let secs = duration.whole_seconds().max(0);
-    let hours = secs / 3600;
-    let minutes = (secs % 3600) / 60;
-    let seconds = secs % 60;
-    if hours > 0 {
-        format!("{hours}h{minutes}m{seconds}s")
-    } else if minutes > 0 {
-        format!("{minutes}m{seconds}s")
-    } else {
-        format!("{seconds}s")
     }
 }
 
@@ -3146,7 +3137,11 @@ fn run_fusion_query<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use wiki_storage::AutomationJobFailureSummary;
+    use time::Duration;
+    use wiki_storage::{
+        AutomationJobFailureSummary, AutomationRunRecord, AutomationRunStatus,
+        OutboxConsumerProgress, OutboxStats,
+    };
 
     fn sample_record(
         status: AutomationRunStatus,
