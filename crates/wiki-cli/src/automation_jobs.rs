@@ -32,6 +32,7 @@ use crate::automation::{
     render_automation_health_report, run_automation_job, run_automation_plan,
     scheduled_report_keep_count, scheduled_report_timestamp, AutomationHeartbeat, AutomationJob,
 };
+use crate::cli::{Cli, ExecutorAllow, NotionDbTarget, NotionSyncTagPolicy};
 use crate::cli_utils::{
     default_fixer_report_dir, default_governance_report_dir, default_synthesis_report_dir, env_or,
     parse_scope, resolve_wiki_relative_path, timestamp_slug, DEFAULT_MEMPALACE_CONSUMER_TAG,
@@ -44,7 +45,6 @@ use crate::strategy_render::{
     StrategyExecutorApplySummary, StrategyExecutorRunMode,
 };
 use crate::{dashboard, vault_audit, wiki_compiler};
-use crate::{Cli, ExecutorAllow, NotionDbTarget, NotionSyncTagPolicy};
 
 // ---------------------------------------------------------------------------
 // Research synthesis compose
