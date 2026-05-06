@@ -9,19 +9,18 @@ use time::{Duration, OffsetDateTime};
 use wiki_core::{
     build_strategy_execution_plan, document_visible_to_viewer, parse_memory_tier, AuditOperation,
     AuditRecord, ClaimId, CompositeSearchPorts, Confidence, DomainSchema, Entity, EntityId,
-    EntityKind, EntryStatus, EntryType, FixAction, FixActionType, FixPatch,
-    FusionConfig,
+    EntityKind, EntryStatus, EntryType, FixAction, FixActionType, FixPatch, FusionConfig,
     LlmIngestPlanV1, MemoryTier, PageContract, PageId, QueryContext, RelationKind, Scope,
-    SessionCrystallizationInput, SourceId, StrategyExecutionActionKind, StrategyExecutionPlan, StrategyReport, TypedEdge, WikiEvent, WikiPage,
+    SessionCrystallizationInput, SourceId, StrategyExecutionActionKind, StrategyExecutionPlan,
+    StrategyReport, TypedEdge, WikiEvent, WikiPage,
 };
 use wiki_kernel::{
-    apply_evidence_fixer_plan, collect_wiki_metrics,
-    discover_synthesis_candidates, finalize_consumed_page,
-    format_claim_doc_id, initial_status_for, map_findings_to_fixes, merge_graph_rankings,
-    restore_evidence_fixer_tombstone, run_governance_scan, run_strategy_scan,
-    write_projection, EvidenceFixerApplyOptions, GovernanceScanOptions,
-    InMemorySearchPorts, InMemoryStore, LlmWikiEngine, NoopWikiHook, SearchPorts,
-    StrategyScanOptions, SynthesisDiscoveryOptions,
+    apply_evidence_fixer_plan, collect_wiki_metrics, discover_synthesis_candidates,
+    finalize_consumed_page, format_claim_doc_id, initial_status_for, map_findings_to_fixes,
+    merge_graph_rankings, restore_evidence_fixer_tombstone, run_governance_scan, run_strategy_scan,
+    write_projection, EvidenceFixerApplyOptions, GovernanceScanOptions, InMemorySearchPorts,
+    InMemoryStore, LlmWikiEngine, NoopWikiHook, SearchPorts, StrategyScanOptions,
+    SynthesisDiscoveryOptions,
 };
 use wiki_mempalace_bridge::MempalaceSearchPorts;
 use wiki_storage::{
@@ -50,56 +49,52 @@ mod notion_writeback;
 mod orphan_governance;
 mod palace_init;
 mod research_synthesis;
+mod strategy_render;
 mod vault_audit;
 mod vault_backfill;
 mod web_search;
-mod strategy_render;
 mod wiki_compiler;
 
 use strategy_render::{
     parse_outbox_events, render_metrics_markdown, render_metrics_text,
-    render_strategy_executor_apply_report_markdown, render_strategy_executor_apply_report_text,
     render_strategy_execution_plan_markdown, render_strategy_execution_plan_text,
+    render_strategy_executor_apply_report_markdown, render_strategy_executor_apply_report_text,
     render_strategy_report_markdown, render_strategy_report_text, strategy_report_prefix,
 };
 
-use cli_utils::{
-    default_dashboard_output,
-    default_suggest_report_dir,
-    ensure_parent_dir,
-    parse_entry_type_opt, parse_scope, parse_tier, resolve_wiki_relative_path, timestamp_slug,
-    truncate_chars, DEFAULT_MEMPALACE_CONSUMER_TAG,
-};
 use automation::{
     acquire_cli_writer_lease, automation_all_jobs, automation_health_level_name,
     automation_health_thresholds, automation_job_name, automation_job_needs_writer_lease,
-    automation_job_spec, automation_job_specs, automation_run_daily_jobs,
-    AutomationHeartbeat, AutomationHealthIssue, AutomationHealthLevel,
-    AutomationHealthReport, AutomationHealthThresholds,
-    AutomationJob, classify_backlog, classify_consecutive_failures, classify_stale_heartbeat,
-    collect_automation_health_report, collect_restore_verify_report,
-    emit_automation_health_alert, format_automation_record, format_automation_time,
-    format_outbox_consumer_progress, format_outbox_stats,
-    path_for_report, print_automation_doctor, print_automation_jobs, print_automation_last_failures,
+    automation_job_spec, automation_job_specs, automation_run_daily_jobs, classify_backlog,
+    classify_consecutive_failures, classify_stale_heartbeat, collect_automation_health_report,
+    collect_restore_verify_report, emit_automation_health_alert, format_automation_record,
+    format_automation_time, format_outbox_consumer_progress, format_outbox_stats, path_for_report,
+    print_automation_doctor, print_automation_jobs, print_automation_last_failures,
     print_automation_status, prune_scheduled_report_runs, render_automation_health_report,
-    render_restore_verify_report, run_automation_plan,
-    run_verify_row_state, scheduled_report_keep_count, scheduled_report_timestamp,
+    render_restore_verify_report, run_automation_plan, run_verify_row_state,
+    scheduled_report_keep_count, scheduled_report_timestamp, AutomationHealthIssue,
+    AutomationHealthLevel, AutomationHealthReport, AutomationHealthThresholds, AutomationHeartbeat,
+    AutomationJob,
 };
 use automation_jobs::{
     apply_auto_fixes, apply_notion_sync_tag_policy, automation_notion_refresh_existing,
     build_strategy_executor_apply_report, gap_report_markdown, maybe_sync_projection,
     query_to_page, read_graph_extras_lines, run_consume_to_mempalace_job, run_daily_automation,
-    run_fix_job, run_gap_job, run_lint_job, run_maintenance_job,
-    run_notion_sync_cmd, run_research_synthesis_compose,
-    run_single_automation_job, save_to_repo_and_flush_outbox_with_embeddings, write_gap_report,
-    EngineResolver, ResearchSynthesisComposeInputs,
+    run_fix_job, run_gap_job, run_lint_job, run_maintenance_job, run_notion_sync_cmd,
+    run_research_synthesis_compose, run_single_automation_job,
+    save_to_repo_and_flush_outbox_with_embeddings, write_gap_report, EngineResolver,
+    ResearchSynthesisComposeInputs,
+};
+#[cfg(test)]
+use cli_utils::effective_ingest_entry_type;
+use cli_utils::{
+    default_dashboard_output, default_suggest_report_dir, ensure_parent_dir, parse_entry_type_opt,
+    parse_scope, parse_tier, resolve_wiki_relative_path, timestamp_slug, truncate_chars,
+    DEFAULT_MEMPALACE_CONSUMER_TAG,
 };
 use wiki_compiler::preflight_llm_plan_tags;
 #[cfg(test)]
-use cli_utils::effective_ingest_entry_type;
-#[cfg(test)]
 use wiki_compiler::{batch_source_tags_for_ingest, BatchIngestContext};
-
 
 #[derive(Parser)]
 #[command(name = "wiki")]
@@ -1149,7 +1144,6 @@ pub(crate) fn run_scheduled_vault_reports_job(
     println!("latest_markdown={}", latest_md.display());
     Ok(())
 }
-
 
 #[derive(Serialize)]
 struct StrategySuggestJsonOutput<'a> {
@@ -4490,4 +4484,3 @@ mod tests {
         assert!(!ranked.is_empty(), "explain 回退后应该能检索到结果");
     }
 }
-

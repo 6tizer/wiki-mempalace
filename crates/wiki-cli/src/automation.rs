@@ -2,14 +2,12 @@ use std::io::Write;
 use std::path::Path;
 use time::{Duration, OffsetDateTime};
 use wiki_storage::{
-    AutomationJobFailureSummary, AutomationRunRecord, AutomationRunStatus,
-    OutboxConsumerProgress, OutboxStats, SqliteRepository, SqliteWriterLease, WikiRepository,
-    WikiStateRowVerification,
+    AutomationJobFailureSummary, AutomationRunRecord, AutomationRunStatus, OutboxConsumerProgress,
+    OutboxStats, SqliteRepository, SqliteWriterLease, WikiRepository, WikiStateRowVerification,
 };
 
 use crate::cli_utils::{
-    env_or, truncate_chars, DEFAULT_SCHEDULED_REPORT_KEEP,
-    DEFAULT_WRITER_LEASE_TTL_SECS,
+    env_or, truncate_chars, DEFAULT_SCHEDULED_REPORT_KEEP, DEFAULT_WRITER_LEASE_TTL_SECS,
 };
 
 // ---------------------------------------------------------------------------
@@ -261,7 +259,9 @@ pub(crate) fn automation_job_name(job: AutomationJob) -> &'static str {
 // Display / formatting helpers
 // ---------------------------------------------------------------------------
 
-pub(crate) fn print_automation_jobs<W: Write>(out: &mut W) -> Result<(), Box<dyn std::error::Error>> {
+pub(crate) fn print_automation_jobs<W: Write>(
+    out: &mut W,
+) -> Result<(), Box<dyn std::error::Error>> {
     writeln!(out, "automation jobs:")?;
     for spec in automation_job_specs() {
         writeln!(
@@ -338,7 +338,10 @@ pub(crate) fn automation_health_level_name(level: AutomationHealthLevel) -> &'st
     }
 }
 
-pub(crate) fn max_health_level(a: AutomationHealthLevel, b: AutomationHealthLevel) -> AutomationHealthLevel {
+pub(crate) fn max_health_level(
+    a: AutomationHealthLevel,
+    b: AutomationHealthLevel,
+) -> AutomationHealthLevel {
     a.max(b)
 }
 
@@ -485,7 +488,10 @@ pub(crate) fn collect_automation_health_report(
     })
 }
 
-pub(crate) fn render_automation_health_report(report: &AutomationHealthReport, consumer_tag: &str) -> String {
+pub(crate) fn render_automation_health_report(
+    report: &AutomationHealthReport,
+    consumer_tag: &str,
+) -> String {
     let thresholds = automation_health_thresholds();
     let mut out = String::new();
     out.push_str(&format!(
@@ -747,7 +753,9 @@ pub(crate) fn scheduled_report_timestamp(generated_at: OffsetDateTime) -> String
 // Restore verification
 // ---------------------------------------------------------------------------
 
-pub(crate) fn ensure_sqlite_integrity(db_path: &std::path::Path) -> Result<(), Box<dyn std::error::Error>> {
+pub(crate) fn ensure_sqlite_integrity(
+    db_path: &std::path::Path,
+) -> Result<(), Box<dyn std::error::Error>> {
     if !db_path.is_file() {
         return Err(format!("wiki.db 不存在: {}", db_path.display()).into());
     }
@@ -788,7 +796,10 @@ pub(crate) fn verify_restore_vault(
 
     let mut pages = 0usize;
     let mut frontmatter_checked = 0usize;
-    for entry in walkdir::WalkDir::new(&pages_dir).into_iter().filter_map(Result::ok) {
+    for entry in walkdir::WalkDir::new(&pages_dir)
+        .into_iter()
+        .filter_map(Result::ok)
+    {
         if !entry.file_type().is_file() {
             continue;
         }
@@ -827,7 +838,10 @@ pub(crate) fn verify_restore_vault(
     })
 }
 
-pub(crate) fn table_exists(conn: &rusqlite::Connection, table_name: &str) -> Result<bool, rusqlite::Error> {
+pub(crate) fn table_exists(
+    conn: &rusqlite::Connection,
+    table_name: &str,
+) -> Result<bool, rusqlite::Error> {
     conn.query_row(
         "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name=?1)",
         [table_name],
@@ -881,7 +895,10 @@ pub(crate) fn collect_restore_verify_report(
     })
 }
 
-pub(crate) fn render_restore_verify_report(report: &RestoreVerifyReport, consumer_tag: &str) -> String {
+pub(crate) fn render_restore_verify_report(
+    report: &RestoreVerifyReport,
+    consumer_tag: &str,
+) -> String {
     let mut out = String::new();
     out.push_str("restore verify: status=ok\n");
     out.push_str(&format!(
@@ -1055,7 +1072,9 @@ pub(crate) fn print_row_state_verification(verification: &WikiStateRowVerificati
     }
 }
 
-pub(crate) fn row_state_verification_error(verification: &WikiStateRowVerification) -> Option<String> {
+pub(crate) fn row_state_verification_error(
+    verification: &WikiStateRowVerification,
+) -> Option<String> {
     if verification.row_count == 0 {
         return Some("row-level state has no rows; blob fallback is still required".to_string());
     }

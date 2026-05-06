@@ -6,17 +6,17 @@ use std::path::{Path, PathBuf};
 
 use time::OffsetDateTime;
 use wiki_core::{
-    ClaimId, Confidence, DomainSchema, EntryType, EvidenceFixerPlan, FixAction, FixActionType, FixPatch,
-    GapFinding, GapSeverity, GovernanceDuplicateGroup, GovernanceScanReport, PageContract, PageId,
-    Scope, SourceId, StrategyExecutionAction,
-    StrategyExecutionDryRunStatus, StrategyExecutionPlan, WikiPage,
+    ClaimId, Confidence, DomainSchema, EntryType, EvidenceFixerPlan, FixAction, FixActionType,
+    FixPatch, GapFinding, GapSeverity, GovernanceDuplicateGroup, GovernanceScanReport,
+    PageContract, PageId, Scope, SourceId, StrategyExecutionAction, StrategyExecutionDryRunStatus,
+    StrategyExecutionPlan, WikiPage,
 };
 use wiki_kernel::{
-    apply_evidence_fixer_plan, build_evidence_fixer_plan,
-    discover_synthesis_candidates, duplicate_web_verification_key, finalize_consumed_page,
-    initial_status_for, map_findings_to_fixes, run_governance_scan, write_lint_report,
-    write_projection, EvidenceFixerApplyOptions, EvidenceFixerPlanOptions, GovernanceScanOptions,
-    InMemoryStore, LlmWikiEngine, NoopWikiHook, SynthesisDiscoveryOptions,
+    apply_evidence_fixer_plan, build_evidence_fixer_plan, discover_synthesis_candidates,
+    duplicate_web_verification_key, finalize_consumed_page, initial_status_for,
+    map_findings_to_fixes, run_governance_scan, write_lint_report, write_projection,
+    EvidenceFixerApplyOptions, EvidenceFixerPlanOptions, GovernanceScanOptions, InMemoryStore,
+    LlmWikiEngine, NoopWikiHook, SynthesisDiscoveryOptions,
 };
 use wiki_mempalace_bridge::{
     consume_outbox_ndjson_with_resolver_and_stats, LiveMempalaceSink, MempalaceError,
@@ -24,21 +24,21 @@ use wiki_mempalace_bridge::{
 };
 use wiki_storage::{EmbeddingWrite, SqliteRepository, WikiRepository};
 
-use crate::cli_utils::{
-    default_fixer_report_dir, default_governance_report_dir, default_synthesis_report_dir,
-    env_or, parse_scope, resolve_wiki_relative_path, timestamp_slug, DEFAULT_MEMPALACE_CONSUMER_TAG,
-};
 use crate::automation::{
-    automation_job_name, automation_job_spec, automation_run_daily_jobs,
-    AutomationHeartbeat, format_automation_record, latest_automation_run_or_error,
-    run_automation_job, run_automation_plan, AutomationJob,
+    automation_job_name, automation_job_spec, automation_run_daily_jobs, format_automation_record,
+    latest_automation_run_or_error, run_automation_job, run_automation_plan, AutomationHeartbeat,
+    AutomationJob,
 };
+use crate::cli_utils::{
+    default_fixer_report_dir, default_governance_report_dir, default_synthesis_report_dir, env_or,
+    parse_scope, resolve_wiki_relative_path, timestamp_slug, DEFAULT_MEMPALACE_CONSUMER_TAG,
+};
+use crate::commands;
 use crate::strategy_render::{
-    strategy_executor_report_prefix, strategy_execution_action_kind_name,
+    strategy_execution_action_kind_name, strategy_executor_report_prefix,
     StrategyExecutorActionStatus, StrategyExecutorApplyActionReport, StrategyExecutorApplyReport,
     StrategyExecutorApplySummary, StrategyExecutorRunMode,
 };
-use crate::commands;
 use crate::{Cli, ExecutorAllow, NotionDbTarget, NotionSyncTagPolicy};
 
 // ---------------------------------------------------------------------------
@@ -127,8 +127,10 @@ impl MempalaceWikiSink for CliMempalaceSink {
 // ---------------------------------------------------------------------------
 
 /// Notion DB configurations: (slug, Notion DB UUID)
-pub(crate) const NOTION_DB_X_BOOKMARK: (&str, &str) = ("x_bookmark", "0d305291-2a5d-426c-8db8-903ed5bb7ddb");
-pub(crate) const NOTION_DB_WECHAT: (&str, &str) = ("wechat", "16470107-4b68-810a-bc81-f90795cc29ad");
+pub(crate) const NOTION_DB_X_BOOKMARK: (&str, &str) =
+    ("x_bookmark", "0d305291-2a5d-426c-8db8-903ed5bb7ddb");
+pub(crate) const NOTION_DB_WECHAT: (&str, &str) =
+    ("wechat", "16470107-4b68-810a-bc81-f90795cc29ad");
 
 // ---------------------------------------------------------------------------
 // Functions
@@ -163,7 +165,8 @@ pub(crate) fn run_research_synthesis_compose(
     candidate_id: &str,
     inputs: ResearchSynthesisComposeInputs,
 ) -> Result<crate::research_synthesis::SynthesisComposeReport, Box<dyn std::error::Error>> {
-    let candidate = crate::research_synthesis::select_candidate(discovery_report, candidate_id)?.clone();
+    let candidate =
+        crate::research_synthesis::select_candidate(discovery_report, candidate_id)?.clone();
     let internal_evidence =
         crate::research_synthesis::build_internal_evidence(&eng.store, viewer, &candidate);
     let mut extra_blockers = Vec::new();
@@ -261,7 +264,8 @@ pub(crate) fn run_research_synthesis_compose(
     add_research_synthesis_blockers(&mut report, extra_blockers);
     if report.status == crate::research_synthesis::SynthesisComposeStatus::Ready && inputs.apply {
         let draft = draft.ok_or("ready synthesis compose report missing draft")?;
-        let page = crate::research_synthesis::build_synthesis_page(&candidate, &draft, viewer.clone());
+        let page =
+            crate::research_synthesis::build_synthesis_page(&candidate, &draft, viewer.clone());
         let pid = page.id;
         eng.store.pages.insert(pid, page);
         eng.save_to_repo_and_flush_outbox_with_policy(repo, 128, 3)?;
@@ -433,7 +437,10 @@ pub(crate) fn run_gap_job(
 }
 
 /// 执行 Auto 类型 fix action 的 patch，返回实际修改的 page 数量。
-pub(crate) fn apply_auto_fixes(eng: &mut LlmWikiEngine<NoopWikiHook>, fixes: &[FixAction]) -> usize {
+pub(crate) fn apply_auto_fixes(
+    eng: &mut LlmWikiEngine<NoopWikiHook>,
+    fixes: &[FixAction],
+) -> usize {
     let mut modified_pages = std::collections::HashSet::new();
     for fix in fixes {
         if fix.fix_type != FixActionType::Auto {
@@ -936,7 +943,9 @@ pub(crate) fn run_automation_fixer_plan_job(
     Ok(())
 }
 
-pub(crate) fn latest_fixer_plan_path(dir: &Path) -> Result<Option<PathBuf>, Box<dyn std::error::Error>> {
+pub(crate) fn latest_fixer_plan_path(
+    dir: &Path,
+) -> Result<Option<PathBuf>, Box<dyn std::error::Error>> {
     if !dir.exists() {
         return Ok(None);
     }
@@ -1032,7 +1041,10 @@ pub(crate) fn run_automation_synthesis_discover_job(
     );
     let dir = default_synthesis_report_dir(wiki_root);
     let files = crate::governance::write_synthesis_discovery_files(&report, &dir)?;
-    print!("{}", crate::governance::render_synthesis_discovery_text(&report));
+    print!(
+        "{}",
+        crate::governance::render_synthesis_discovery_text(&report)
+    );
     println!("json_report_file={}", files.json_path.display());
     println!("markdown_report_file={}", files.markdown_path.display());
     Ok(())
@@ -1060,7 +1072,8 @@ pub(crate) fn run_automation_synthesis_run_job(
         },
     );
     let dir = default_synthesis_report_dir(wiki_root);
-    let discovery_files = crate::governance::write_synthesis_discovery_files(&discovery_report, &dir)?;
+    let discovery_files =
+        crate::governance::write_synthesis_discovery_files(&discovery_report, &dir)?;
     print!(
         "{}",
         crate::governance::render_synthesis_discovery_text(&discovery_report)
@@ -1317,7 +1330,9 @@ pub(crate) fn run_notion_sync_cmd(
                     },
                 )?
             } else {
-                crate::notion_source_projection::project_notion_sources_to_vault(&sources, vault, mode)?
+                crate::notion_source_projection::project_notion_sources_to_vault(
+                    &sources, vault, mode,
+                )?
             };
             println!("{report}");
         }
@@ -1402,7 +1417,9 @@ pub(crate) fn query_to_page(
         .into_page(scope, status)
 }
 
-pub(crate) fn read_graph_extras_lines(path: &PathBuf) -> Result<Vec<String>, Box<dyn std::error::Error>> {
+pub(crate) fn read_graph_extras_lines(
+    path: &PathBuf,
+) -> Result<Vec<String>, Box<dyn std::error::Error>> {
     let s = std::fs::read_to_string(path)?;
     Ok(s.lines()
         .map(str::trim)

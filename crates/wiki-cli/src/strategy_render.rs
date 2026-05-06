@@ -164,7 +164,9 @@ pub(crate) fn strategy_execution_policy_name(policy: StrategyExecutionPolicy) ->
     }
 }
 
-pub(crate) fn strategy_execution_action_kind_name(kind: StrategyExecutionActionKind) -> &'static str {
+pub(crate) fn strategy_execution_action_kind_name(
+    kind: StrategyExecutionActionKind,
+) -> &'static str {
     match kind {
         StrategyExecutionActionKind::FixAutoSafe => "fix_auto_safe",
         StrategyExecutionActionKind::AgentReview => "agent_review",
@@ -249,7 +251,10 @@ pub(crate) fn render_strategy_execution_plan_text(plan: &StrategyExecutionPlan) 
     out
 }
 
-pub(crate) fn render_strategy_report_markdown(report: &StrategyReport, sibling_json: &str) -> String {
+pub(crate) fn render_strategy_report_markdown(
+    report: &StrategyReport,
+    sibling_json: &str,
+) -> String {
     let generated_at = report
         .generated_at
         .map(format_automation_time)
@@ -441,7 +446,9 @@ pub(crate) fn strategy_executor_report_prefix(generated_at: OffsetDateTime) -> S
     )
 }
 
-pub(crate) fn strategy_executor_action_status_name(status: StrategyExecutorActionStatus) -> &'static str {
+pub(crate) fn strategy_executor_action_status_name(
+    status: StrategyExecutorActionStatus,
+) -> &'static str {
     match status {
         StrategyExecutorActionStatus::WouldApply => "would_apply",
         StrategyExecutorActionStatus::Applied => "applied",
@@ -450,7 +457,9 @@ pub(crate) fn strategy_executor_action_status_name(status: StrategyExecutorActio
     }
 }
 
-pub(crate) fn render_strategy_executor_apply_report_text(report: &StrategyExecutorApplyReport) -> String {
+pub(crate) fn render_strategy_executor_apply_report_text(
+    report: &StrategyExecutorApplyReport,
+) -> String {
     let generated_at = format_automation_time(report.generated_at);
     let mode = match report.mode {
         StrategyExecutorRunMode::Preflight => "preflight",
@@ -578,7 +587,9 @@ pub(crate) fn strategy_report_prefix(generated_at: OffsetDateTime) -> String {
     )
 }
 
-pub(crate) fn parse_outbox_events(ndjson: &str) -> Result<Vec<WikiEvent>, Box<dyn std::error::Error>> {
+pub(crate) fn parse_outbox_events(
+    ndjson: &str,
+) -> Result<Vec<WikiEvent>, Box<dyn std::error::Error>> {
     let mut events = Vec::new();
     for (idx, line) in ndjson.lines().enumerate() {
         if line.trim().is_empty() {
