@@ -1,8 +1,9 @@
+use crate::cli_utils::resolve_wiki_relative_path;
 use crate::{
     acquire_cli_writer_lease, automation_run_daily_jobs, llm, orphan_governance,
-    print_automation_jobs, resolve_wiki_relative_path, run_automation_plan, run_verify_row_state,
-    vault_audit, vault_backfill, web_search, AiProfileCmd, AutomationCmd, Cli, Cmd, GovernanceCmd,
-    OrphanGovernanceCmd, ResearchSynthesisCmd, WebSearchCmd,
+    print_automation_jobs, run_automation_plan, run_verify_row_state, vault_audit, vault_backfill,
+    web_search, AiProfileCmd, AutomationCmd, Cli, Cmd, GovernanceCmd, OrphanGovernanceCmd,
+    ResearchSynthesisCmd, WebSearchCmd,
 };
 use std::collections::BTreeSet;
 use time::OffsetDateTime;

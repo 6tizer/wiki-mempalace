@@ -1,5 +1,5 @@
+use crate::cli_utils::{parse_scope, timestamp_slug};
 use crate::llm;
-use crate::{parse_scope, timestamp_slug};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};

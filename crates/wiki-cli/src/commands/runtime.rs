@@ -4,9 +4,8 @@ use wiki_core::{DomainSchema, Scope};
 use wiki_kernel::{LlmWikiEngine, NoopWikiHook};
 use wiki_storage::{SqliteRepository, SqliteWriterLease};
 
-use crate::{
-    acquire_cli_writer_lease, cmd_needs_writer_lease, cmd_writer_lease_label, parse_scope, Cli,
-};
+use crate::cli_utils::parse_scope;
+use crate::{acquire_cli_writer_lease, cmd_needs_writer_lease, cmd_writer_lease_label, Cli};
 
 pub(crate) struct CliRuntime {
     pub(crate) viewer: Scope,

@@ -354,7 +354,11 @@ impl<H: WikiHook> LlmWikiEngine<H> {
         {
             return Err(EngineError::PromotionDenied);
         }
-        let claim = self.store.claims.get_mut(&claim_id).unwrap();
+        let claim = self
+            .store
+            .claims
+            .get_mut(&claim_id)
+            .expect("claim existence verified by get() above");
         advance_tier(claim);
         self.audit(
             AuditOperation::WriteClaim,
@@ -459,7 +463,11 @@ impl<H: WikiHook> LlmWikiEngine<H> {
         }
 
         // 通过检查 → 写入
-        let page = self.store.pages.get_mut(&page_id).unwrap();
+        let page = self
+            .store
+            .pages
+            .get_mut(&page_id)
+            .expect("page existence verified by checks above");
         page.status = to_status;
         page.updated_at = now;
         page.status_entered_at = Some(now);
@@ -495,7 +503,11 @@ impl<H: WikiHook> LlmWikiEngine<H> {
         // 收集需要变更的 page_id（避免借用冲突）
         let page_ids: Vec<PageId> = self.store.pages.keys().copied().collect();
         for pid in page_ids {
-            let page = self.store.pages.get(&pid).unwrap();
+            let page = self
+                .store
+                .pages
+                .get(&pid)
+                .expect("key collected from pages map");
             let et = match page.entry_type {
                 Some(ref et) => et.clone(),
                 None => continue,
@@ -510,7 +522,11 @@ impl<H: WikiHook> LlmWikiEngine<H> {
                 }
             });
             if should_mark {
-                let page = self.store.pages.get_mut(&pid).unwrap();
+                let page = self
+                    .store
+                    .pages
+                    .get_mut(&pid)
+                    .expect("key collected from pages map");
                 let from = page.status;
                 page.status = EntryStatus::NeedsUpdate;
                 page.status_entered_at = Some(now);
@@ -547,7 +563,11 @@ impl<H: WikiHook> LlmWikiEngine<H> {
         let page_ids: Vec<PageId> = self.store.pages.keys().copied().collect();
         let mut to_remove: Vec<PageId> = Vec::new();
         for pid in page_ids {
-            let page = self.store.pages.get(&pid).unwrap();
+            let page = self
+                .store
+                .pages
+                .get(&pid)
+                .expect("key collected from pages map");
             let et = match page.entry_type {
                 Some(ref et) => et.clone(),
                 None => continue,
