@@ -109,6 +109,50 @@ fn chat_web_off_does_not_use_fake_web_evidence() {
 }
 
 #[test]
+fn chat_internal_evidence_includes_title_and_excerpt() {
+    let tmp = tempdir().expect("tempdir");
+    let db = tmp.path().join(".wiki").join("wiki.db");
+    let wiki_dir = tmp.path().join("wiki");
+    std::fs::create_dir_all(db.parent().expect("db parent")).expect("create .wiki");
+
+    Command::cargo_bin("wiki-cli")
+        .expect("wiki-cli binary")
+        .arg("--db")
+        .arg(&db)
+        .arg("--wiki-dir")
+        .arg(&wiki_dir)
+        .arg("--sync-wiki")
+        .arg("--viewer-scope")
+        .arg("shared:wiki")
+        .arg("query")
+        .arg("Hermes")
+        .arg("--write-page")
+        .arg("--page-title")
+        .arg("Hermes Agent")
+        .assert()
+        .success();
+
+    let mut cmd = Command::cargo_bin("wiki-agent").expect("wiki-agent binary");
+    cmd.arg("--db")
+        .arg(&db)
+        .arg("--wiki-dir")
+        .arg(&wiki_dir)
+        .arg("--viewer-scope")
+        .arg("shared:wiki")
+        .arg("chat")
+        .arg("Hermes")
+        .arg("--web")
+        .arg("off")
+        .arg("--fake-llm-response")
+        .arg("answer")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("title=Hermes Agent"))
+        .stdout(predicate::str::contains("excerpt:"))
+        .stdout(predicate::str::contains("## 问题 Hermes"));
+}
+
+#[test]
 fn chat_web_always_uses_fake_web_evidence_for_shared_scope() {
     let tmp = tempdir().expect("tempdir");
     let db = tmp.path().join(".wiki").join("wiki.db");

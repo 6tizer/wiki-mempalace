@@ -8,10 +8,12 @@ use crate::render_cli;
 use crate::session_store::SessionStore;
 use crate::slash::{self, SlashCommand};
 use crate::tool_backend::{discover_native_tools, ToolBackendKind};
+use rusqlite::{params, Connection};
 use serde_json::json;
 use std::io::{self, BufRead, Write};
 use std::path::PathBuf;
-use wiki_core::DomainSchema;
+use uuid::Uuid;
+use wiki_core::{ClaimId, DomainSchema, PageId, SourceId};
 use wiki_kernel::{LlmWikiEngine, NoopWikiHook};
 use wiki_storage::SqliteRepository;
 use wiki_tools::{ToolContext, ToolRegistry};
@@ -256,7 +258,7 @@ impl ChatRuntime {
                 palace_path: palace.as_deref(),
             },
         )?;
-        let out = value
+        let mut out: Vec<_> = value
             .get("results")
             .and_then(serde_json::Value::as_array)
             .into_iter()
@@ -265,9 +267,19 @@ impl ChatRuntime {
                 Some(InternalEvidence {
                     doc_id: item.get("doc_id")?.as_str()?.to_string(),
                     score: item.get("score")?.as_f64().unwrap_or_default(),
+                    title: None,
+                    excerpt: None,
                 })
             })
             .collect();
+        let palace_conn = self
+            .config
+            .palace
+            .as_ref()
+            .and_then(|path| Connection::open(path).ok());
+        for item in &mut out {
+            enrich_internal_evidence(&eng, palace_conn.as_ref(), item);
+        }
         Ok(out)
     }
 
@@ -302,4 +314,106 @@ fn build_model(
 
 fn system_prompt(profile: &str, backend: ToolBackendKind) -> String {
     format!("You are wiki-agent. Answer directly. profile={profile}. tool_backend={backend:?}.")
+}
+
+fn enrich_internal_evidence(
+    eng: &LlmWikiEngine<NoopWikiHook>,
+    palace_conn: Option<&Connection>,
+    item: &mut InternalEvidence,
+) {
+    if let Some(uuid) = item.doc_id.strip_prefix("page:").and_then(parse_uuid) {
+        if let Some(page) = eng.store.pages.get(&PageId(uuid)) {
+            item.title = Some(page.title.clone());
+            item.excerpt = Some(text_excerpt(&page.markdown, 900));
+        }
+        return;
+    }
+    if let Some(uuid) = item.doc_id.strip_prefix("claim:").and_then(parse_uuid) {
+        if let Some(claim) = eng.store.claims.get(&ClaimId(uuid)) {
+            item.title = Some("claim".to_string());
+            item.excerpt = Some(text_excerpt(&claim.text, 700));
+        }
+        return;
+    }
+    if let Some(uuid) = item.doc_id.strip_prefix("source:").and_then(parse_uuid) {
+        if let Some(source) = eng.store.sources.get(&SourceId(uuid)) {
+            item.title = Some(source.uri.clone());
+            item.excerpt = Some(text_excerpt(&source.body, 900));
+        }
+        return;
+    }
+    if let (Some(conn), Some(drawer_id)) = (
+        palace_conn,
+        item.doc_id
+            .strip_prefix("mp_drawer:")
+            .and_then(|value| value.parse::<i64>().ok()),
+    ) {
+        if let Ok((wing, hall, room, source_path, content)) = conn.query_row(
+            "SELECT wing, hall, room, source_path, content FROM drawers WHERE id = ?1",
+            params![drawer_id],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, String>(4)?,
+                ))
+            },
+        ) {
+            item.title = Some(
+                first_markdown_heading(&content)
+                    .unwrap_or_else(|| format!("{wing}/{hall}/{room} ({source_path})")),
+            );
+            item.excerpt = Some(text_excerpt(&content, 900));
+        }
+    }
+}
+
+fn parse_uuid(value: &str) -> Option<Uuid> {
+    Uuid::parse_str(value).ok()
+}
+
+fn first_markdown_heading(text: &str) -> Option<String> {
+    text.lines()
+        .find_map(|line| line.strip_prefix("# ").map(str::trim))
+        .filter(|line| !line.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+fn text_excerpt(text: &str, max_chars: usize) -> String {
+    let trimmed = strip_frontmatter(text).trim();
+    let mut out = String::new();
+    let mut last_was_space = false;
+    for ch in trimmed.chars() {
+        if ch.is_whitespace() {
+            if !last_was_space {
+                out.push(' ');
+                last_was_space = true;
+            }
+        } else {
+            out.push(ch);
+            last_was_space = false;
+        }
+        if out.chars().count() >= max_chars {
+            out.push_str("...");
+            break;
+        }
+    }
+    out.trim().to_string()
+}
+
+fn strip_frontmatter(text: &str) -> &str {
+    let mut lines = text.lines();
+    if lines.next() != Some("---") {
+        return text;
+    }
+    let mut offset = 4;
+    for line in lines {
+        offset += line.len() + 1;
+        if line == "---" {
+            return text.get(offset..).unwrap_or(text);
+        }
+    }
+    text
 }

@@ -591,7 +591,7 @@ fn do_embed_once(
 
 fn embeddings_url(base_url: &str) -> String {
     let trimmed = base_url.trim_end_matches('/');
-    if trimmed.ends_with("/v1") {
+    if trimmed.ends_with("/v1") || trimmed.ends_with("/v4") {
         format!("{trimmed}/embeddings")
     } else {
         format!("{trimmed}/v1/embeddings")
@@ -600,7 +600,7 @@ fn embeddings_url(base_url: &str) -> String {
 
 fn chat_completions_url(base_url: &str) -> String {
     let trimmed = base_url.trim_end_matches('/');
-    if trimmed.ends_with("/v1") {
+    if trimmed.ends_with("/v1") || trimmed.ends_with("/v4") {
         format!("{trimmed}/chat/completions")
     } else {
         format!("{trimmed}/v1/chat/completions")
@@ -1049,6 +1049,18 @@ model = "bad-model"
 
         assert!(!redacted.contains("sk-proj-secret"));
         assert!(redacted.contains("[REDACTED_SECRET]"));
+    }
+
+    #[test]
+    fn openai_compatible_url_helpers_accept_v4_base_urls() {
+        assert_eq!(
+            chat_completions_url("https://api.z.ai/api/coding/paas/v4"),
+            "https://api.z.ai/api/coding/paas/v4/chat/completions"
+        );
+        assert_eq!(
+            embeddings_url("https://api.z.ai/api/coding/paas/v4"),
+            "https://api.z.ai/api/coding/paas/v4/embeddings"
+        );
     }
 
     #[test]
