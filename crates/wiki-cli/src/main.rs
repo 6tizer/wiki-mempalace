@@ -6,27 +6,30 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use time::OffsetDateTime;
 use wiki_core::{
-    build_strategy_execution_plan, document_visible_to_viewer, parse_memory_tier, AuditOperation,
-    AuditRecord, ClaimId, CompositeSearchPorts, Confidence, Entity, EntityId, EntityKind,
-    EntryType, FusionConfig, LlmIngestPlanV1, MemoryTier, PageContract, PageId, QueryContext,
-    RelationKind, Scope, SessionCrystallizationInput, SourceId, StrategyExecutionPlan, TypedEdge,
-    WikiPage,
+    build_strategy_execution_plan, parse_memory_tier, AuditOperation, AuditRecord, Confidence,
+    Entity, EntityId, EntityKind, EntryType, LlmIngestPlanV1, MemoryTier, PageContract,
+    QueryContext, RelationKind, Scope, SessionCrystallizationInput, StrategyExecutionPlan,
+    TypedEdge, WikiPage,
 };
+#[cfg(test)]
+use wiki_core::{CompositeSearchPorts, FusionConfig};
 #[cfg(test)]
 use wiki_core::{EntryStatus, FixAction, FixActionType, FixPatch, WikiEvent};
 #[cfg(test)]
 use wiki_kernel::map_findings_to_fixes;
 use wiki_kernel::{
     apply_evidence_fixer_plan, collect_wiki_metrics, discover_synthesis_candidates,
-    finalize_consumed_page, format_claim_doc_id, initial_status_for, merge_graph_rankings,
+    finalize_consumed_page, format_claim_doc_id, initial_status_for,
     restore_evidence_fixer_tombstone, run_governance_scan, run_strategy_scan, write_projection,
-    EvidenceFixerApplyOptions, GovernanceScanOptions, InMemorySearchPorts, InMemoryStore,
-    LlmWikiEngine, NoopWikiHook, SearchPorts, StrategyScanOptions, SynthesisDiscoveryOptions,
+    EvidenceFixerApplyOptions, GovernanceScanOptions, SearchPorts, StrategyScanOptions,
+    SynthesisDiscoveryOptions,
 };
+#[cfg(test)]
+use wiki_kernel::{InMemorySearchPorts, InMemoryStore, LlmWikiEngine, NoopWikiHook};
 use wiki_mempalace_bridge::MempalaceSearchPorts;
-use wiki_storage::{
-    canonical_notion_page_id, EmbeddingWrite, SqliteRepository, SqliteSearchPorts, WikiRepository,
-};
+#[cfg(test)]
+use wiki_storage::SqliteRepository;
+use wiki_storage::{canonical_notion_page_id, EmbeddingWrite, WikiRepository};
 
 mod automation;
 mod automation_jobs;
@@ -1925,147 +1928,10 @@ fn run_with_engine(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-pub(crate) fn doc_id_visible_to_viewer(
-    doc_id: &str,
-    store: &InMemoryStore,
-    viewer: &Scope,
-) -> bool {
-    if let Some(rest) = doc_id.strip_prefix("claim:") {
-        if let Ok(u) = uuid::Uuid::parse_str(rest) {
-            return store
-                .claims
-                .get(&ClaimId(u))
-                .map(|c| document_visible_to_viewer(&c.scope, viewer))
-                .unwrap_or(false);
-        }
-        return false;
-    }
-    if let Some(rest) = doc_id.strip_prefix("page:") {
-        if let Ok(u) = uuid::Uuid::parse_str(rest) {
-            return store
-                .pages
-                .get(&PageId(u))
-                .map(|p| document_visible_to_viewer(&p.scope, viewer))
-                .unwrap_or(false);
-        }
-        return false;
-    }
-    if let Some(rest) = doc_id.strip_prefix("entity:") {
-        if let Ok(u) = uuid::Uuid::parse_str(rest) {
-            return store
-                .entities
-                .get(&EntityId(u))
-                .map(|e| document_visible_to_viewer(&e.scope, viewer))
-                .unwrap_or(false);
-        }
-        return false;
-    }
-    if let Some(rest) = doc_id.strip_prefix("source:") {
-        if let Ok(u) = uuid::Uuid::parse_str(rest) {
-            return store
-                .sources
-                .get(&SourceId(u))
-                .map(|s| document_visible_to_viewer(&s.scope, viewer))
-                .unwrap_or(false);
-        }
-    }
-    false
-}
-
-pub(crate) fn graph_extra_visible_to_viewer(
-    doc_id: &str,
-    store: &InMemoryStore,
-    viewer: &Scope,
-) -> bool {
-    if doc_id.starts_with("mp_drawer:") || doc_id.starts_with("mp_kg:") {
-        return false;
-    }
-    if doc_id.starts_with("claim:")
-        || doc_id.starts_with("page:")
-        || doc_id.starts_with("entity:")
-        || doc_id.starts_with("source:")
-    {
-        return doc_id_visible_to_viewer(doc_id, store, viewer);
-    }
-    false
-}
-
-fn merge_optional_graph_extras(
-    base_graph: Vec<String>,
-    graph_extras: Option<Vec<String>>,
-    per_stream_limit: usize,
-) -> Vec<String> {
-    graph_extras
-        .map(|extras| merge_graph_rankings(base_graph.clone(), extras, per_stream_limit))
-        .unwrap_or(base_graph)
-}
-
-fn filter_graph_extras_for_viewer(
-    extras: Vec<String>,
-    store: &InMemoryStore,
-    viewer: &Scope,
-) -> Vec<String> {
-    extras
-        .into_iter()
-        .filter(|id| graph_extra_visible_to_viewer(id, store, viewer))
-        .collect()
-}
-
-/// 执行融合检索：根据 palace_db 配置构建 SearchPorts 并调用 query_ranked_with_ports。
-/// ports 在函数内部创建和销毁，不与外部 eng 的 mutable 借用冲突。
-fn build_wiki_search_ports<'a>(
-    repo: &'a SqliteRepository,
-    eng: &'a LlmWikiEngine<NoopWikiHook>,
-    viewer: &Scope,
-) -> Box<dyn SearchPorts + 'a> {
-    match SqliteSearchPorts::open(repo, Some(viewer.clone())) {
-        Ok(ports) => Box::new(ports),
-        Err(error) => {
-            eprintln!(
-                "警告：无法创建 storage-backed wiki 搜索端口: {}，回退到 InMemorySearchPorts",
-                error
-            );
-            Box::new(InMemorySearchPorts::new(&eng.store, Some(viewer.clone())))
-        }
-    }
-}
-
-fn run_fusion_query<'a>(
-    palace_db: Option<&str>,
-    palace_bank: &str,
-    repo: &'a SqliteRepository,
-    eng: &'a LlmWikiEngine<NoopWikiHook>,
-    viewer: &'a Scope,
-    ctx: &QueryContext<'_>,
-    now: OffsetDateTime,
-    vec_override: Option<Vec<String>>,
-    graph_extras: Option<Vec<String>>,
-) -> Vec<(String, f64)> {
-    let wiki_ports = build_wiki_search_ports(repo, eng, viewer);
-    let ports: Box<dyn SearchPorts + 'a> = if let Some(pdb) = palace_db {
-        match MempalaceSearchPorts::open(Path::new(pdb), Some(palace_bank.to_string())) {
-            Ok(mp_ports) => Box::new(CompositeSearchPorts::new(
-                vec![wiki_ports, Box::new(mp_ports)],
-                FusionConfig::default(),
-            )),
-            Err(e) => {
-                eprintln!(
-                    "警告：无法打开 mempalace DB ({}): {}，回退到纯 wiki 检索",
-                    pdb, e
-                );
-                wiki_ports
-            }
-        }
-    } else {
-        wiki_ports
-    };
-    let graph_override = graph_extras.map(|extras| {
-        let active_graph =
-            SearchPorts::graph_ranked_ids(ports.as_ref(), ctx.query, ctx.per_stream_limit);
-        merge_graph_rankings(active_graph, extras, ctx.per_stream_limit)
-    });
-    eng.query_ranked_with_ports(ctx, now, ports.as_ref(), vec_override, graph_override)
-}
+use commands::query::{
+    build_wiki_search_ports, doc_id_visible_to_viewer, filter_graph_extras_for_viewer,
+    merge_optional_graph_extras, run_fusion_query,
+};
 
 #[cfg(test)]
 mod tests {
