@@ -1,7 +1,6 @@
 #![allow(clippy::items_after_test_module, clippy::too_many_arguments)]
 
 use clap::{Parser, Subcommand, ValueEnum};
-use serde::Serialize;
 use std::collections::BTreeMap;
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -11,7 +10,7 @@ use wiki_core::{
     AuditRecord, ClaimId, CompositeSearchPorts, Confidence, DomainSchema, Entity, EntityId,
     EntityKind, EntryType, FusionConfig, LlmIngestPlanV1, MemoryTier, PageContract, PageId,
     QueryContext, RelationKind, Scope, SessionCrystallizationInput, SourceId,
-    StrategyExecutionActionKind, StrategyExecutionPlan, StrategyReport, TypedEdge, WikiPage,
+    StrategyExecutionActionKind, StrategyExecutionPlan, TypedEdge, WikiPage,
 };
 #[cfg(test)]
 use wiki_core::{EntryStatus, FixAction, FixActionType, FixPatch, WikiEvent};
@@ -59,7 +58,8 @@ use strategy_render::{
     parse_outbox_events, render_metrics_markdown, render_metrics_text,
     render_strategy_execution_plan_markdown, render_strategy_execution_plan_text,
     render_strategy_executor_apply_report_markdown, render_strategy_executor_apply_report_text,
-    render_strategy_report_markdown, render_strategy_report_text, strategy_report_prefix,
+    render_strategy_report_markdown, render_strategy_report_text, serialize_strategy_suggest_json,
+    strategy_report_prefix,
 };
 
 use automation::{
@@ -1148,25 +1148,6 @@ pub(crate) fn run_scheduled_vault_reports_job(
     println!("latest_json={}", latest_json.display());
     println!("latest_markdown={}", latest_md.display());
     Ok(())
-}
-
-#[derive(Serialize)]
-struct StrategySuggestJsonOutput<'a> {
-    strategy_report: &'a StrategyReport,
-    executor_plan: &'a StrategyExecutionPlan,
-}
-
-fn serialize_strategy_suggest_json(
-    report: &StrategyReport,
-    plan: Option<&StrategyExecutionPlan>,
-) -> Result<String, serde_json::Error> {
-    match plan {
-        Some(plan) => serde_json::to_string_pretty(&StrategySuggestJsonOutput {
-            strategy_report: report,
-            executor_plan: plan,
-        }),
-        None => serde_json::to_string_pretty(report),
-    }
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {

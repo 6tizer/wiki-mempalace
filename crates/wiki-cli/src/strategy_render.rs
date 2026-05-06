@@ -601,3 +601,22 @@ pub(crate) fn parse_outbox_events(
     }
     Ok(events)
 }
+
+#[derive(Serialize)]
+pub(crate) struct StrategySuggestJsonOutput<'a> {
+    pub strategy_report: &'a StrategyReport,
+    pub executor_plan: &'a StrategyExecutionPlan,
+}
+
+pub(crate) fn serialize_strategy_suggest_json(
+    report: &StrategyReport,
+    plan: Option<&StrategyExecutionPlan>,
+) -> Result<String, serde_json::Error> {
+    match plan {
+        Some(plan) => serde_json::to_string_pretty(&StrategySuggestJsonOutput {
+            strategy_report: report,
+            executor_plan: plan,
+        }),
+        None => serde_json::to_string_pretty(report),
+    }
+}
