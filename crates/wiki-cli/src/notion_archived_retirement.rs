@@ -3,8 +3,9 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 use time::{format_description::well_known::Rfc3339, OffsetDateTime};
-use wiki_core::{RawArtifact, SourceId};
-use wiki_storage::{canonical_notion_page_id, NotionPageIndexRecord};
+use wiki_core::{AuditOperation, AuditRecord, RawArtifact, SourceId};
+use wiki_kernel::{LlmWikiEngine, NoopWikiHook};
+use wiki_storage::{canonical_notion_page_id, NotionPageIndexRecord, SqliteRepository};
 
 use crate::notion_client::NotionPageArchiveState;
 
@@ -315,6 +316,36 @@ pub fn delete_retired_source_files(paths: &[PathBuf]) -> Result<usize, Box<dyn s
         deleted += 1;
     }
     Ok(deleted)
+}
+
+pub fn apply_retirement(
+    eng: &mut LlmWikiEngine<NoopWikiHook>,
+    repo: &SqliteRepository,
+    apply_plan: &mut NotionArchivedRetirementApplyPlan,
+    vault_files: &[PathBuf],
+) -> Result<(), Box<dyn std::error::Error>> {
+    for source_id in &apply_plan.source_ids {
+        eng.store.sources.remove(source_id);
+        eng.audits.push(AuditRecord::new(
+            AuditOperation::RetireSource,
+            "notion-archived-retirement",
+            format!("retired notion source {}", source_id.0),
+        ));
+    }
+    let snapshot = eng.store.to_snapshot(&eng.audits);
+    let deleted_index_rows =
+        repo.save_snapshot_and_delete_notion_page_indexes(&snapshot, &apply_plan.notion_page_ids)?;
+    let deleted_vault_files = delete_retired_source_files(vault_files)?;
+    apply_plan.report.sources_removed = apply_plan.source_ids.len();
+    apply_plan.report.index_rows_deleted = deleted_index_rows;
+    apply_plan.report.vault_files_deleted = deleted_vault_files;
+    apply_plan.report.applied_source_ids = apply_plan
+        .source_ids
+        .iter()
+        .map(|source_id| source_id.0.to_string())
+        .collect();
+    apply_plan.report.applied_notion_page_ids = apply_plan.notion_page_ids.clone();
+    Ok(())
 }
 
 pub fn write_notion_archived_retirement_apply_report(

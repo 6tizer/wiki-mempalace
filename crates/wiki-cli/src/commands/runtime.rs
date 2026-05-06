@@ -4,8 +4,9 @@ use wiki_core::{DomainSchema, Scope};
 use wiki_kernel::{LlmWikiEngine, NoopWikiHook};
 use wiki_storage::{SqliteRepository, SqliteWriterLease};
 
+use crate::acquire_cli_writer_lease;
+use crate::cli::Cli;
 use crate::cli_utils::parse_scope;
-use crate::{acquire_cli_writer_lease, cmd_needs_writer_lease, cmd_writer_lease_label, Cli};
 
 pub(crate) struct CliRuntime {
     pub(crate) viewer: Scope,
@@ -21,10 +22,10 @@ pub(crate) fn open(cli: &Cli) -> Result<CliRuntime, Box<dyn std::error::Error>> 
     let viewer = parse_scope(&cli.viewer_scope);
     let wiki_root = cli.wiki_dir.clone();
     let sync_wiki = cli.sync_wiki;
-    let writer_lease = if cmd_needs_writer_lease(&cli.cmd) {
+    let writer_lease = if cli.cmd.needs_writer_lease() {
         Some(acquire_cli_writer_lease(
             &cli.db,
-            cmd_writer_lease_label(&cli.cmd),
+            cli.cmd.writer_lease_label(),
         )?)
     } else {
         None

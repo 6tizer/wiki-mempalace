@@ -1,37 +1,39 @@
 #![allow(clippy::items_after_test_module, clippy::too_many_arguments)]
 
-use clap::{Parser, Subcommand, ValueEnum};
-use serde::Serialize;
+use clap::Parser;
 use std::collections::BTreeMap;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use time::OffsetDateTime;
 use wiki_core::{
-    build_strategy_execution_plan, document_visible_to_viewer, parse_memory_tier, AuditOperation,
-    AuditRecord, ClaimId, CompositeSearchPorts, Confidence, DomainSchema, Entity, EntityId,
-    EntityKind, EntryType, FusionConfig, LlmIngestPlanV1, MemoryTier, PageContract, PageId,
-    QueryContext, RelationKind, Scope, SessionCrystallizationInput, SourceId,
-    StrategyExecutionActionKind, StrategyExecutionPlan, StrategyReport, TypedEdge, WikiPage,
+    build_strategy_execution_plan, parse_memory_tier, Confidence, Entity, EntityId, EntityKind,
+    EntryType, LlmIngestPlanV1, MemoryTier, PageContract, QueryContext, RelationKind, Scope,
+    SessionCrystallizationInput, StrategyExecutionPlan, TypedEdge, WikiPage,
 };
+#[cfg(test)]
+use wiki_core::{CompositeSearchPorts, FusionConfig};
 #[cfg(test)]
 use wiki_core::{EntryStatus, FixAction, FixActionType, FixPatch, WikiEvent};
 #[cfg(test)]
 use wiki_kernel::map_findings_to_fixes;
 use wiki_kernel::{
     apply_evidence_fixer_plan, collect_wiki_metrics, discover_synthesis_candidates,
-    finalize_consumed_page, format_claim_doc_id, initial_status_for, merge_graph_rankings,
+    finalize_consumed_page, format_claim_doc_id, initial_status_for,
     restore_evidence_fixer_tombstone, run_governance_scan, run_strategy_scan, write_projection,
-    EvidenceFixerApplyOptions, GovernanceScanOptions, InMemorySearchPorts, InMemoryStore,
-    LlmWikiEngine, NoopWikiHook, SearchPorts, StrategyScanOptions, SynthesisDiscoveryOptions,
+    EvidenceFixerApplyOptions, GovernanceScanOptions, SearchPorts, StrategyScanOptions,
+    SynthesisDiscoveryOptions,
 };
+#[cfg(test)]
+use wiki_kernel::{InMemorySearchPorts, InMemoryStore, LlmWikiEngine, NoopWikiHook};
 use wiki_mempalace_bridge::MempalaceSearchPorts;
-use wiki_storage::{
-    canonical_notion_page_id, EmbeddingWrite, SqliteRepository, SqliteSearchPorts, WikiRepository,
-};
+#[cfg(test)]
+use wiki_storage::SqliteRepository;
+use wiki_storage::{canonical_notion_page_id, EmbeddingWrite, WikiRepository};
 
 mod automation;
 mod automation_jobs;
 mod banner;
+mod cli;
 mod cli_utils;
 mod commands;
 mod compiler_deferred;
@@ -59,25 +61,24 @@ use strategy_render::{
     parse_outbox_events, render_metrics_markdown, render_metrics_text,
     render_strategy_execution_plan_markdown, render_strategy_execution_plan_text,
     render_strategy_executor_apply_report_markdown, render_strategy_executor_apply_report_text,
-    render_strategy_report_markdown, render_strategy_report_text, strategy_report_prefix,
+    render_strategy_report_markdown, render_strategy_report_text, serialize_strategy_suggest_json,
+    strategy_report_prefix,
 };
 
 use automation::{
     acquire_cli_writer_lease, automation_all_jobs, automation_health_level_name,
-    automation_job_name, automation_job_needs_writer_lease, automation_run_daily_jobs,
-    collect_automation_health_report, collect_restore_verify_report, emit_automation_health_alert,
-    format_automation_record, format_automation_time, format_outbox_consumer_progress,
-    format_outbox_stats, path_for_report, print_automation_doctor, print_automation_jobs,
-    print_automation_last_failures, print_automation_status, prune_scheduled_report_runs,
+    automation_run_daily_jobs, collect_automation_health_report, collect_restore_verify_report,
+    emit_automation_health_alert, format_automation_record, format_automation_time,
+    format_outbox_consumer_progress, format_outbox_stats, print_automation_doctor,
+    print_automation_jobs, print_automation_last_failures, print_automation_status,
     render_automation_health_report, render_restore_verify_report, run_automation_plan,
-    run_verify_row_state, scheduled_report_keep_count, scheduled_report_timestamp,
-    AutomationHealthLevel, AutomationHealthReport, AutomationHeartbeat, AutomationJob,
+    run_verify_row_state, AutomationHealthLevel, AutomationHealthReport, AutomationHeartbeat,
 };
 #[cfg(test)]
 use automation::{
-    automation_health_thresholds, automation_job_spec, automation_job_specs, classify_backlog,
-    classify_consecutive_failures, classify_stale_heartbeat, AutomationHealthIssue,
-    AutomationHealthThresholds,
+    automation_health_thresholds, automation_job_name, automation_job_spec, automation_job_specs,
+    classify_backlog, classify_consecutive_failures, classify_stale_heartbeat,
+    prune_scheduled_report_runs, AutomationHealthIssue, AutomationHealthThresholds, AutomationJob,
 };
 #[cfg(test)]
 use automation_jobs::{
@@ -85,10 +86,10 @@ use automation_jobs::{
 };
 use automation_jobs::{
     apply_notion_sync_tag_policy, build_strategy_executor_apply_report, maybe_sync_projection,
-    query_to_page, read_graph_extras_lines, run_consume_to_mempalace_job, run_daily_automation,
-    run_fix_job, run_gap_job, run_lint_job, run_maintenance_job, run_notion_sync_cmd,
-    run_research_synthesis_compose, run_single_automation_job,
-    save_to_repo_and_flush_outbox_with_embeddings, EngineResolver, ResearchSynthesisComposeInputs,
+    query_to_page, run_consume_to_mempalace_job, run_daily_automation, run_fix_job, run_gap_job,
+    run_lint_job, run_maintenance_job, run_notion_sync_cmd, run_research_synthesis_compose,
+    run_single_automation_job, save_to_repo_and_flush_outbox_with_embeddings, EngineResolver,
+    ResearchSynthesisComposeInputs,
 };
 #[cfg(test)]
 use cli_utils::effective_ingest_entry_type;
@@ -101,1073 +102,7 @@ use wiki_compiler::preflight_llm_plan_tags;
 #[cfg(test)]
 use wiki_compiler::{batch_source_tags_for_ingest, BatchIngestContext};
 
-#[derive(Parser)]
-#[command(name = "wiki")]
-#[command(
-    about = "SQLite + Markdown wiki, RRF query, NDJSON outbox; optional embeddings & MemPalace hooks.",
-    long_about = None
-)]
-struct Cli {
-    #[arg(long, default_value = "wiki.db")]
-    db: PathBuf,
-    #[arg(long)]
-    schema: Option<PathBuf>,
-    #[arg(long)]
-    wiki_dir: Option<PathBuf>,
-    #[arg(long, default_value_t = false)]
-    sync_wiki: bool,
-    /// 检索 / lint / promote 的视角 scope（多 agent 隔离）。例如 `private:cli` 或 `shared:team1`。
-    #[arg(long, default_value = "private:cli")]
-    viewer_scope: String,
-    /// 使用 `llm-config.toml` 中 `[embed]` 做向量检索（需联网）。
-    #[arg(long, default_value_t = false)]
-    vectors: bool,
-    #[arg(long, default_value = "llm-config.toml")]
-    llm_config: PathBuf,
-    /// 每行一个 `entity:` / `claim:` / `page:` doc id，与内核图路按轮次合并后作为 RRF 第三路。
-    #[arg(long)]
-    graph_extras_file: Option<PathBuf>,
-    /// palace.db 路径（启用后 consume-to-mempalace 写入真实 palace 数据库）。
-    #[arg(long)]
-    palace: Option<PathBuf>,
-    #[command(subcommand)]
-    cmd: Cmd,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
-enum ExecutorAllow {
-    FixAutoSafe,
-}
-
-impl ExecutorAllow {
-    fn action_kind(self) -> StrategyExecutionActionKind {
-        match self {
-            ExecutorAllow::FixAutoSafe => StrategyExecutionActionKind::FixAutoSafe,
-        }
-    }
-
-    fn name(self) -> &'static str {
-        match self {
-            ExecutorAllow::FixAutoSafe => "fix_auto_safe",
-        }
-    }
-}
-
-#[derive(Subcommand)]
-enum Cmd {
-    /// Inspect or smoke-test configured LLM profiles.
-    AiProfile {
-        #[command(subcommand)]
-        cmd: AiProfileCmd,
-    },
-    /// Inspect or smoke-test configured web search providers.
-    WebSearch {
-        #[command(subcommand)]
-        cmd: WebSearchCmd,
-    },
-    /// Run read-only governance scans for lifecycle, references, duplicates, and synthesis signals.
-    Governance {
-        #[command(subcommand)]
-        cmd: GovernanceCmd,
-    },
-    /// Discover high-value synthesis candidates from internal wiki signals.
-    ResearchSynthesis {
-        #[command(subcommand)]
-        cmd: ResearchSynthesisCmd,
-    },
-    Ingest {
-        uri: String,
-        body: String,
-        #[arg(long, default_value = "private:cli")]
-        scope: String,
-        #[arg(long = "tag")]
-        tags: Vec<String>,
-    },
-    IngestLlm {
-        uri: String,
-        body: String,
-        #[arg(long, default_value = "private:cli")]
-        scope: String,
-        #[arg(long, default_value_t = false)]
-        dry_run: bool,
-        /// 已废弃：自 M7 起 ingest-llm 产出的 summary page 固定为 `EntryType::Summary`，
-        /// 传入此参数会打印一条 stderr 警告后被忽略。保留仅为避免旧脚本报 unknown argument。
-        #[arg(long, hide = true)]
-        entry_type: Option<String>,
-    },
-    FileClaim {
-        text: String,
-        #[arg(long, default_value = "private:cli")]
-        scope: String,
-        #[arg(long, default_value = "working")]
-        tier: String,
-        #[arg(long = "tag")]
-        tags: Vec<String>,
-    },
-    SupersedeClaim {
-        old_claim_id: String,
-        new_text: String,
-        #[arg(long, default_value = "private:cli")]
-        scope: String,
-        #[arg(long, default_value = "working")]
-        tier: String,
-    },
-    Query {
-        query: String,
-        #[arg(long, default_value_t = 60.0)]
-        rrf_k: f64,
-        #[arg(long, default_value_t = 50)]
-        per_stream_limit: usize,
-        #[arg(long, default_value_t = false)]
-        write_page: bool,
-        #[arg(long)]
-        page_title: Option<String>,
-        /// 为 query 生成的 page 绑定 EntryType（如 concept、entity、qa）。
-        #[arg(long)]
-        entry_type: Option<String>,
-        /// 可选：mempalace DB 路径（开启融合检索）
-        #[arg(long)]
-        palace_db: Option<String>,
-        /// 可选：mempalace bank ID（配合 --palace-db 使用）
-        #[arg(long, default_value = "wiki")]
-        palace_bank: String,
-    },
-    /// 解释搜索结果。
-    Explain {
-        query: String,
-        #[arg(long, default_value_t = 60.0)]
-        rrf_k: f64,
-        #[arg(long, default_value_t = 50)]
-        per_stream_limit: usize,
-        /// 可选：mempalace DB 路径（开启融合检索）
-        #[arg(long)]
-        palace_db: Option<String>,
-        /// 可选：mempalace bank ID（配合 --palace-db 使用）
-        #[arg(long, default_value = "wiki")]
-        palace_bank: String,
-    },
-    Lint,
-    /// 检测知识缺口并生成 gap 报告。
-    Gap {
-        /// 低覆盖阈值：关联 claim 数量少于此值的 entity 会被标记。
-        #[arg(long, default_value_t = 2)]
-        low_coverage_threshold: usize,
-        /// 将 gap 报告写入 wiki page（draft 状态）。
-        #[arg(long, default_value_t = false)]
-        write_page: bool,
-    },
-    /// 检测并修复 lint/gap finding，输出修复动作列表。
-    Fix {
-        /// 只输出修复建议，不执行任何变更。
-        #[arg(long, default_value_t = false)]
-        dry_run: bool,
-        /// 只处理可自动修复的项（Auto 类型）。
-        #[arg(long, default_value_t = false)]
-        auto_only: bool,
-        /// 执行自动修复（无此 flag 则仅输出列表）。
-        #[arg(long, default_value_t = false)]
-        write: bool,
-    },
-    Promote {
-        claim_id: String,
-    },
-    /// Promote a page's lifecycle status (Draft → InReview → Approved).
-    PromotePage {
-        page_id: String,
-        /// Target status. If omitted, auto-advance to the next status per lifecycle rule.
-        #[arg(long)]
-        to: Option<String>,
-        /// Skip all promotion condition checks.
-        #[arg(long, default_value_t = false)]
-        force: bool,
-    },
-    Crystallize {
-        question: String,
-        #[arg(long = "finding")]
-        findings: Vec<String>,
-        #[arg(long = "file")]
-        files: Vec<String>,
-        #[arg(long = "lesson")]
-        lessons: Vec<String>,
-        /// 为 crystallize 生成的 page 绑定 EntryType。
-        #[arg(long)]
-        entry_type: Option<String>,
-    },
-    /// 生成问答式知识条目。
-    Qa {
-        /// 问题文本
-        question: String,
-        /// 回答文本
-        answer: String,
-        /// 可选：覆盖 EntryType（默认 qa）
-        #[arg(long)]
-        entry_type: Option<String>,
-    },
-    /// 聚合分析生成综合研究条目。
-    Synthesis {
-        /// 研究主题
-        topic: String,
-        /// 综合分析正文（省略则从 stdin 读取）
-        #[arg(long)]
-        body: Option<String>,
-    },
-    ExportOutboxNdjson,
-    /// Verify row-level wiki_state rows against the legacy snapshot blob using a read-only DB handle.
-    VerifyRowState {
-        /// Emit machine-readable JSON instead of text lines.
-        #[arg(long, default_value_t = false)]
-        json: bool,
-    },
-    ExportOutboxNdjsonFrom {
-        /// Consumer cursor to export from. Defaults to mempalace.
-        #[arg(long, default_value = "mempalace")]
-        consumer_tag: String,
-        /// Legacy/manual start floor. The effective start is max(cursor, last_id).
-        #[arg(long, default_value_t = 0)]
-        last_id: i64,
-    },
-    AckOutbox {
-        #[arg(long)]
-        up_to_id: i64,
-        #[arg(long)]
-        consumer_tag: String,
-    },
-    ConsumeToMempalace {
-        /// 最小 outbox id；实际起点取 consumer progress 与此值中的较大者。
-        #[arg(long, default_value_t = 0)]
-        last_id: i64,
-        /// 用于 outbox ack / progress 跟踪的 consumer tag。
-        #[arg(long, default_value = "mempalace")]
-        consumer_tag: String,
-    },
-    /// Read-only audit of an Obsidian vault before historical backfill.
-    VaultAudit {
-        /// Vault root directory.
-        #[arg(long)]
-        vault: PathBuf,
-        /// Report directory. Must be inside <vault>/reports.
-        #[arg(long)]
-        report_dir: Option<PathBuf>,
-    },
-    /// Plan/apply orphan governance from a timestamped vault audit.
-    OrphanGovernance {
-        #[command(subcommand)]
-        command: OrphanGovernanceCmd,
-    },
-    /// Backfill historical vault sources/pages into wiki.db.
-    VaultBackfill {
-        /// Vault root directory.
-        #[arg(long)]
-        vault: PathBuf,
-        /// Scope to assign to imported records.
-        #[arg(long, default_value = "shared:wiki")]
-        scope: String,
-        /// Dry-run only. This is also the default when --apply is absent.
-        #[arg(long, default_value_t = false)]
-        dry_run: bool,
-        /// Apply frontmatter ID and DB/outbox changes.
-        #[arg(long, default_value_t = false)]
-        apply: bool,
-        /// Limit the number of vault records processed.
-        #[arg(long)]
-        limit: Option<usize>,
-        /// Report directory. Defaults to <vault>/reports.
-        #[arg(long)]
-        report_dir: Option<PathBuf>,
-    },
-    /// Initialize palace.db from wiki.db outbox.
-    PalaceInit {
-        /// Minimum outbox id; effective start also respects consumer progress.
-        #[arg(long, default_value_t = 0)]
-        last_id: i64,
-        /// Consumer tag used for outbox ack / progress.
-        #[arg(long, default_value = "mempalace")]
-        consumer_tag: String,
-        /// Report directory. Defaults to <wiki-dir>/reports or ./reports.
-        #[arg(long)]
-        report_dir: Option<PathBuf>,
-    },
-    /// Read-only DB/Vault/Mempalace consistency audit.
-    ConsistencyAudit,
-    /// Build a validated DB/Vault/Mempalace consistency plan from an audit.
-    ConsistencyPlan {
-        /// Path to reports/consistency-audit-<timestamp>.json.
-        #[arg(long)]
-        audit_report: PathBuf,
-        /// Report directory. Defaults to <wiki-dir>/reports from the audit.
-        #[arg(long)]
-        report_dir: Option<PathBuf>,
-    },
-    /// Apply executable actions from a validated consistency plan. Defaults to dry-run.
-    ConsistencyApply {
-        /// Path to reports/consistency-plan-<timestamp>.json.
-        #[arg(long)]
-        plan: PathBuf,
-        /// Mutate DB/Vault/Mempalace page mirror. Without this flag, dry-run only.
-        #[arg(long, default_value_t = false)]
-        apply: bool,
-    },
-    /// Collect read-only wiki metrics.
-    Metrics {
-        /// Consumer tag used for outbox ack / lag metrics.
-        #[arg(long, default_value = DEFAULT_MEMPALACE_CONSUMER_TAG)]
-        consumer_tag: String,
-        /// Low coverage threshold used by gap scan.
-        #[arg(long, default_value_t = 2)]
-        low_coverage_threshold: usize,
-        /// Print pretty JSON instead of text.
-        #[arg(long, default_value_t = false)]
-        json: bool,
-        /// Also write a Markdown report to this path.
-        #[arg(long)]
-        report: Option<PathBuf>,
-    },
-    /// Generate a read-only static operations dashboard.
-    Dashboard {
-        /// HTML output path.
-        #[arg(long)]
-        output: Option<PathBuf>,
-        /// Consumer tag used for outbox ack / lag metrics.
-        #[arg(long, default_value = DEFAULT_MEMPALACE_CONSUMER_TAG)]
-        consumer_tag: String,
-        /// Low coverage threshold used by gap scan.
-        #[arg(long, default_value_t = 2)]
-        low_coverage_threshold: usize,
-    },
-    /// Produce read-only strategy suggestions.
-    Suggest {
-        /// Consumer tag used for outbox ack / lag metrics.
-        #[arg(long, default_value = DEFAULT_MEMPALACE_CONSUMER_TAG)]
-        consumer_tag: String,
-        /// Low coverage threshold used by gap scan.
-        #[arg(long, default_value_t = 2)]
-        low_coverage_threshold: usize,
-        /// Print pretty JSON instead of text.
-        #[arg(long, default_value_t = false)]
-        json: bool,
-        /// Also derive an executor dry-run action plan from the suggestion report.
-        #[arg(long, default_value_t = false)]
-        executor_plan: bool,
-        /// Also write timestamped JSON + Markdown reports to this directory.
-        #[arg(long, num_args = 0..=1)]
-        report_dir: Option<Option<PathBuf>>,
-    },
-    /// Apply an M12 executor plan with explicit allowlist guards.
-    SuggestExecutorApply {
-        /// JSON plan produced by `wiki-cli suggest --executor-plan --report-dir`.
-        #[arg(long)]
-        plan: PathBuf,
-        /// Allow a typed action kind. Repeatable; only `fix-auto-safe` is supported now.
-        #[arg(long = "allow", value_enum)]
-        allow: Vec<ExecutorAllow>,
-        /// Execute allowed actions. Without this flag the command only validates and previews.
-        #[arg(long, default_value_t = false)]
-        apply: bool,
-        /// Print pretty JSON instead of text.
-        #[arg(long, default_value_t = false)]
-        json: bool,
-        /// Also write timestamped JSON + Markdown execution reports to this directory.
-        #[arg(long, num_args = 0..=1)]
-        report_dir: Option<Option<PathBuf>>,
-    },
-    LlmSmoke {
-        #[arg(long, default_value = "llm-config.toml")]
-        config: PathBuf,
-        #[arg(long, default_value = "Say 'ok' only.")]
-        prompt: String,
-    },
-    /// Start a unified MCP server (wiki + mempalace) over stdin/stdout.
-    Mcp {
-        #[arg(long, default_value_t = false)]
-        once: bool,
-    },
-    /// Validate a DomainSchema JSON file and print summary.
-    SchemaValidate {
-        /// JSON 文件路径，默认 DomainSchema.json
-        path: Option<PathBuf>,
-    },
-    /// Run batch maintenance: confidence decay, lint, promote qualified claims.
-    Maintenance,
-    /// 批量编译 vault 中 compiled_to_wiki: false 的 source 文件（调用 LLM 抽取后写入引擎）
-    BatchIngest {
-        /// vault 根目录（含 sources/）；默认取 $WIKI_VAULT_DIR 或 ~/Documents/wiki
-        #[arg(long)]
-        vault: Option<PathBuf>,
-        /// 可选：只处理 sources/<origin>/ 下的 source；all 表示不过滤
-        #[arg(long)]
-        origin: Option<String>,
-        /// 可选：只处理指定 source Markdown 路径
-        #[arg(long)]
-        source_path: Option<PathBuf>,
-        /// 编译写入 scope；默认 shared:wiki
-        #[arg(long)]
-        scope: Option<String>,
-        /// 限制处理条数（用于测试）
-        #[arg(long)]
-        limit: Option<usize>,
-        /// 只扫描不编译，输出待处理列表
-        #[arg(long, default_value_t = false)]
-        dry_run: bool,
-        /// 每条之间休眠秒数（避免 LLM 限流）
-        #[arg(long, default_value_t = 1)]
-        delay_secs: u64,
-    },
-    /// Resolve production compiler deferred_resolutions with machine-only decisions.
-    CompilerResolveDeferred {
-        /// production-wiki-compiler JSON report path.
-        #[arg(long)]
-        report: PathBuf,
-        /// Apply safe DB changes. Without this flag the command is dry-run.
-        #[arg(long, default_value_t = false)]
-        apply: bool,
-        /// Allow creating new canonical pages when the deferred item has no candidates.
-        #[arg(long, default_value_t = false)]
-        allow_create: bool,
-        /// Report directory. Defaults to <wiki-dir>/reports when --wiki-dir is set.
-        #[arg(long)]
-        report_dir: Option<PathBuf>,
-        /// Outbox consumer tag used when syncing Mempalace after apply.
-        #[arg(long, default_value = DEFAULT_MEMPALACE_CONSUMER_TAG)]
-        consumer_tag: String,
-    },
-    /// Run, inspect, and monitor scheduled automation jobs.
-    Automation {
-        #[command(subcommand)]
-        cmd: AutomationCmd,
-    },
-    /// Incrementally sync Notion databases into wiki.db.
-    NotionSync {
-        /// Which DB to sync: x_bookmark | wechat | all
-        #[arg(long, default_value = "all")]
-        db_id: NotionDbTarget,
-        /// Override incremental cursor start time (ISO 8601 UTC)
-        #[arg(long)]
-        since: Option<String>,
-        /// Max pages to fetch per DB
-        #[arg(long)]
-        limit: Option<usize>,
-        /// Print what would be synced without writing to DB
-        #[arg(long, default_value_t = false)]
-        dry_run: bool,
-        /// Milliseconds between Notion API requests (minimum 100)
-        #[arg(long, default_value_t = 350)]
-        request_delay_ms: u64,
-        /// Write back to Notion after sync (marks 已编译到Wiki checkbox)
-        #[arg(long, default_value_t = false)]
-        writeback_notion: bool,
-        /// Re-fetch and update existing notion:// sources instead of skipping them.
-        #[arg(long, default_value_t = false)]
-        refresh_existing: bool,
-        /// Tag policy for this sync run. Notion AI auto-fill is treated as a trusted source by default.
-        #[arg(long, value_enum, default_value = "trusted-source")]
-        tag_policy: NotionSyncTagPolicy,
-        /// Print per-page processing details
-        #[arg(long, default_value_t = false)]
-        verbose: bool,
-    },
-    /// Backfill notion_page_index from historical vault source frontmatter.
-    NotionSyncIndexBackfill {
-        /// Vault root directory. Defaults to --wiki-dir when present.
-        #[arg(long)]
-        vault: Option<PathBuf>,
-        /// Dry-run only. This is also the default when --apply is absent.
-        #[arg(long, default_value_t = false)]
-        dry_run: bool,
-        /// Write missing index rows.
-        #[arg(long, default_value_t = false)]
-        apply: bool,
-    },
-    /// Write DB-backed notion:// sources into vault sources/{origin}/ markdown.
-    NotionSourceVaultSync {
-        /// Vault root directory. Defaults to --wiki-dir when present.
-        #[arg(long)]
-        vault: Option<PathBuf>,
-        /// Dry-run only. This is also the default when --apply is absent.
-        #[arg(long, default_value_t = false)]
-        dry_run: bool,
-        /// Write missing source markdown files.
-        #[arg(long, default_value_t = false)]
-        apply: bool,
-        /// Rewrite existing source frontmatter tags into Obsidian-safe tag names.
-        #[arg(long, default_value_t = false)]
-        repair_tags: bool,
-        /// Rewrite existing DB-backed source markdown files when DB content changed.
-        #[arg(long, default_value_t = false)]
-        refresh_existing: bool,
-    },
-    /// Audit archived Notion pages and write a DB-first retirement plan. Dry-run only.
-    NotionArchivedRetirement {
-        #[command(subcommand)]
-        command: NotionArchivedRetirementCmd,
-    },
-}
-
-#[derive(Subcommand)]
-enum AiProfileCmd {
-    /// Run a minimal chat completion through a named LLM profile.
-    Smoke {
-        #[arg(long, default_value = "default")]
-        profile: String,
-        #[arg(long, default_value = "Say 'ok' only.")]
-        prompt: String,
-    },
-}
-
-#[derive(Subcommand)]
-enum WebSearchCmd {
-    /// Run one query through one or more configured web search providers.
-    Smoke {
-        #[arg(long, value_delimiter = ',', num_args = 1..)]
-        providers: Vec<String>,
-        #[arg(long)]
-        query: String,
-        #[arg(long, default_value_t = false)]
-        json: bool,
-    },
-}
-
-#[derive(Subcommand)]
-enum GovernanceCmd {
-    /// Run a read-only unified governance scan.
-    Scan {
-        /// Print pretty JSON to stdout.
-        #[arg(long, default_value_t = false)]
-        json: bool,
-        /// Write sibling JSON + Markdown reports to this directory.
-        #[arg(long)]
-        report_dir: Option<PathBuf>,
-        /// Low coverage threshold used by the embedded gap scan.
-        #[arg(long, default_value_t = 2)]
-        low_coverage_threshold: usize,
-    },
-    /// Build a typed dry-run fixer plan from a governance scan report.
-    FixerPlan {
-        /// Governance scan JSON report path.
-        #[arg(long)]
-        scan: PathBuf,
-        /// Print pretty JSON to stdout.
-        #[arg(long, default_value_t = false)]
-        json: bool,
-        /// Write sibling JSON + Markdown reports to this directory.
-        #[arg(long)]
-        report_dir: Option<PathBuf>,
-        /// Optional verified semantic patch proposal JSON.
-        #[arg(long)]
-        semantic_patches: Option<PathBuf>,
-        /// Permit web search for actions that require external verification.
-        #[arg(long, default_value_t = false)]
-        allow_web_search: bool,
-        /// Permit web search when scan viewer_scope is private.
-        #[arg(long, default_value_t = false)]
-        allow_private_web_search: bool,
-        /// Force internal-only planning; web-required actions stay blocked.
-        #[arg(long, default_value_t = false)]
-        internal_only: bool,
-        /// Maximum near-duplicate groups to verify by web search.
-        #[arg(long, default_value_t = 5)]
-        max_web_checks: usize,
-    },
-    /// Apply a typed evidence fixer plan. Defaults to preflight unless --apply is passed.
-    FixerApply {
-        /// Evidence fixer plan JSON path.
-        #[arg(long)]
-        plan: PathBuf,
-        /// Apply policy. First supported policy is evidence-auto.
-        #[arg(long, value_enum, default_value_t = EvidenceFixerPolicyArg::EvidenceAuto)]
-        policy: EvidenceFixerPolicyArg,
-        /// Execute mutations. Without this flag the command only preflights.
-        #[arg(long, default_value_t = false)]
-        apply: bool,
-        /// Print pretty JSON to stdout.
-        #[arg(long, default_value_t = false)]
-        json: bool,
-        /// Write sibling JSON + Markdown reports and tombstone files to this directory.
-        #[arg(long)]
-        report_dir: Option<PathBuf>,
-    },
-    /// Restore one evidence fixer tombstone. Defaults to preflight unless --apply is passed.
-    Restore {
-        /// Evidence fixer tombstone JSON path.
-        #[arg(long)]
-        tombstone: PathBuf,
-        /// Execute restore. Without this flag the command only preflights.
-        #[arg(long, default_value_t = false)]
-        apply: bool,
-        /// Print pretty JSON to stdout.
-        #[arg(long, default_value_t = false)]
-        json: bool,
-        /// Write sibling JSON + Markdown restore report to this directory.
-        #[arg(long)]
-        report_dir: Option<PathBuf>,
-    },
-}
-
-#[derive(Subcommand)]
-enum ResearchSynthesisCmd {
-    /// Discover point/line/plane/volume synthesis candidates. Read-only.
-    Discover {
-        /// Optional governance scan JSON. If omitted, the command scans the current wiki first.
-        #[arg(long)]
-        scan: Option<PathBuf>,
-        /// Print pretty JSON to stdout.
-        #[arg(long, default_value_t = false)]
-        json: bool,
-        /// Write sibling JSON + Markdown reports to this directory.
-        #[arg(long)]
-        report_dir: Option<PathBuf>,
-        /// Maximum candidates from the combined single/double pool.
-        #[arg(long, default_value_t = 1)]
-        max_single_double: usize,
-        /// Maximum triple-tag candidates.
-        #[arg(long, default_value_t = 1)]
-        max_triple: usize,
-        /// Maximum quad-tag candidates.
-        #[arg(long, default_value_t = 1)]
-        max_quad: usize,
-    },
-    /// Compose one synthesis page from a discovery candidate.
-    Compose {
-        /// Candidate ID from a synthesis discovery report.
-        #[arg(long)]
-        candidate: String,
-        /// Optional synthesis discovery JSON. If omitted, discovery runs first.
-        #[arg(long)]
-        discovery: Option<PathBuf>,
-        /// Optional fake/precomputed web evidence JSON for tests or offline runs.
-        #[arg(long)]
-        web_evidence: Option<PathBuf>,
-        /// Optional fake/precomputed draft JSON. If omitted, synthesis_writer is called.
-        #[arg(long)]
-        draft_json: Option<PathBuf>,
-        /// Optional fake/precomputed verifier JSON. If omitted, synthesis_verifier is called.
-        #[arg(long)]
-        verifier_json: Option<PathBuf>,
-        /// Do not send web search queries. Output is allowed to use internal evidence only.
-        #[arg(long, default_value_t = false)]
-        internal_only: bool,
-        /// Permit external web search when active viewer scope is private.
-        #[arg(long, default_value_t = false)]
-        allow_private_web_search: bool,
-        /// Write the synthesis page if verification passes.
-        #[arg(long, default_value_t = false)]
-        apply: bool,
-        /// Print pretty JSON to stdout.
-        #[arg(long, default_value_t = false)]
-        json: bool,
-        /// Write sibling JSON + Markdown reports to this directory.
-        #[arg(long)]
-        report_dir: Option<PathBuf>,
-    },
-    /// Discover and compose the current top synthesis candidates.
-    Run {
-        /// Write synthesis pages if verification passes.
-        #[arg(long, default_value_t = false)]
-        apply: bool,
-        /// Do not send web search queries. Output is allowed to use internal evidence only.
-        #[arg(long, default_value_t = false)]
-        internal_only: bool,
-        /// Permit external web search when active viewer scope is private.
-        #[arg(long, default_value_t = false)]
-        allow_private_web_search: bool,
-        /// Print pretty JSON to stdout.
-        #[arg(long, default_value_t = false)]
-        json: bool,
-        /// Write sibling JSON + Markdown reports to this directory.
-        #[arg(long)]
-        report_dir: Option<PathBuf>,
-        /// Maximum candidates from the combined single/double pool.
-        #[arg(long, default_value_t = 1)]
-        max_single_double: usize,
-        /// Maximum triple-tag candidates.
-        #[arg(long, default_value_t = 1)]
-        max_triple: usize,
-        /// Maximum quad-tag candidates.
-        #[arg(long, default_value_t = 1)]
-        max_quad: usize,
-    },
-}
-
-#[derive(Clone, Copy, Debug, ValueEnum)]
-enum EvidenceFixerPolicyArg {
-    EvidenceAuto,
-}
-
-impl From<EvidenceFixerPolicyArg> for wiki_core::EvidenceFixerApplyPolicy {
-    fn from(value: EvidenceFixerPolicyArg) -> Self {
-        match value {
-            EvidenceFixerPolicyArg::EvidenceAuto => {
-                wiki_core::EvidenceFixerApplyPolicy::EvidenceAuto
-            }
-        }
-    }
-}
-
-#[derive(Subcommand)]
-enum OrphanGovernanceCmd {
-    /// Ask LLM for a validated governance plan.
-    Plan {
-        /// Path to reports/vault-audit-<timestamp>.json.
-        #[arg(long)]
-        audit_report: PathBuf,
-        /// Report directory. With --wiki-dir, must be under <wiki-dir>/reports.
-        #[arg(long)]
-        report_dir: Option<PathBuf>,
-    },
-    /// Apply executable actions from a validated governance plan. Defaults to dry-run.
-    Apply {
-        /// Path to reports/orphan-governance-plan-<timestamp>.json.
-        #[arg(long)]
-        plan: PathBuf,
-        /// Mutate vault files. Without this flag, dry-run only.
-        #[arg(long, default_value_t = false)]
-        apply: bool,
-    },
-}
-
-#[derive(Subcommand)]
-enum AutomationCmd {
-    /// List all registered automation jobs and their execution semantics.
-    ListJobs,
-    /// Run the fixed daily automation chain: batch-ingest, lint, maintenance, consume-to-mempalace.
-    RunDaily {
-        /// Print the execution plan without running any jobs.
-        #[arg(long, default_value_t = false)]
-        dry_run: bool,
-    },
-    /// Run a single named automation job.
-    Run {
-        #[arg(value_enum)]
-        job: AutomationJob,
-    },
-    /// Print the most recent failed automation runs across all jobs.
-    LastFailures {
-        #[arg(long, default_value_t = 10)]
-        limit: usize,
-    },
-    /// Print the latest automation run status for each registered job.
-    Status,
-    /// Print job status plus outbox / consumer health summary.
-    Doctor {
-        /// Consumer tag used for outbox ack / lag tracking.
-        #[arg(long, default_value = "mempalace")]
-        consumer_tag: String,
-    },
-    /// Evaluate health thresholds and emit alert-friendly output.
-    Health {
-        /// Consumer tag used for outbox ack / lag tracking.
-        #[arg(long, default_value = "mempalace")]
-        consumer_tag: String,
-        /// Optional local summary file path for operators / cron hooks.
-        #[arg(long)]
-        summary_file: Option<PathBuf>,
-        /// Exit with code 1 on Yellow or Red (useful for CI / cron alerting).
-        #[arg(long, default_value_t = false)]
-        exit_on_yellow: bool,
-    },
-    /// Verify that a restored wiki.db / vault / optional palace.db is structurally healthy.
-    VerifyRestore,
-}
-
-#[derive(Copy, Clone, Debug, PartialEq, Eq, ValueEnum)]
-enum NotionDbTarget {
-    #[value(name = "x_bookmark")]
-    XBookmark,
-    #[value(name = "wechat")]
-    Wechat,
-    #[value(name = "all")]
-    All,
-}
-
-#[derive(Copy, Clone, Debug, PartialEq, Eq, ValueEnum)]
-enum NotionSyncTagPolicy {
-    #[value(name = "strict")]
-    Strict,
-    #[value(name = "trusted-source")]
-    TrustedSource,
-    #[value(name = "bootstrap")]
-    Bootstrap,
-}
-
-#[derive(Subcommand)]
-enum NotionArchivedRetirementCmd {
-    /// Pull Notion archived state and write a dry-run retirement plan.
-    Plan {
-        /// Report directory. Defaults to <wiki-dir>/reports when --wiki-dir is set.
-        #[arg(long)]
-        report_dir: Option<PathBuf>,
-        /// Max indexed Notion pages to inspect.
-        #[arg(long)]
-        limit: Option<usize>,
-        /// Milliseconds between Notion API requests (minimum 100)
-        #[arg(long, default_value_t = 350)]
-        request_delay_ms: u64,
-    },
-    /// Apply safe retirement actions from a generated plan. Defaults to dry-run.
-    Apply {
-        /// Path to notion-archived-retirement-plan-<timestamp>.json.
-        #[arg(long)]
-        plan: PathBuf,
-        /// Mutate DB and matching Vault source files. Without this flag, dry-run only.
-        #[arg(long, default_value_t = false)]
-        apply: bool,
-        /// Report directory. Defaults to <wiki-dir>/reports when --wiki-dir is set.
-        #[arg(long)]
-        report_dir: Option<PathBuf>,
-    },
-}
-
-fn cmd_writer_lease_label(cmd: &Cmd) -> &'static str {
-    match cmd {
-        Cmd::Automation {
-            cmd: AutomationCmd::RunDaily { .. },
-        } => "automation-run-daily",
-        Cmd::Automation {
-            cmd: AutomationCmd::Run { job },
-        } => automation_job_name(*job),
-        Cmd::BatchIngest { .. } => "batch-ingest",
-        Cmd::CompilerResolveDeferred { .. } => "compiler-resolve-deferred",
-        Cmd::ConsistencyApply { .. } => "consistency-apply",
-        Cmd::Mcp { .. } => "mcp",
-        Cmd::NotionArchivedRetirement { .. } => "notion-archived-retirement",
-        Cmd::NotionSync { .. } => "notion-sync",
-        Cmd::NotionSyncIndexBackfill { .. } => "notion-sync-index-backfill",
-        Cmd::SuggestExecutorApply { .. } => "suggest-executor-apply",
-        Cmd::Governance {
-            cmd: GovernanceCmd::FixerApply { .. },
-        } => "governance-fixer-apply",
-        Cmd::Governance {
-            cmd: GovernanceCmd::Restore { .. },
-        } => "governance-restore",
-        Cmd::ResearchSynthesis {
-            cmd: ResearchSynthesisCmd::Compose { .. },
-        } => "research-synthesis-compose",
-        Cmd::ResearchSynthesis {
-            cmd: ResearchSynthesisCmd::Run { .. },
-        } => "research-synthesis-run",
-        Cmd::VaultBackfill { .. } => "vault-backfill",
-        _ => "wiki-cli",
-    }
-}
-
-fn cmd_needs_writer_lease(cmd: &Cmd) -> bool {
-    match cmd {
-        Cmd::Ingest { .. }
-        | Cmd::FileClaim { .. }
-        | Cmd::SupersedeClaim { .. }
-        | Cmd::Query { .. }
-        | Cmd::Lint
-        | Cmd::Gap { .. }
-        | Cmd::Promote { .. }
-        | Cmd::PromotePage { .. }
-        | Cmd::Crystallize { .. }
-        | Cmd::Qa { .. }
-        | Cmd::Synthesis { .. }
-        | Cmd::AckOutbox { .. }
-        | Cmd::ConsumeToMempalace { .. }
-        | Cmd::PalaceInit { .. }
-        | Cmd::Maintenance
-        | Cmd::Mcp { .. } => true,
-        Cmd::IngestLlm { dry_run, .. } => !dry_run,
-        Cmd::Fix { dry_run, write, .. } => *write && !dry_run,
-        Cmd::SuggestExecutorApply { apply, .. } => *apply,
-        Cmd::Governance {
-            cmd: GovernanceCmd::FixerApply { apply, .. },
-        } => *apply,
-        Cmd::Governance {
-            cmd: GovernanceCmd::Restore { apply, .. },
-        } => *apply,
-        Cmd::ResearchSynthesis {
-            cmd: ResearchSynthesisCmd::Compose { apply, .. },
-        } => *apply,
-        Cmd::ResearchSynthesis {
-            cmd: ResearchSynthesisCmd::Run { apply, .. },
-        } => *apply,
-        Cmd::VaultBackfill { apply, .. } => *apply,
-        Cmd::ConsistencyApply { apply, .. } => *apply,
-        Cmd::BatchIngest { dry_run, .. } => !dry_run,
-        Cmd::CompilerResolveDeferred { apply, .. } => *apply,
-        Cmd::Automation {
-            cmd: AutomationCmd::RunDaily { dry_run },
-        } => !dry_run,
-        Cmd::Automation {
-            cmd: AutomationCmd::Run { job },
-        } => automation_job_needs_writer_lease(*job),
-        Cmd::NotionSync { dry_run, .. } => !dry_run,
-        Cmd::NotionSyncIndexBackfill { apply, .. } => *apply,
-        Cmd::NotionSourceVaultSync { apply, .. } => *apply,
-        Cmd::NotionArchivedRetirement {
-            command: NotionArchivedRetirementCmd::Apply { apply, .. },
-        } => *apply,
-        Cmd::Automation { .. }
-        | Cmd::NotionArchivedRetirement {
-            command: NotionArchivedRetirementCmd::Plan { .. },
-        }
-        | Cmd::ExportOutboxNdjson
-        | Cmd::VerifyRowState { .. }
-        | Cmd::ExportOutboxNdjsonFrom { .. }
-        | Cmd::Explain { .. }
-        | Cmd::VaultAudit { .. }
-        | Cmd::OrphanGovernance { .. }
-        | Cmd::ConsistencyAudit
-        | Cmd::ConsistencyPlan { .. }
-        | Cmd::Metrics { .. }
-        | Cmd::Dashboard { .. }
-        | Cmd::Suggest { .. }
-        | Cmd::Governance {
-            cmd: GovernanceCmd::Scan { .. } | GovernanceCmd::FixerPlan { .. },
-        }
-        | Cmd::ResearchSynthesis {
-            cmd: ResearchSynthesisCmd::Discover { .. },
-        }
-        | Cmd::AiProfile { .. }
-        | Cmd::WebSearch { .. }
-        | Cmd::LlmSmoke { .. }
-        | Cmd::SchemaValidate { .. } => false,
-    }
-}
-
-pub(crate) fn run_scheduled_vault_reports_job(
-    eng: &LlmWikiEngine<NoopWikiHook>,
-    repo: &SqliteRepository,
-    viewer: &Scope,
-    schema: &DomainSchema,
-    wiki_root: Option<&std::path::Path>,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let vault = wiki_root
-        .map(PathBuf::from)
-        .unwrap_or_else(wiki_compiler::default_vault_path);
-    let now = OffsetDateTime::now_utc();
-    let keep = scheduled_report_keep_count();
-    let reports_root = vault.join("reports").join("scheduled");
-    let run_dir = reports_root.join(format!("{}-scheduled", scheduled_report_timestamp(now)));
-
-    let vault_report = vault_audit::scan_vault(&vault)?;
-    std::fs::create_dir_all(&run_dir)?;
-    let audit_files =
-        vault_audit::write_json_and_markdown(&vault_report, run_dir.join("vault-audit"))
-            .map_err(|err| -> Box<dyn std::error::Error> { err.to_string().into() })?;
-
-    let outbox_stats = repo.get_outbox_stats()?;
-    let outbox_progress = repo.get_outbox_consumer_progress(DEFAULT_MEMPALACE_CONSUMER_TAG)?;
-    let metrics = collect_wiki_metrics(
-        &eng.store,
-        schema,
-        Some(viewer),
-        Some(&outbox_stats),
-        Some(&outbox_progress),
-        2,
-        now,
-    );
-    let metrics_json = run_dir.join("metrics.json");
-    let metrics_md = run_dir.join("metrics.md");
-    std::fs::write(&metrics_json, serde_json::to_string_pretty(&metrics)?)?;
-    std::fs::write(&metrics_md, render_metrics_markdown(&metrics))?;
-
-    let health = collect_automation_health_report(
-        repo,
-        &automation_all_jobs(),
-        DEFAULT_MEMPALACE_CONSUMER_TAG,
-        now,
-    )?;
-    let health_txt = run_dir.join("automation-health.txt");
-    std::fs::write(
-        &health_txt,
-        render_automation_health_report(&health, DEFAULT_MEMPALACE_CONSUMER_TAG),
-    )?;
-
-    let dashboard_html = run_dir.join("dashboard.html");
-    std::fs::write(
-        &dashboard_html,
-        dashboard::render_dashboard_html(&health, &metrics, DEFAULT_MEMPALACE_CONSUMER_TAG),
-    )?;
-
-    let query_events = parse_outbox_events(&repo.export_outbox_ndjson()?)?;
-    let strategy_report = run_strategy_scan(
-        &eng.store,
-        schema,
-        &metrics,
-        &query_events,
-        StrategyScanOptions {
-            viewer_scope: Some(viewer),
-            low_coverage_threshold: 2,
-            generated_at: now,
-            report_id: strategy_report_prefix(now),
-        },
-    );
-    let suggestions_dir = run_dir.join("suggestions");
-    std::fs::create_dir_all(&suggestions_dir)?;
-    let suggest_json_name = format!("{}.json", strategy_report.report_id);
-    let suggest_md_name = format!("{}.md", strategy_report.report_id);
-    let suggest_json = suggestions_dir.join(&suggest_json_name);
-    let suggest_md = suggestions_dir.join(&suggest_md_name);
-    std::fs::write(
-        &suggest_json,
-        serde_json::to_string_pretty(&strategy_report)?,
-    )?;
-    std::fs::write(
-        &suggest_md,
-        render_strategy_report_markdown(&strategy_report, &suggest_json_name),
-    )?;
-
-    let latest_json = reports_root.join("latest.json");
-    let latest_md = reports_root.join("latest.md");
-    let latest = serde_json::json!({
-        "generated_at": format_automation_time(now),
-        "run_dir": path_for_report(&run_dir),
-        "retention_keep": keep,
-        "files": {
-            "vault_audit_json": path_for_report(&audit_files.json_path),
-            "vault_audit_markdown": path_for_report(&audit_files.markdown_path),
-            "metrics_json": path_for_report(&metrics_json),
-            "metrics_markdown": path_for_report(&metrics_md),
-            "automation_health": path_for_report(&health_txt),
-            "dashboard_html": path_for_report(&dashboard_html),
-            "suggest_json": path_for_report(&suggest_json),
-            "suggest_markdown": path_for_report(&suggest_md),
-        }
-    });
-    std::fs::write(&latest_json, serde_json::to_string_pretty(&latest)?)?;
-    std::fs::write(
-        &latest_md,
-        format!(
-            "# Scheduled Vault Reports\n\n- generated_at: `{}`\n- run_dir: `{}`\n- latest_json: `{}`\n- retention_keep: `{}`\n",
-            format_automation_time(now),
-            run_dir.display(),
-            latest_json.display(),
-            keep
-        ),
-    )?;
-    let pruned = prune_scheduled_report_runs(&reports_root, keep)?;
-
-    println!(
-        "scheduled_vault_reports generated_at={} run_dir={} pruned={}",
-        format_automation_time(now),
-        run_dir.display(),
-        pruned
-    );
-    println!("latest_json={}", latest_json.display());
-    println!("latest_markdown={}", latest_md.display());
-    Ok(())
-}
-
-#[derive(Serialize)]
-struct StrategySuggestJsonOutput<'a> {
-    strategy_report: &'a StrategyReport,
-    executor_plan: &'a StrategyExecutionPlan,
-}
-
-fn serialize_strategy_suggest_json(
-    report: &StrategyReport,
-    plan: Option<&StrategyExecutionPlan>,
-) -> Result<String, serde_json::Error> {
-    match plan {
-        Some(plan) => serde_json::to_string_pretty(&StrategySuggestJsonOutput {
-            strategy_report: report,
-            executor_plan: plan,
-        }),
-        None => serde_json::to_string_pretty(report),
-    }
-}
+use cli::*;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = match Cli::try_parse() {
@@ -1450,31 +385,16 @@ fn run_with_engine(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                 .with_rrf_k(rrf_k)
                 .with_per_stream_limit(per_stream_limit)
                 .with_viewer_scope(viewer.clone());
-            let vec_override = if cli.vectors {
-                let app = llm::load_app_config(&cli.llm_config)?;
-                let qv = llm::embed_first(&app, &query)?;
-                let raw = repo.search_embeddings_cosine(&qv, per_stream_limit.saturating_mul(8))?;
-                let ids: Vec<String> = raw
-                    .into_iter()
-                    .filter(|(id, _)| doc_id_visible_to_viewer(id, &eng.store, &viewer))
-                    .map(|(id, _)| id)
-                    .take(per_stream_limit)
-                    .collect();
-                if ids.is_empty() {
-                    None
-                } else {
-                    Some(ids)
-                }
-            } else {
-                None
-            };
-            let graph_extras = if let Some(ref path) = cli.graph_extras_file {
-                let extras = read_graph_extras_lines(path)?;
-                let extras = filter_graph_extras_for_viewer(extras, &eng.store, &viewer);
-                Some(extras)
-            } else {
-                None
-            };
+            let overrides = commands::query::prepare_query_overrides(
+                cli.vectors,
+                &cli.llm_config,
+                &cli.graph_extras_file,
+                &query,
+                per_stream_limit,
+                &eng,
+                &repo,
+                &viewer,
+            )?;
             let ranked = run_fusion_query(
                 palace_db.as_deref(),
                 &palace_bank,
@@ -1483,8 +403,8 @@ fn run_with_engine(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                 &viewer,
                 &ctx,
                 OffsetDateTime::now_utc(),
-                vec_override,
-                graph_extras,
+                overrides.vec_override,
+                overrides.graph_extras,
             );
             let top: Vec<String> = ranked.iter().take(24).map(|(id, _)| id.clone()).collect();
             eng.record_query(&query, Some(&viewer), top, "cli");
@@ -1517,35 +437,21 @@ fn run_with_engine(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                 .with_rrf_k(rrf_k)
                 .with_per_stream_limit(per_stream_limit)
                 .with_viewer_scope(viewer.clone());
-            let vec_override = if cli.vectors {
-                let app = llm::load_app_config(&cli.llm_config)?;
-                let qv = llm::embed_first(&app, &query)?;
-                let raw = repo.search_embeddings_cosine(&qv, per_stream_limit.saturating_mul(8))?;
-                let ids: Vec<String> = raw
-                    .into_iter()
-                    .filter(|(id, _)| doc_id_visible_to_viewer(id, &eng.store, &viewer))
-                    .map(|(id, _)| id)
-                    .take(per_stream_limit)
-                    .collect();
-                if ids.is_empty() {
-                    None
-                } else {
-                    Some(ids)
-                }
-            } else {
-                None
-            };
-            let graph_extras = if let Some(ref path) = cli.graph_extras_file {
-                let extras = read_graph_extras_lines(path)?;
-                let extras = filter_graph_extras_for_viewer(extras, &eng.store, &viewer);
-                Some(extras)
-            } else {
-                None
-            };
+            let overrides = commands::query::prepare_query_overrides(
+                cli.vectors,
+                &cli.llm_config,
+                &cli.graph_extras_file,
+                &query,
+                per_stream_limit,
+                &eng,
+                &repo,
+                &viewer,
+            )?;
+            let vec_override = overrides.vec_override;
+            let graph_extras = overrides.graph_extras;
 
             println!("\n查询: \"{}\"", query);
 
-            // wiki 各路结果
             let wiki_ports = build_wiki_search_ports(&repo, &eng, &viewer);
             let wiki_bm25 =
                 SearchPorts::bm25_ranked_ids(wiki_ports.as_ref(), &query, per_stream_limit);
@@ -2932,30 +1838,12 @@ fn run_with_engine(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                     .collect();
 
                 if apply {
-                    for source_id in &apply_plan.source_ids {
-                        eng.store.sources.remove(source_id);
-                        eng.audits.push(AuditRecord::new(
-                            AuditOperation::RetireSource,
-                            "notion-archived-retirement",
-                            format!("retired notion source {}", source_id.0),
-                        ));
-                    }
-                    let snapshot = eng.store.to_snapshot(&eng.audits);
-                    let deleted_index_rows = repo.save_snapshot_and_delete_notion_page_indexes(
-                        &snapshot,
-                        &apply_plan.notion_page_ids,
+                    notion_archived_retirement::apply_retirement(
+                        &mut eng,
+                        &repo,
+                        &mut apply_plan,
+                        &vault_files,
                     )?;
-                    let deleted_vault_files =
-                        notion_archived_retirement::delete_retired_source_files(&vault_files)?;
-                    apply_plan.report.sources_removed = apply_plan.source_ids.len();
-                    apply_plan.report.index_rows_deleted = deleted_index_rows;
-                    apply_plan.report.vault_files_deleted = deleted_vault_files;
-                    apply_plan.report.applied_source_ids = apply_plan
-                        .source_ids
-                        .iter()
-                        .map(|source_id| source_id.0.to_string())
-                        .collect();
-                    apply_plan.report.applied_notion_page_ids = apply_plan.notion_page_ids.clone();
                 }
 
                 let report_dir = report_dir
@@ -2992,156 +1880,22 @@ fn run_with_engine(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-pub(crate) fn doc_id_visible_to_viewer(
-    doc_id: &str,
-    store: &InMemoryStore,
-    viewer: &Scope,
-) -> bool {
-    if let Some(rest) = doc_id.strip_prefix("claim:") {
-        if let Ok(u) = uuid::Uuid::parse_str(rest) {
-            return store
-                .claims
-                .get(&ClaimId(u))
-                .map(|c| document_visible_to_viewer(&c.scope, viewer))
-                .unwrap_or(false);
-        }
-        return false;
-    }
-    if let Some(rest) = doc_id.strip_prefix("page:") {
-        if let Ok(u) = uuid::Uuid::parse_str(rest) {
-            return store
-                .pages
-                .get(&PageId(u))
-                .map(|p| document_visible_to_viewer(&p.scope, viewer))
-                .unwrap_or(false);
-        }
-        return false;
-    }
-    if let Some(rest) = doc_id.strip_prefix("entity:") {
-        if let Ok(u) = uuid::Uuid::parse_str(rest) {
-            return store
-                .entities
-                .get(&EntityId(u))
-                .map(|e| document_visible_to_viewer(&e.scope, viewer))
-                .unwrap_or(false);
-        }
-        return false;
-    }
-    if let Some(rest) = doc_id.strip_prefix("source:") {
-        if let Ok(u) = uuid::Uuid::parse_str(rest) {
-            return store
-                .sources
-                .get(&SourceId(u))
-                .map(|s| document_visible_to_viewer(&s.scope, viewer))
-                .unwrap_or(false);
-        }
-    }
-    false
-}
-
-pub(crate) fn graph_extra_visible_to_viewer(
-    doc_id: &str,
-    store: &InMemoryStore,
-    viewer: &Scope,
-) -> bool {
-    if doc_id.starts_with("mp_drawer:") || doc_id.starts_with("mp_kg:") {
-        return false;
-    }
-    if doc_id.starts_with("claim:")
-        || doc_id.starts_with("page:")
-        || doc_id.starts_with("entity:")
-        || doc_id.starts_with("source:")
-    {
-        return doc_id_visible_to_viewer(doc_id, store, viewer);
-    }
-    false
-}
-
-fn merge_optional_graph_extras(
-    base_graph: Vec<String>,
-    graph_extras: Option<Vec<String>>,
-    per_stream_limit: usize,
-) -> Vec<String> {
-    graph_extras
-        .map(|extras| merge_graph_rankings(base_graph.clone(), extras, per_stream_limit))
-        .unwrap_or(base_graph)
-}
-
-fn filter_graph_extras_for_viewer(
-    extras: Vec<String>,
-    store: &InMemoryStore,
-    viewer: &Scope,
-) -> Vec<String> {
-    extras
-        .into_iter()
-        .filter(|id| graph_extra_visible_to_viewer(id, store, viewer))
-        .collect()
-}
-
-/// 执行融合检索：根据 palace_db 配置构建 SearchPorts 并调用 query_ranked_with_ports。
-/// ports 在函数内部创建和销毁，不与外部 eng 的 mutable 借用冲突。
-fn build_wiki_search_ports<'a>(
-    repo: &'a SqliteRepository,
-    eng: &'a LlmWikiEngine<NoopWikiHook>,
-    viewer: &Scope,
-) -> Box<dyn SearchPorts + 'a> {
-    match SqliteSearchPorts::open(repo, Some(viewer.clone())) {
-        Ok(ports) => Box::new(ports),
-        Err(error) => {
-            eprintln!(
-                "警告：无法创建 storage-backed wiki 搜索端口: {}，回退到 InMemorySearchPorts",
-                error
-            );
-            Box::new(InMemorySearchPorts::new(&eng.store, Some(viewer.clone())))
-        }
-    }
-}
-
-fn run_fusion_query<'a>(
-    palace_db: Option<&str>,
-    palace_bank: &str,
-    repo: &'a SqliteRepository,
-    eng: &'a LlmWikiEngine<NoopWikiHook>,
-    viewer: &'a Scope,
-    ctx: &QueryContext<'_>,
-    now: OffsetDateTime,
-    vec_override: Option<Vec<String>>,
-    graph_extras: Option<Vec<String>>,
-) -> Vec<(String, f64)> {
-    let wiki_ports = build_wiki_search_ports(repo, eng, viewer);
-    let ports: Box<dyn SearchPorts + 'a> = if let Some(pdb) = palace_db {
-        match MempalaceSearchPorts::open(Path::new(pdb), Some(palace_bank.to_string())) {
-            Ok(mp_ports) => Box::new(CompositeSearchPorts::new(
-                vec![wiki_ports, Box::new(mp_ports)],
-                FusionConfig::default(),
-            )),
-            Err(e) => {
-                eprintln!(
-                    "警告：无法打开 mempalace DB ({}): {}，回退到纯 wiki 检索",
-                    pdb, e
-                );
-                wiki_ports
-            }
-        }
-    } else {
-        wiki_ports
-    };
-    let graph_override = graph_extras.map(|extras| {
-        let active_graph =
-            SearchPorts::graph_ranked_ids(ports.as_ref(), ctx.query, ctx.per_stream_limit);
-        merge_graph_rankings(active_graph, extras, ctx.per_stream_limit)
-    });
-    eng.query_ranked_with_ports(ctx, now, ports.as_ref(), vec_override, graph_override)
-}
+use commands::query::{build_wiki_search_ports, merge_optional_graph_extras, run_fusion_query};
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use commands::query::filter_graph_extras_for_viewer;
     use time::Duration;
+    use wiki_core::DomainSchema;
     use wiki_storage::{
         AutomationJobFailureSummary, AutomationRunRecord, AutomationRunStatus,
         OutboxConsumerProgress, OutboxStats,
     };
+
+    fn cmd_needs_writer_lease(cmd: &Cmd) -> bool {
+        cmd.needs_writer_lease()
+    }
 
     fn sample_record(
         status: AutomationRunStatus,
@@ -3461,7 +2215,7 @@ mod tests {
             palace_db: None,
             palace_bank: "wiki".into(),
         }));
-        assert!(cmd_needs_writer_lease(&Cmd::Lint));
+        assert!(Cmd::Lint.needs_writer_lease());
         assert!(cmd_needs_writer_lease(&Cmd::Fix {
             dry_run: false,
             auto_only: false,
