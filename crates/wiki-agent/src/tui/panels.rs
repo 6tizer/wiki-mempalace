@@ -27,12 +27,13 @@ pub fn conversation(app: &TuiApp) -> Paragraph<'_> {
 }
 
 pub fn activity(app: &TuiApp) -> Paragraph<'_> {
+    let (base_title, blocks) = app.activity_view();
     let title = if app.active_panel == ActivePanel::Activity {
-        "Activity *"
+        format!("{base_title} *")
     } else {
-        "Activity"
+        base_title.to_string()
     };
-    Paragraph::new(blocks_to_text(&app.activity, false))
+    Paragraph::new(blocks_to_text(&blocks, false))
         .block(
             Block::default()
                 .title(title)

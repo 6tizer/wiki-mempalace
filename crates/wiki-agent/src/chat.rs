@@ -118,6 +118,10 @@ impl ChatRuntime {
         self.tool_backend
     }
 
+    pub(crate) fn render_sessions(&self) -> Result<String, Box<dyn std::error::Error>> {
+        self.store.render_list()
+    }
+
     fn handle_input_line(
         &mut self,
         input: &str,
