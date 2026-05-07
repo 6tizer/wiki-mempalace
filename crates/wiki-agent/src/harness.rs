@@ -418,6 +418,49 @@ mod tests {
     }
 
     #[test]
+    fn harness_event_snapshot_covers_loop_and_tool_events() {
+        let evidence = EvidencePack::new(vec![InternalEvidence {
+            doc_id: "page:1".to_string(),
+            score: 1.0,
+            title: Some("Title".to_string()),
+            excerpt: Some("Excerpt".to_string()),
+        }]);
+        let mut delegate = FakeDelegate {
+            evidence,
+            answer: "done".to_string(),
+            retry_internal: None,
+            web_error: None,
+            wiki_calls: 0,
+        };
+        let task_plan = TaskPlan::for_chat("question", WebMode::Auto, "shared:wiki", false);
+
+        let result = HarnessRuntime
+            .run("question", &task_plan, &mut delegate)
+            .expect("harness run");
+
+        assert_eq!(
+            event_snapshot(&result.events),
+            vec![
+                "phase:plan",
+                "plan:knowledge_answer:wiki_query",
+                "phase:act",
+                "tool_started:wiki_query",
+                "tool_finished:wiki_query:internal_results=1",
+                "tool_started:web_search_policy",
+                "tool_finished:web_search_policy:web_status=not requested evaluation=evidence_available",
+                "phase:observe",
+                "evidence:internal=1 web_status=ok web_items=0",
+                "tool_started:answer",
+                "phase:evaluate",
+                "evaluation:true:evidence_available",
+                "phase:answer",
+                "tool_finished:answer:answer_chars=4",
+                "answer_ready",
+            ]
+        );
+    }
+
+    #[test]
     fn harness_retries_low_evidence_once() {
         let retry_internal = vec![InternalEvidence {
             doc_id: "page:retry".to_string(),
@@ -444,6 +487,13 @@ mod tests {
             attempt: 1,
             reason: "low_evidence_retry".to_string()
         }));
+        assert!(
+            event_snapshot(&result.events)
+                .iter()
+                .filter(|line| line.starts_with("retry:"))
+                .count()
+                <= task_plan.retry_policy.max_retries
+        );
     }
 
     #[test]
@@ -477,5 +527,71 @@ mod tests {
             ChatEvent::ToolFailed { name, error, .. }
                 if name == "web_search_policy" && error == "web unavailable"
         )));
+    }
+
+    #[test]
+    fn harness_records_private_web_block_status() {
+        let mut blocked_pack = EvidencePack::new(vec![InternalEvidence {
+            doc_id: "page:private".to_string(),
+            score: 1.0,
+            title: Some("Private".to_string()),
+            excerpt: Some("Private excerpt".to_string()),
+        }]);
+        blocked_pack.web_status = Some("blocked: private scope".to_string());
+        let mut delegate = FakeDelegate {
+            evidence: blocked_pack,
+            answer: "private answer".to_string(),
+            retry_internal: None,
+            web_error: None,
+            wiki_calls: 0,
+        };
+        let task_plan =
+            TaskPlan::for_chat("latest private note", WebMode::Always, "private:cli", false);
+
+        let result = HarnessRuntime
+            .run("latest private note", &task_plan, &mut delegate)
+            .expect("harness run");
+
+        assert_eq!(
+            result.evidence.web_status.as_deref(),
+            Some("blocked: private scope")
+        );
+        assert!(!task_plan.evidence_budget.allow_web);
+        assert!(event_snapshot(&result.events).contains(
+            &"tool_finished:web_search_policy:web_status=blocked: private scope evaluation=evidence_available"
+                .to_string()
+        ));
+    }
+
+    fn event_snapshot(events: &[ChatEvent]) -> Vec<String> {
+        events
+            .iter()
+            .map(|event| match event {
+                ChatEvent::PhaseChanged(phase) => format!("phase:{phase}"),
+                ChatEvent::PlanStarted { intent, actions } => {
+                    format!("plan:{intent}:{}", actions.join(","))
+                }
+                ChatEvent::ToolStarted { name } => format!("tool_started:{name}"),
+                ChatEvent::ToolFinished { name, summary, .. } => {
+                    format!("tool_finished:{name}:{summary}")
+                }
+                ChatEvent::ToolFailed { name, error, .. } => {
+                    format!("tool_failed:{name}:{error}")
+                }
+                ChatEvent::RetryStarted { attempt, reason } => {
+                    format!("retry:{attempt}:{reason}")
+                }
+                ChatEvent::EvaluationFinished { can_answer, reason } => {
+                    format!("evaluation:{can_answer}:{reason}")
+                }
+                ChatEvent::EvidenceReady { summary } => format!("evidence:{summary}"),
+                ChatEvent::AnswerReady => "answer_ready".to_string(),
+                ChatEvent::UserMessage(message) => format!("user:{}", message.len()),
+                ChatEvent::AssistantDelta(delta) => format!("assistant_delta:{}", delta.len()),
+                ChatEvent::AssistantMessage(message) => format!("assistant:{}", message.len()),
+                ChatEvent::ToolSummary(summary) => format!("tool_summary:{summary}"),
+                ChatEvent::Status(status) => format!("status:{status}"),
+            })
+            .collect()
     }
 }

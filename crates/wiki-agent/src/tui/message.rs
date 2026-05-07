@@ -140,4 +140,51 @@ mod tests {
         assert!(text.contains(&"  | let x = 1;".to_string()));
         assert!(text.contains(&"  doc_id=page:1".to_string()));
     }
+
+    #[test]
+    fn renders_message_block_snapshot() {
+        let blocks = vec![
+            MessageBlock::User("hello".to_string()),
+            MessageBlock::AssistantText("answer\nsource: wiki".to_string()),
+            MessageBlock::Evidence("internal=1 web_status=off".to_string()),
+            MessageBlock::ToolCall {
+                name: "wiki_query".to_string(),
+                status: ToolCallStatus::Succeeded,
+                duration_ms: Some(5),
+                summary: "internal_results=1".to_string(),
+                collapsed: true,
+            },
+            MessageBlock::Error("failed".to_string()),
+        ];
+
+        let rendered = blocks_to_text(&blocks, true);
+        let text = rendered.lines.iter().map(line_text).collect::<Vec<_>>();
+
+        assert_eq!(
+            text,
+            vec![
+                "user:",
+                "  hello",
+                "",
+                "assistant:",
+                "  answer",
+                "  source: wiki",
+                "",
+                "evidence:",
+                "  internal=1 web_status=off",
+                "",
+                "ok tool: wiki_query status=ok duration_ms=5 internal_results=1",
+                "",
+                "error:",
+                "  failed",
+            ]
+        );
+    }
+
+    fn line_text(line: &Line<'_>) -> String {
+        line.spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect()
+    }
 }

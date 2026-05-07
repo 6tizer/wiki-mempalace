@@ -113,6 +113,26 @@ PRD：[wiki-agent.md](prd/wiki-agent.md)。
 | 7 | TUI | Merged PR #119 | ratatui + crossterm 分屏、状态栏、流式输出、键盘导航 | `codex/wiki-agent-tui` |
 | 8 | Docs + E2E | Merged PR #120 | README、架构、MCP/API 对照、Notion 能力矩阵、端到端 smoke | `codex/wiki-agent-docs-e2e` |
 
+## Wiki Agent Runtime Upgrade（2026-05-07）
+
+目标：把 `wiki-agent` 从固定 RAG 回答升级为可规划、可观察、可重试、可审查的 agent runtime，并升级 TUI 日常使用体验。
+PRD：[wiki-agent-runtime-upgrade.md](prd/wiki-agent-runtime-upgrade.md)。
+Spec：[wiki-agent-runtime-upgrade/](specs/wiki-agent-runtime-upgrade/)。
+
+| 顺序 | PR 主题 | 状态 | 范围 |
+| --- | --- | --- | --- |
+| 1 | Harness Core State Machine | Merged PR #125 | `Plan -> Act -> Observe -> Evaluate -> Answer` 主循环 |
+| 2 | Task Planner v2 | Merged PR #126 | intent、evidence budget、tools、workers、risk、retry policy |
+| 3 | Evaluator + Retry Policy | Merged PR #127 | evidence/tool failure 检查和 bounded retry |
+| 4 | Prompt Runtime Builder | Merged PR #128 | profile、viewer scope、tool backend、memory/evidence/private web/output rules |
+| 5 | Structured Agent Events | Merged PR #129 | CLI/TUI 共用 plan/tool/retry/evidence/answer events |
+| 6 | TUI Message Blocks | Merged PR #130 | typed User/Assistant/Thinking/Tool/Evidence/Error blocks |
+| 7 | TUI Layout + Footer | Merged PR #131 | 自适应 layout 和 runtime footer |
+| 8 | Tool Call UX | Merged PR #132 | tool card 状态、耗时、摘要、失败、collapse |
+| 9 | Theme System | Merged PR #133 | dark/light/mono theme tokens |
+| 10 | Keyboard Navigation | Merged PR #134 | session、plan、help overlay，tool collapse，Esc handling |
+| 11 | Snapshot + Harness Tests | Complete in closeout PR | harness/TUI snapshot tests 和文档 closeout |
+
 ## Audit Report Follow-up v2 Closeout
 
 来源：Notion《wiki-mempalace 全方位代码审计报告》2026-04-29 复核。
