@@ -5,6 +5,7 @@ mod message;
 mod panels;
 mod status;
 mod theme;
+mod tool_call;
 
 use std::{
     io::{self, IsTerminal, Stdout},

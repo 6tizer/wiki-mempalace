@@ -3,12 +3,7 @@ use ratatui::{
     text::{Line, Span, Text},
 };
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum ToolCallStatus {
-    Running,
-    Succeeded,
-    Failed,
-}
+use super::tool_call::{render_tool_call, ToolCallStatus};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum MessageBlock {
@@ -101,38 +96,6 @@ fn render_text_block(label: &str, message: &str, style: Style) -> Vec<Line<'stat
     lines
 }
 
-fn render_tool_call(
-    name: &str,
-    status: &ToolCallStatus,
-    duration_ms: Option<u128>,
-    summary: &str,
-    collapsed: bool,
-) -> Vec<Line<'static>> {
-    let status_text = match status {
-        ToolCallStatus::Running => "running",
-        ToolCallStatus::Succeeded => "ok",
-        ToolCallStatus::Failed => "failed",
-    };
-    let duration = duration_ms
-        .map(|value| format!(" duration_ms={value}"))
-        .unwrap_or_default();
-    let mut lines = vec![Line::from(vec![
-        Span::styled("tool: ", tool_style()),
-        Span::styled(name.to_string(), tool_style().add_modifier(Modifier::BOLD)),
-        Span::raw(format!(" status={status_text}{duration}")),
-    ])];
-    if collapsed {
-        if !summary.is_empty() {
-            lines[0].spans.push(Span::raw(format!(" {summary}")));
-        }
-        return lines;
-    }
-    if !summary.is_empty() {
-        lines.push(Line::from(Span::raw(format!("  {summary}"))));
-    }
-    lines
-}
-
 fn looks_like_citation(line: &str) -> bool {
     line.starts_with("- [")
         || line.starts_with("[")
@@ -149,10 +112,6 @@ fn user_style() -> Style {
 
 fn assistant_style() -> Style {
     Style::default().fg(Color::Green)
-}
-
-fn tool_style() -> Style {
-    Style::default().fg(Color::Yellow)
 }
 
 fn evidence_style() -> Style {
