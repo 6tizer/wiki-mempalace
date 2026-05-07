@@ -17,6 +17,11 @@ pub enum TuiAction {
 
 #[derive(Clone, Debug)]
 pub struct TuiApp {
+    pub profile: String,
+    pub session_id: String,
+    pub web_mode: String,
+    pub memory_label: String,
+    pub backend_label: String,
     pub conversation: Vec<MessageBlock>,
     pub activity: Vec<MessageBlock>,
     pub input: String,
@@ -28,12 +33,18 @@ pub struct TuiApp {
     history_index: Option<usize>,
     pub token_count: usize,
     pub tool_count: usize,
+    pub latency_ms: Option<u128>,
 }
 
 impl TuiApp {
     pub fn new(profile: impl Into<String>) -> Self {
         let profile = profile.into();
         Self {
+            profile: profile.clone(),
+            session_id: "-".to_string(),
+            web_mode: "auto".to_string(),
+            memory_label: "session-store".to_string(),
+            backend_label: "native".to_string(),
             conversation: Vec::new(),
             activity: vec![MessageBlock::Thinking(format!("profile={profile}"))],
             input: String::new(),
@@ -45,7 +56,19 @@ impl TuiApp {
             history_index: None,
             token_count: 0,
             tool_count: 0,
+            latency_ms: None,
         }
+    }
+
+    pub fn set_runtime_labels(
+        &mut self,
+        session_id: impl Into<String>,
+        web_mode: impl Into<String>,
+        backend_label: impl Into<String>,
+    ) {
+        self.session_id = session_id.into();
+        self.web_mode = web_mode.into();
+        self.backend_label = backend_label.into();
     }
 
     pub fn push_user(&mut self, message: &str) {
@@ -137,6 +160,10 @@ impl TuiApp {
         self.status = status;
     }
 
+    pub fn set_latency(&mut self, latency_ms: u128) {
+        self.latency_ms = Some(latency_ms);
+    }
+
     pub fn toggle_panel(&mut self) {
         self.active_panel = match self.active_panel {
             ActivePanel::Conversation => ActivePanel::Activity,
@@ -203,15 +230,29 @@ impl TuiApp {
     }
 
     pub fn status_line(&self) -> String {
+        self.footer_line()
+    }
+
+    pub fn footer_line(&self) -> String {
+        let latency = self
+            .latency_ms
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| "-".to_string());
         format!(
-            "{} | panel={} | tokens={} | tools={}",
+            "{} | profile={} | session={} | web={} | memory={} | backend={} | panel={} | tokens={} | tools={} | latency_ms={}",
             self.status.render(),
+            self.profile,
+            self.session_id,
+            self.web_mode,
+            self.memory_label,
+            self.backend_label,
             match self.active_panel {
                 ActivePanel::Conversation => "conversation",
                 ActivePanel::Activity => "activity",
             },
             self.token_count,
-            self.tool_count
+            self.tool_count,
+            latency
         )
     }
 }
@@ -299,5 +340,22 @@ mod tests {
         assert!(app
             .activity
             .contains(&MessageBlock::Thinking("answer: ready".to_string())));
+    }
+
+    #[test]
+    fn footer_includes_runtime_labels_and_latency() {
+        let mut app = TuiApp::new("agent_manager");
+        app.set_runtime_labels("session-1", "always", "native");
+        app.set_latency(42);
+        app.push_assistant_message("hello world");
+
+        let footer = app.footer_line();
+        assert!(footer.contains("profile=agent_manager"));
+        assert!(footer.contains("session=session-1"));
+        assert!(footer.contains("web=always"));
+        assert!(footer.contains("memory=session-store"));
+        assert!(footer.contains("backend=native"));
+        assert!(footer.contains("tokens=2"));
+        assert!(footer.contains("latency_ms=42"));
     }
 }

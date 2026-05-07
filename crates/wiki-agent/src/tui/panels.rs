@@ -62,3 +62,8 @@ pub fn status(app: &TuiApp) -> Paragraph<'_> {
     };
     Paragraph::new(app.status_line()).style(style)
 }
+
+pub fn help() -> Paragraph<'static> {
+    Paragraph::new("Tab panel | PgUp/PgDn scroll | Enter submit | Esc clear/quit | Ctrl-C quit")
+        .style(theme::help_style())
+}
