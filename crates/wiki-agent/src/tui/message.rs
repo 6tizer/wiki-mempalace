@@ -1,8 +1,9 @@
 use ratatui::{
-    style::{Color, Modifier, Style},
+    style::Style,
     text::{Line, Span, Text},
 };
 
+use super::theme;
 use super::tool_call::{render_tool_call, ToolCallStatus};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -32,12 +33,12 @@ impl MessageBlock {
 
     pub fn render_lines(&self) -> Vec<Line<'static>> {
         match self {
-            Self::User(message) => render_text_block("user", message, user_style()),
+            Self::User(message) => render_text_block("user", message, theme::user_style()),
             Self::AssistantText(message) => {
-                render_text_block("assistant", message, assistant_style())
+                render_text_block("assistant", message, theme::assistant_style())
             }
             Self::Thinking(message) => vec![Line::from(vec![
-                Span::styled("thinking: ", dim_style()),
+                Span::styled("thinking: ", theme::dim_style()),
                 Span::raw(message.clone()),
             ])],
             Self::ToolCall {
@@ -47,8 +48,10 @@ impl MessageBlock {
                 summary,
                 collapsed,
             } => render_tool_call(name, status, *duration_ms, summary, *collapsed),
-            Self::Evidence(summary) => render_text_block("evidence", summary, evidence_style()),
-            Self::Error(message) => render_text_block("error", message, error_style()),
+            Self::Evidence(summary) => {
+                render_text_block("evidence", summary, theme::evidence_style())
+            }
+            Self::Error(message) => render_text_block("error", message, theme::error_style()),
         }
     }
 }
@@ -74,17 +77,17 @@ fn render_text_block(label: &str, message: &str, style: Style) -> Vec<Line<'stat
             in_code = !in_code;
             lines.push(Line::from(Span::styled(
                 format!("  | {line}"),
-                code_style(),
+                theme::code_style(),
             )));
         } else if in_code {
             lines.push(Line::from(Span::styled(
                 format!("  | {line}"),
-                code_style(),
+                theme::code_style(),
             )));
         } else if looks_like_citation(trimmed) {
             lines.push(Line::from(Span::styled(
                 format!("  {line}"),
-                evidence_style(),
+                theme::evidence_style(),
             )));
         } else {
             lines.push(Line::from(Span::raw(format!("  {line}"))));
@@ -102,32 +105,6 @@ fn looks_like_citation(line: &str) -> bool {
         || line.contains("doc_id=")
         || line.contains("source:")
         || line.contains("url=")
-}
-
-fn user_style() -> Style {
-    Style::default()
-        .fg(Color::Cyan)
-        .add_modifier(Modifier::BOLD)
-}
-
-fn assistant_style() -> Style {
-    Style::default().fg(Color::Green)
-}
-
-fn evidence_style() -> Style {
-    Style::default().fg(Color::Blue)
-}
-
-fn error_style() -> Style {
-    Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)
-}
-
-fn dim_style() -> Style {
-    Style::default().fg(Color::DarkGray)
-}
-
-fn code_style() -> Style {
-    Style::default().fg(Color::Magenta)
 }
 
 #[cfg(test)]

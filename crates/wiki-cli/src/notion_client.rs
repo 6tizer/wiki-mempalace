@@ -84,6 +84,18 @@ impl NotionApiClient {
     }
 
     #[cfg(test)]
+    pub fn for_test_token(token: impl Into<String>, request_delay_ms: u64) -> Self {
+        let delay_ms = request_delay_ms.max(MIN_REQUEST_DELAY_MS);
+        Self {
+            token: token.into(),
+            client: Client::new(),
+            request_delay: Duration::from_millis(delay_ms),
+            last_request_at: None,
+            base_url: NOTION_API_BASE.to_string(),
+        }
+    }
+
+    #[cfg(test)]
     pub fn with_base_url(mut self, base_url: impl Into<String>) -> Self {
         self.base_url = base_url.into();
         self

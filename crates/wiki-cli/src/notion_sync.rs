@@ -421,7 +421,6 @@ mod tests {
 
     #[test]
     fn notion_sync_refreshes_existing_source_body() {
-        unsafe { std::env::set_var("NOTION_TOKEN", "test-token") };
         let dir = tempdir().unwrap();
         let db = dir.path().join("wiki.db");
         let repo = SqliteRepository::open(&db).unwrap();
@@ -439,7 +438,7 @@ mod tests {
         repo.insert_notion_page_index("page-refresh", "x_bookmark", &source_id)
             .unwrap();
 
-        let mut client = NotionApiClient::from_env_with_delay(0).unwrap();
+        let mut client = NotionApiClient::for_test_token("test-token", 0);
         let mut runner =
             NotionSyncRunner::new(&mut client, &repo, &mut engine, private_scope(), false);
         let mut page = make_page("page-refresh", "Existing");

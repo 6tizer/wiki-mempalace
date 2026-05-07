@@ -1,7 +1,9 @@
 use ratatui::{
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::{Line, Span},
 };
+
+use super::theme;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ToolCallStatus {
@@ -59,15 +61,15 @@ pub fn render_tool_call(
 
 fn status_style(status: &ToolCallStatus) -> Style {
     match status {
-        ToolCallStatus::Running => Style::default().fg(Color::Yellow),
-        ToolCallStatus::Succeeded => Style::default().fg(Color::Green),
-        ToolCallStatus::Failed => Style::default().fg(Color::Red),
-        ToolCallStatus::Retrying => Style::default().fg(Color::Magenta),
+        ToolCallStatus::Running => theme::tool_style(),
+        ToolCallStatus::Succeeded => theme::assistant_style(),
+        ToolCallStatus::Failed => theme::error_style(),
+        ToolCallStatus::Retrying => theme::warning_style(),
     }
 }
 
 fn dim_style() -> Style {
-    Style::default().fg(Color::DarkGray)
+    theme::dim_style()
 }
 
 #[cfg(test)]
