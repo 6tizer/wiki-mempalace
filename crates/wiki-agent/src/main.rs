@@ -2,6 +2,7 @@ mod answer;
 mod chat;
 mod config;
 mod doctor;
+mod evaluator;
 mod events;
 mod evidence;
 mod harness;

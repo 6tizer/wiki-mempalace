@@ -22,6 +22,10 @@ pub enum ChatEvent {
         name: String,
         error: String,
     },
+    RetryStarted {
+        attempt: usize,
+        reason: String,
+    },
     EvaluationFinished {
         can_answer: bool,
         reason: String,
