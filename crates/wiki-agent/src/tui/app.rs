@@ -1,4 +1,5 @@
 use super::status::TuiStatus;
+use crate::events::{activity_lines, ChatEvent};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ActivePanel {
@@ -68,6 +69,17 @@ impl TuiApp {
 
     pub fn push_activity(&mut self, line: impl Into<String>) {
         self.activity.push(line.into());
+    }
+
+    pub fn push_events(&mut self, events: &[ChatEvent]) {
+        for event in events {
+            if matches!(event, ChatEvent::ToolStarted { .. }) {
+                self.tool_count += 1;
+            }
+        }
+        for line in activity_lines(events) {
+            self.push_activity(line);
+        }
     }
 
     pub fn set_status(&mut self, status: TuiStatus) {
@@ -198,5 +210,30 @@ mod tests {
         assert_eq!(app.activity_scroll, 1);
         app.scroll_up();
         assert_eq!(app.activity_scroll, 0);
+    }
+
+    #[test]
+    fn activity_uses_structured_events_and_counts_started_tools() {
+        let mut app = TuiApp::new("agent_manager");
+        app.push_events(&[
+            ChatEvent::ToolStarted {
+                name: "wiki_query".to_string(),
+            },
+            ChatEvent::ToolFinished {
+                name: "wiki_query".to_string(),
+                duration_ms: 4,
+                summary: "internal_results=1".to_string(),
+            },
+            ChatEvent::AnswerReady,
+        ]);
+
+        assert_eq!(app.tool_count, 1);
+        assert!(app
+            .activity
+            .contains(&"tool: wiki_query started".to_string()));
+        assert!(app
+            .activity
+            .contains(&"tool: wiki_query finished duration_ms=4 internal_results=1".to_string()));
+        assert!(app.activity.contains(&"answer: ready".to_string()));
     }
 }
