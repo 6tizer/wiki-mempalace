@@ -5,6 +5,7 @@ use crate::harness::{HarnessDelegate, HarnessRuntime};
 use crate::llm_adapter::{ChatModel, FakeChatModel, WikiAiChatModel};
 use crate::memory;
 use crate::planner::{self, WebMode};
+use crate::prompt::{build_system_prompt, PromptContext};
 use crate::render_cli;
 use crate::session_store::SessionStore;
 use crate::slash::{self, SlashCommand};
@@ -185,6 +186,7 @@ impl ChatRuntime {
             let mut delegate = ChatHarnessDelegate {
                 runtime: self,
                 model,
+                task_plan: &task_plan,
             };
             HarnessRuntime.run(prompt, &task_plan, &mut delegate)?
         };
@@ -324,6 +326,7 @@ impl ChatRuntime {
 struct ChatHarnessDelegate<'a> {
     runtime: &'a ChatRuntime,
     model: &'a dyn ChatModel,
+    task_plan: &'a planner::TaskPlan,
 }
 
 impl HarnessDelegate for ChatHarnessDelegate<'_> {
@@ -349,7 +352,14 @@ impl HarnessDelegate for ChatHarnessDelegate<'_> {
         query: &str,
         evidence: &EvidencePack,
     ) -> Result<String, Box<dyn std::error::Error>> {
-        let system = system_prompt(&self.runtime.profile, self.runtime.tool_backend);
+        let system = build_system_prompt(PromptContext {
+            profile: &self.runtime.profile,
+            viewer_scope: &self.runtime.config.viewer_scope,
+            tool_backend: self.runtime.tool_backend,
+            web_mode: self.runtime.web,
+            allow_private_web_search: self.runtime.allow_private_web_search,
+            task_plan: self.task_plan,
+        });
         let user_prompt = answer::build_user_prompt(query, evidence);
         self.model.complete(&system, &user_prompt)
     }
@@ -367,10 +377,6 @@ fn build_model(
         &config.llm_config,
         profile,
     )?))
-}
-
-fn system_prompt(profile: &str, backend: ToolBackendKind) -> String {
-    format!("You are wiki-agent. Answer directly. profile={profile}. tool_backend={backend:?}.")
 }
 
 fn enrich_internal_evidence(
