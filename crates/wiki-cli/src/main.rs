@@ -1842,6 +1842,7 @@ fn run_with_engine(cli: Cli) -> Result<(), Box<dyn std::error::Error>> {
                         &mut eng,
                         &repo,
                         &mut apply_plan,
+                        wiki_root.as_deref(),
                         &vault_files,
                     )?;
                 }

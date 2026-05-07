@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use time::format_description::well_known::Rfc3339;
 use wiki_core::RawArtifact;
@@ -112,6 +112,7 @@ pub fn project_notion_sources_to_vault_with_options(
         existing: 0,
         skipped_unknown_db: 0,
     };
+    let root = vault.join("sources");
     let existing = scan_existing_source_identity(vault)?;
     let mut seen_source_ids: BTreeSet<String> = existing.source_ids.keys().cloned().collect();
     let mut seen_notion_uuids: BTreeSet<String> = existing.notion_uuids.keys().cloned().collect();
@@ -136,7 +137,7 @@ pub fn project_notion_sources_to_vault_with_options(
             if options.refresh_existing && existing_by_source_id.is_some() {
                 let title = source_title(source);
                 let markdown = render_source_markdown(source, origin, notion_uuid, &title)?;
-                let current = std::fs::read_to_string(path).unwrap_or_default();
+                let current = read_source_file(&root, path)?;
                 if current != markdown {
                     report.planned += 1;
                     projections.push(Projection {
@@ -163,10 +164,7 @@ pub fn project_notion_sources_to_vault_with_options(
 
     if options.mode == ProjectionMode::Apply {
         for projection in &projections {
-            if let Some(parent) = projection.path.parent() {
-                std::fs::create_dir_all(parent)?;
-            }
-            std::fs::write(&projection.path, &projection.markdown)?;
+            write_source_file(&root, &projection.path, &projection.markdown)?;
             report.applied += 1;
         }
     }
@@ -191,7 +189,7 @@ pub fn repair_obsidian_source_tags(
     }
 
     let mut repairs: Vec<(PathBuf, String, usize)> = Vec::new();
-    for entry in walkdir::WalkDir::new(root)
+    for entry in walkdir::WalkDir::new(&root)
         .into_iter()
         .filter_map(Result::ok)
     {
@@ -200,7 +198,7 @@ pub fn repair_obsidian_source_tags(
             continue;
         }
         report.files_seen += 1;
-        let text = std::fs::read_to_string(path)?;
+        let text = read_source_file(&root, path)?;
         if let Some((rewritten, changed)) = rewrite_frontmatter_tags(&text) {
             if changed > 0 {
                 report.files_planned += 1;
@@ -212,7 +210,7 @@ pub fn repair_obsidian_source_tags(
 
     if mode == ProjectionMode::Apply {
         for (path, text, _) in repairs {
-            std::fs::write(path, text)?;
+            write_source_file(&root, &path, &text)?;
             report.files_applied += 1;
         }
     }
@@ -232,7 +230,7 @@ fn scan_existing_source_identity(vault: &Path) -> Result<ExistingSourceIdentity,
     if !root.exists() {
         return Ok(existing);
     }
-    for entry in walkdir::WalkDir::new(root)
+    for entry in walkdir::WalkDir::new(&root)
         .into_iter()
         .filter_map(Result::ok)
     {
@@ -240,7 +238,7 @@ fn scan_existing_source_identity(vault: &Path) -> Result<ExistingSourceIdentity,
         if path.extension().and_then(|ext| ext.to_str()) != Some("md") {
             continue;
         }
-        let text = std::fs::read_to_string(path)?;
+        let text = read_source_file(&root, path)?;
         if let Some(frontmatter) = split_frontmatter(&text) {
             let values = parse_frontmatter(frontmatter);
             if let Some(source_id) = values.get("source_id") {
@@ -256,6 +254,186 @@ fn scan_existing_source_identity(vault: &Path) -> Result<ExistingSourceIdentity,
         }
     }
     Ok(existing)
+}
+
+fn read_source_file(root: &Path, path: &Path) -> Result<String, std::io::Error> {
+    validate_existing_source_file(root, path)?;
+    std::fs::read_to_string(path)
+}
+
+fn write_source_file(root: &Path, path: &Path, body: &str) -> Result<(), std::io::Error> {
+    validate_source_write_target(root, path)?;
+    std::fs::write(path, body)
+}
+
+fn validate_existing_source_file(root: &Path, path: &Path) -> Result<(), std::io::Error> {
+    validate_source_path(root, path)?;
+    if let Some(parent) = path.parent() {
+        validate_existing_source_dir_chain(root, parent)?;
+    }
+    let metadata = std::fs::symlink_metadata(path)?;
+    let file_type = metadata.file_type();
+    if file_type.is_symlink() {
+        return Err(invalid_source_path(
+            path,
+            "source file must not be a symlink",
+        ));
+    }
+    if !file_type.is_file() {
+        return Err(invalid_source_path(
+            path,
+            "source path must be a regular file",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_source_write_target(root: &Path, path: &Path) -> Result<(), std::io::Error> {
+    validate_source_path(root, path)?;
+    let parent = path
+        .parent()
+        .ok_or_else(|| invalid_source_path(path, "source path must have a parent"))?;
+    ensure_source_dir_chain(root, parent)?;
+    match std::fs::symlink_metadata(path) {
+        Ok(metadata) => {
+            let file_type = metadata.file_type();
+            if file_type.is_symlink() {
+                return Err(invalid_source_path(
+                    path,
+                    "source file must not be a symlink",
+                ));
+            }
+            if !file_type.is_file() {
+                return Err(invalid_source_path(
+                    path,
+                    "source path must be a regular file",
+                ));
+            }
+        }
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+        Err(err) => return Err(err),
+    }
+    Ok(())
+}
+
+fn validate_existing_source_dir_chain(root: &Path, dir: &Path) -> Result<(), std::io::Error> {
+    validate_source_path(root, dir)?;
+    let mut current = PathBuf::new();
+    for component in root.components() {
+        current.push(component.as_os_str());
+    }
+    validate_existing_source_dir(&current)?;
+    for component in dir
+        .strip_prefix(root)
+        .map_err(|_| invalid_source_path(dir, "source path must stay under sources/"))?
+        .components()
+    {
+        let Component::Normal(name) = component else {
+            return Err(invalid_source_path(
+                dir,
+                "source path contains unsafe component",
+            ));
+        };
+        current.push(name);
+        validate_existing_source_dir(&current)?;
+    }
+    Ok(())
+}
+
+fn ensure_source_dir_chain(root: &Path, dir: &Path) -> Result<(), std::io::Error> {
+    validate_source_path(root, dir)?;
+    let mut current = PathBuf::new();
+    for component in root.components() {
+        current.push(component.as_os_str());
+    }
+    ensure_source_dir(&current)?;
+    for component in dir
+        .strip_prefix(root)
+        .map_err(|_| invalid_source_path(dir, "source path must stay under sources/"))?
+        .components()
+    {
+        let Component::Normal(name) = component else {
+            return Err(invalid_source_path(
+                dir,
+                "source path contains unsafe component",
+            ));
+        };
+        current.push(name);
+        ensure_source_dir(&current)?;
+    }
+    Ok(())
+}
+
+fn validate_existing_source_dir(path: &Path) -> Result<(), std::io::Error> {
+    let metadata = std::fs::symlink_metadata(path)?;
+    let file_type = metadata.file_type();
+    if file_type.is_symlink() {
+        return Err(invalid_source_path(
+            path,
+            "source directory must not be a symlink",
+        ));
+    }
+    if !file_type.is_dir() {
+        return Err(invalid_source_path(
+            path,
+            "source directory must be a directory",
+        ));
+    }
+    Ok(())
+}
+
+fn ensure_source_dir(path: &Path) -> Result<(), std::io::Error> {
+    match std::fs::symlink_metadata(path) {
+        Ok(metadata) => {
+            let file_type = metadata.file_type();
+            if file_type.is_symlink() {
+                return Err(invalid_source_path(
+                    path,
+                    "source directory must not be a symlink",
+                ));
+            }
+            if !file_type.is_dir() {
+                return Err(invalid_source_path(
+                    path,
+                    "source directory must be a directory",
+                ));
+            }
+            Ok(())
+        }
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            std::fs::create_dir_all(path)?;
+            validate_existing_source_dir(path)
+        }
+        Err(err) => Err(err),
+    }
+}
+
+fn validate_source_path(root: &Path, path: &Path) -> Result<(), std::io::Error> {
+    let relative = path
+        .strip_prefix(root)
+        .map_err(|_| invalid_source_path(path, "source path must stay under sources/"))?;
+    if relative.as_os_str().is_empty() {
+        return Err(invalid_source_path(
+            path,
+            "source path must not be sources/",
+        ));
+    }
+    for component in relative.components() {
+        if !matches!(component, Component::Normal(_)) {
+            return Err(invalid_source_path(
+                path,
+                "source path contains unsafe component",
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn invalid_source_path(path: &Path, reason: &str) -> std::io::Error {
+    std::io::Error::new(
+        std::io::ErrorKind::InvalidInput,
+        format!("{reason}: {}", path.display()),
+    )
 }
 
 fn parse_notion_uri(uri: &str) -> Option<(&str, &str)> {
@@ -754,6 +932,76 @@ body
         assert_eq!(dry.planned, 0);
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn source_projection_rejects_symlink_source_file() {
+        let temp = tempfile::tempdir().unwrap();
+        let vault = temp.path().join("vault");
+        std::fs::create_dir_all(vault.join("sources/x")).unwrap();
+        let outside = temp.path().join("outside.md");
+        std::fs::write(
+            &outside,
+            r#"---
+source_id: "77777777-7777-7777-7777-777777777777"
+notion_uuid: "refresh-test"
+---
+
+outside
+"#,
+        )
+        .unwrap();
+        std::os::unix::fs::symlink(&outside, vault.join("sources/x/link.md")).unwrap();
+
+        let sources = vec![source(
+            "77777777-7777-7777-7777-777777777777",
+            "notion://x_bookmark/refresh-test",
+            "# X Source\n\nURL: https://x.com/post\n来源: X\n\nnew body",
+        )];
+        let err = project_notion_sources_to_vault_with_options(
+            &sources,
+            &vault,
+            ProjectionOptions {
+                mode: ProjectionMode::Apply,
+                refresh_existing: true,
+            },
+        )
+        .unwrap_err()
+        .to_string();
+
+        assert!(err.contains("source file must not be a symlink"));
+        assert_eq!(
+            std::fs::read_to_string(&outside)
+                .unwrap()
+                .matches("new body")
+                .count(),
+            0
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn source_projection_rejects_symlink_source_directory() {
+        let temp = tempfile::tempdir().unwrap();
+        let vault = temp.path().join("vault");
+        let outside_dir = temp.path().join("outside-sources");
+        std::fs::create_dir_all(&outside_dir).unwrap();
+        std::fs::create_dir_all(vault.join("sources")).unwrap();
+        std::os::unix::fs::symlink(&outside_dir, vault.join("sources/x")).unwrap();
+        let sources = vec![source(
+            "99999999-9999-9999-9999-999999999999",
+            "notion://x_bookmark/symlink-dir",
+            "# X Source\n\nURL: https://x.com/post\n来源: X\n\nbody",
+        )];
+
+        let err =
+            project_notion_sources_to_vault(&sources, &vault, ProjectionMode::Apply).unwrap_err();
+
+        assert!(err
+            .to_string()
+            .contains("source directory must not be a symlink"));
+        assert!(!outside_dir.join("X-Source.md").exists());
+    }
+
     #[test]
     fn repair_obsidian_source_tags_handles_inline_and_block_tags() {
         let temp = tempfile::tempdir().unwrap();
@@ -806,5 +1054,35 @@ body
         assert_eq!(again.files_planned, 0);
         assert_eq!(again.files_applied, 0);
         assert_eq!(again.tags_rewritten, 0);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn repair_obsidian_source_tags_rejects_symlink_source_file() {
+        let temp = tempfile::tempdir().unwrap();
+        let vault = temp.path().join("vault");
+        std::fs::create_dir_all(vault.join("sources/x")).unwrap();
+        let outside = temp.path().join("outside.md");
+        std::fs::write(
+            &outside,
+            r#"---
+title: Outside
+tags: [API Key]
+---
+
+outside
+"#,
+        )
+        .unwrap();
+        std::os::unix::fs::symlink(&outside, vault.join("sources/x/link.md")).unwrap();
+
+        let err = repair_obsidian_source_tags(&vault, ProjectionMode::Apply).unwrap_err();
+
+        assert!(err
+            .to_string()
+            .contains("source file must not be a symlink"));
+        assert!(std::fs::read_to_string(outside)
+            .unwrap()
+            .contains("API Key"));
     }
 }
