@@ -12,18 +12,23 @@ pub fn draw(frame: &mut Frame<'_>, app: &TuiApp) {
             Constraint::Min(5),
             Constraint::Length(3),
             Constraint::Length(1),
+            Constraint::Length(1),
         ])
         .split(frame.area());
 
-    let main = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(68), Constraint::Percentage(32)])
-        .split(vertical[0]);
-
-    frame.render_widget(panels::conversation(app), main[0]);
-    frame.render_widget(panels::activity(app), main[1]);
+    if frame.area().width < 80 {
+        frame.render_widget(panels::conversation(app), vertical[0]);
+    } else {
+        let main = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Percentage(68), Constraint::Percentage(32)])
+            .split(vertical[0]);
+        frame.render_widget(panels::conversation(app), main[0]);
+        frame.render_widget(panels::activity(app), main[1]);
+    }
     frame.render_widget(panels::input(app), vertical[1]);
-    frame.render_widget(panels::status(app), vertical[2]);
+    frame.render_widget(panels::help(), vertical[2]);
+    frame.render_widget(panels::status(app), vertical[3]);
 }
 
 #[cfg(test)]

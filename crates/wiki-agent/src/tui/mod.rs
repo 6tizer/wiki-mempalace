@@ -8,7 +8,7 @@ mod theme;
 
 use std::{
     io::{self, IsTerminal, Stdout},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use crossterm::{
@@ -20,6 +20,7 @@ use ratatui::Terminal;
 use ratatui_crossterm::CrosstermBackend;
 
 use crate::chat::{self, ChatOptions, ChatRuntime};
+use crate::tool_backend::ToolBackendKind;
 
 use self::{
     app::{TuiAction, TuiApp},
@@ -36,7 +37,13 @@ pub(crate) fn run(options: ChatOptions) -> Result<(), Box<dyn std::error::Error>
 
     let mut runtime = chat::init_runtime(&options)?;
     let mut app = TuiApp::new(runtime.profile());
-    app.push_activity("backend=native runtime=wiki-agent");
+    let backend = backend_label(runtime.tool_backend());
+    app.set_runtime_labels(
+        runtime.session_id(),
+        runtime.web_mode().to_string(),
+        backend,
+    );
+    app.push_activity(format!("backend={backend} runtime=wiki-agent"));
     if let Some(prompt) = options.one_shot_prompt.clone() {
         submit_prompt(
             &mut app,
@@ -92,8 +99,10 @@ fn submit_prompt(
     app.push_user(prompt);
     app.set_status(TuiStatus::Thinking);
     app.push_activity(format!("manager: prompt chars={}", prompt.chars().count()));
+    let started_at = Instant::now();
     match runtime.run_prompt(prompt, fake_response) {
         Ok(turn) => {
+            app.set_latency(started_at.elapsed().as_millis());
             app.push_events(&turn.events);
             app.push_evidence(turn.evidence);
             if turn.answer.is_empty() {
@@ -106,6 +115,7 @@ fn submit_prompt(
             app.set_status(TuiStatus::Ready);
         }
         Err(err) => {
+            app.set_latency(started_at.elapsed().as_millis());
             app.push_error(err.to_string());
             app.set_status(TuiStatus::Error(err.to_string()));
         }
@@ -147,5 +157,13 @@ impl Drop for TerminalSession {
         let _ = disable_raw_mode();
         let _ = execute!(self.terminal.backend_mut(), LeaveAlternateScreen);
         let _ = self.terminal.show_cursor();
+    }
+}
+
+fn backend_label(backend: ToolBackendKind) -> &'static str {
+    match backend {
+        ToolBackendKind::Native => "native",
+        ToolBackendKind::McpChild => "mcp-child",
+        ToolBackendKind::Auto => "auto",
     }
 }

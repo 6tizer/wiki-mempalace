@@ -106,6 +106,18 @@ impl ChatRuntime {
         &self.profile
     }
 
+    pub(crate) fn session_id(&self) -> &str {
+        &self.session_id
+    }
+
+    pub(crate) fn web_mode(&self) -> WebMode {
+        self.web
+    }
+
+    pub(crate) fn tool_backend(&self) -> ToolBackendKind {
+        self.tool_backend
+    }
+
     fn handle_input_line(
         &mut self,
         input: &str,

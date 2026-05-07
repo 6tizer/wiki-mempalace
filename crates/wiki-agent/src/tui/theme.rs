@@ -17,3 +17,7 @@ pub fn status_style() -> Style {
 pub fn error_style() -> Style {
     Style::default().fg(Color::Red)
 }
+
+pub fn help_style() -> Style {
+    Style::default().fg(Color::DarkGray)
+}
