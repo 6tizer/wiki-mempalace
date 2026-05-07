@@ -1,5 +1,6 @@
 use crate::events::ChatEvent;
 use crate::evidence::{EvidencePack, InternalEvidence};
+use crate::planner::TaskPlan;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum HarnessPhase {
@@ -35,39 +36,33 @@ impl HarnessAction {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum HarnessIntent {
-    KnowledgeAnswer,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct HarnessPlan {
-    pub(crate) intent: HarnessIntent,
+    pub(crate) intent: String,
     pub(crate) actions: Vec<HarnessAction>,
+    pub(crate) planned_tools: Vec<String>,
 }
 
 impl HarnessPlan {
-    pub(crate) fn for_prompt(prompt: &str) -> Self {
+    pub(crate) fn for_task(prompt: &str, task_plan: &TaskPlan) -> Self {
         let query = prompt.to_string();
         Self {
-            intent: HarnessIntent::KnowledgeAnswer,
+            intent: task_plan.intent.render().to_string(),
             actions: vec![
                 HarnessAction::WikiQuery {
                     query: query.clone(),
-                    per_stream_limit: 5,
+                    per_stream_limit: task_plan.evidence_budget.local_limit,
                 },
                 HarnessAction::WebSearchPolicy {
                     query: query.clone(),
                 },
                 HarnessAction::Answer { query },
             ],
+            planned_tools: task_plan.tool_names(),
         }
     }
 
-    fn action_names(&self) -> Vec<String> {
-        self.actions
-            .iter()
-            .map(|action| action.name().to_string())
-            .collect()
+    fn plan_items(&self) -> Vec<String> {
+        self.planned_tools.clone()
     }
 }
 
@@ -143,6 +138,7 @@ impl HarnessRuntime {
     pub(crate) fn run(
         &self,
         prompt: &str,
+        task_plan: &TaskPlan,
         delegate: &mut impl HarnessDelegate,
     ) -> Result<HarnessTurnResult, Box<dyn std::error::Error>> {
         let mut events = Vec::new();
@@ -150,10 +146,10 @@ impl HarnessRuntime {
 
         let phase = HarnessPhase::Plan;
         events.push(ChatEvent::PhaseChanged(phase.render().to_string()));
-        let plan = HarnessPlan::for_prompt(prompt);
+        let plan = HarnessPlan::for_task(prompt, task_plan);
         events.push(ChatEvent::PlanStarted {
-            intent: plan.intent.render().to_string(),
-            actions: plan.action_names(),
+            intent: plan.intent.clone(),
+            actions: plan.plan_items(),
         });
 
         events.push(ChatEvent::PhaseChanged(
@@ -251,14 +247,6 @@ impl HarnessPhase {
     }
 }
 
-impl HarnessIntent {
-    fn render(&self) -> &'static str {
-        match self {
-            Self::KnowledgeAnswer => "knowledge_answer",
-        }
-    }
-}
-
 fn web_policy_summary(pack: &EvidencePack) -> String {
     if let Some(web) = &pack.web {
         return format!(
@@ -277,6 +265,7 @@ fn web_policy_summary(pack: &EvidencePack) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::planner::{TaskPlan, WebMode};
 
     struct FakeDelegate {
         evidence: EvidencePack,
@@ -323,9 +312,10 @@ mod tests {
             evidence,
             answer: "done".to_string(),
         };
+        let task_plan = TaskPlan::for_chat("question", WebMode::Auto, "shared:wiki", false);
 
         let result = HarnessRuntime
-            .run("question", &mut delegate)
+            .run("question", &task_plan, &mut delegate)
             .expect("harness run");
 
         assert_eq!(result.answer, "done");
