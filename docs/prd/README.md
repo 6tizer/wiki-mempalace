@@ -10,6 +10,7 @@
 
 ## Active PRDs
 
+- [wiki-agent-runtime-upgrade.md](wiki-agent-runtime-upgrade.md) — Follow-up runtime upgrade for wiki-agent: harness loop, planner/evaluator/prompt runtime, structured events, TUI message blocks, tool UX, themes, keyboard navigation, and regression tests.
 - [wiki-agent.md](wiki-agent.md) — Eight-PR native wiki agent: shared AI core, native ToolRegistry, CLI chat, web RAG, manager-worker sub agents, memory/skills, TUI, docs/E2E.
 - [wiki-governance-evidence-synthesis-v3.md](wiki-governance-evidence-synthesis-v3.md) — Seven-PR native wiki maintenance and research loop: AI provider profiles, dual web search, governance scan, evidence fixer, web-backed synthesis, automation/docs.
 - [production-wiki-compiler.md](production-wiki-compiler.md) — Notion-equivalent local compiler operation: raw source -> resolver -> summary + concept/entity pages -> Vault -> outbox -> Mempalace -> query/explain; controlled production scale-up is active.

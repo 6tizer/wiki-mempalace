@@ -1,6 +1,7 @@
 use crate::answer;
 use crate::config::AgentConfig;
 use crate::evidence::{EvidencePack, InternalEvidence};
+use crate::harness::{HarnessDelegate, HarnessRuntime};
 use crate::llm_adapter::{ChatModel, FakeChatModel, WikiAiChatModel};
 use crate::memory;
 use crate::planner::{self, WebMode};
@@ -174,16 +175,28 @@ impl ChatRuntime {
         model: &dyn ChatModel,
     ) -> Result<ChatTurn, Box<dyn std::error::Error>> {
         self.store.add_message(&self.session_id, "user", prompt)?;
-        let evidence = self.collect_evidence(prompt)?;
-        let evidence_rendered = evidence.render();
-        let system = system_prompt(&self.profile, self.tool_backend);
-        let user_prompt = answer::build_user_prompt(prompt, &evidence);
-        let answer = model.complete(&system, &user_prompt)?;
+        let harness_turn = {
+            let mut delegate = ChatHarnessDelegate {
+                runtime: self,
+                model,
+            };
+            HarnessRuntime.run(prompt, &mut delegate)?
+        };
+        debug_assert!(!harness_turn.events.is_empty());
+        debug_assert!(!harness_turn.observations.is_empty());
+        debug_assert_eq!(
+            harness_turn.evidence_rendered,
+            harness_turn.evidence.render()
+        );
+        debug_assert!(
+            harness_turn.evaluation.can_answer || !harness_turn.answer.is_empty(),
+            "harness should either approve evidence or still provide a degraded answer"
+        );
         self.store
-            .add_message(&self.session_id, "assistant", &answer)?;
+            .add_message(&self.session_id, "assistant", &harness_turn.answer)?;
         Ok(ChatTurn {
-            evidence: evidence_rendered,
-            answer,
+            evidence: harness_turn.evidence_rendered,
+            answer: harness_turn.answer,
         })
     }
 
@@ -199,8 +212,11 @@ impl ChatRuntime {
         }
     }
 
-    fn collect_evidence(&self, prompt: &str) -> Result<EvidencePack, Box<dyn std::error::Error>> {
-        let internal = self.collect_internal_evidence(prompt)?;
+    fn apply_web_policy(
+        &self,
+        prompt: &str,
+        internal: Vec<InternalEvidence>,
+    ) -> Result<EvidencePack, Box<dyn std::error::Error>> {
         let mut pack = EvidencePack::new(internal);
         if !planner::should_use_web(prompt, self.web) {
             pack.web_status = Some("off".to_string());
@@ -234,6 +250,7 @@ impl ChatRuntime {
     fn collect_internal_evidence(
         &self,
         prompt: &str,
+        per_stream_limit: usize,
     ) -> Result<Vec<InternalEvidence>, Box<dyn std::error::Error>> {
         let repo = SqliteRepository::open(&self.config.db)?;
         let schema = DomainSchema::permissive_default();
@@ -247,7 +264,7 @@ impl ChatRuntime {
         let registry = ToolRegistry;
         let value = registry.call(
             "wiki_query",
-            json!({"query": prompt, "per_stream_limit": 5}),
+            json!({"query": prompt, "per_stream_limit": per_stream_limit}),
             ToolContext {
                 eng: &mut eng,
                 repo: &repo,
@@ -295,6 +312,40 @@ impl ChatRuntime {
             ));
         }
         Ok(())
+    }
+}
+
+struct ChatHarnessDelegate<'a> {
+    runtime: &'a ChatRuntime,
+    model: &'a dyn ChatModel,
+}
+
+impl HarnessDelegate for ChatHarnessDelegate<'_> {
+    fn wiki_query(
+        &mut self,
+        query: &str,
+        per_stream_limit: usize,
+    ) -> Result<Vec<InternalEvidence>, Box<dyn std::error::Error>> {
+        self.runtime
+            .collect_internal_evidence(query, per_stream_limit)
+    }
+
+    fn web_search_policy(
+        &mut self,
+        query: &str,
+        internal: Vec<InternalEvidence>,
+    ) -> Result<EvidencePack, Box<dyn std::error::Error>> {
+        self.runtime.apply_web_policy(query, internal)
+    }
+
+    fn answer(
+        &mut self,
+        query: &str,
+        evidence: &EvidencePack,
+    ) -> Result<String, Box<dyn std::error::Error>> {
+        let system = system_prompt(&self.runtime.profile, self.runtime.tool_backend);
+        let user_prompt = answer::build_user_prompt(query, evidence);
+        self.model.complete(&system, &user_prompt)
     }
 }
 
