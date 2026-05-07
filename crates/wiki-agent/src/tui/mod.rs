@@ -93,7 +93,7 @@ fn submit_prompt(
     app.push_activity(format!("manager: prompt chars={}", prompt.chars().count()));
     match runtime.run_prompt(prompt, fake_response) {
         Ok(turn) => {
-            app.tool_count += 1;
+            app.push_events(&turn.events);
             app.push_activity(turn.evidence);
             if turn.answer.is_empty() {
                 app.push_assistant_message("");

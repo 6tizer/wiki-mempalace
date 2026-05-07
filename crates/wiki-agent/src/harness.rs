@@ -2,6 +2,7 @@ use crate::evaluator::{evaluate_evidence, EvaluationReport};
 use crate::events::ChatEvent;
 use crate::evidence::{EvidencePack, InternalEvidence};
 use crate::planner::TaskPlan;
+use std::time::Instant;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum HarnessPhase {
@@ -143,6 +144,7 @@ impl HarnessRuntime {
                     query,
                     per_stream_limit,
                 } => {
+                    let started_at = Instant::now();
                     match delegate.wiki_query(&query, per_stream_limit) {
                         Ok(results) => {
                             internal = results;
@@ -150,6 +152,7 @@ impl HarnessRuntime {
                         Err(err) => {
                             events.push(ChatEvent::ToolFailed {
                                 name: action_name.clone(),
+                                duration_ms: Some(started_at.elapsed().as_millis()),
                                 error: err.to_string(),
                             });
                             internal = Vec::new();
@@ -162,10 +165,12 @@ impl HarnessRuntime {
                     });
                     events.push(ChatEvent::ToolFinished {
                         name: action_name,
+                        duration_ms: started_at.elapsed().as_millis(),
                         summary,
                     });
                 }
                 HarnessAction::WebSearchPolicy { query } => {
+                    let started_at = Instant::now();
                     let mut pack = web_search_or_degraded(
                         delegate,
                         &query,
@@ -180,11 +185,24 @@ impl HarnessRuntime {
                             reason: report.reason.clone(),
                         });
                         let retry_limit = task_plan.evidence_budget.local_limit * (retry_count + 1);
+                        let retry_tool_name = "wiki_query".to_string();
+                        events.push(ChatEvent::ToolStarted {
+                            name: retry_tool_name.clone(),
+                        });
+                        let started_at = Instant::now();
                         let retry_internal = match delegate.wiki_query(&query, retry_limit) {
-                            Ok(results) => results,
+                            Ok(results) => {
+                                events.push(ChatEvent::ToolFinished {
+                                    name: retry_tool_name,
+                                    duration_ms: started_at.elapsed().as_millis(),
+                                    summary: format!("internal_results={}", results.len()),
+                                });
+                                results
+                            }
                             Err(err) => {
                                 events.push(ChatEvent::ToolFailed {
-                                    name: "wiki_query".to_string(),
+                                    name: retry_tool_name,
+                                    duration_ms: Some(started_at.elapsed().as_millis()),
                                     error: err.to_string(),
                                 });
                                 Vec::new()
@@ -202,11 +220,15 @@ impl HarnessRuntime {
                     });
                     events.push(ChatEvent::ToolFinished {
                         name: action_name,
+                        duration_ms: started_at.elapsed().as_millis(),
                         summary,
                     });
                     events.push(ChatEvent::PhaseChanged(
                         HarnessPhase::Observe.render().to_string(),
                     ));
+                    events.push(ChatEvent::EvidenceReady {
+                        summary: evidence_summary(&pack),
+                    });
                     evaluation = Some(report);
                     evidence = Some(pack);
                 }
@@ -227,9 +249,11 @@ impl HarnessRuntime {
                     events.push(ChatEvent::PhaseChanged(
                         HarnessPhase::Answer.render().to_string(),
                     ));
+                    let started_at = Instant::now();
                     answer = delegate.answer(&query, pack)?;
                     events.push(ChatEvent::ToolFinished {
                         name: action_name,
+                        duration_ms: started_at.elapsed().as_millis(),
                         summary: format!("answer_chars={}", answer.chars().count()),
                     });
                     events.push(ChatEvent::AnswerReady);
@@ -279,17 +303,28 @@ fn web_policy_summary(pack: &EvidencePack) -> String {
     )
 }
 
+fn evidence_summary(pack: &EvidencePack) -> String {
+    format!(
+        "internal={} web_status={} web_items={}",
+        pack.internal.len(),
+        pack.web_status.as_deref().unwrap_or("ok"),
+        pack.web.as_ref().map(|web| web.evidence.len()).unwrap_or(0)
+    )
+}
+
 fn web_search_or_degraded(
     delegate: &mut impl HarnessDelegate,
     query: &str,
     internal: Vec<InternalEvidence>,
     events: &mut Vec<ChatEvent>,
 ) -> EvidencePack {
+    let started_at = Instant::now();
     match delegate.web_search_policy(query, internal.clone()) {
         Ok(pack) => pack,
         Err(err) => {
             events.push(ChatEvent::ToolFailed {
                 name: "web_search_policy".to_string(),
+                duration_ms: Some(started_at.elapsed().as_millis()),
                 error: err.to_string(),
             });
             let mut pack = EvidencePack::new(internal);
@@ -439,7 +474,7 @@ mod tests {
         );
         assert!(result.events.iter().any(|event| matches!(
             event,
-            ChatEvent::ToolFailed { name, error }
+            ChatEvent::ToolFailed { name, error, .. }
                 if name == "web_search_policy" && error == "web unavailable"
         )));
     }

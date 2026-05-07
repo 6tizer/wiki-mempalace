@@ -1,5 +1,6 @@
 use crate::answer;
 use crate::config::AgentConfig;
+use crate::events::ChatEvent;
 use crate::evidence::{EvidencePack, InternalEvidence};
 use crate::harness::{HarnessDelegate, HarnessRuntime};
 use crate::llm_adapter::{ChatModel, FakeChatModel, WikiAiChatModel};
@@ -36,6 +37,7 @@ pub struct ChatOptions {
 pub(crate) struct ChatTurn {
     pub evidence: String,
     pub answer: String,
+    pub events: Vec<ChatEvent>,
 }
 
 pub fn run(options: ChatOptions) -> Result<(), Box<dyn std::error::Error>> {
@@ -114,6 +116,7 @@ impl ChatRuntime {
         }
         let model = build_model(&self.config, &self.profile, fake_response)?;
         let turn = self.run_turn(input, model.as_ref())?;
+        render_cli::render_chat_events(&turn.events);
         render_cli::render_system_line(&turn.evidence);
         render_cli::render_assistant_message(&turn.answer)?;
         Ok(false)
@@ -156,6 +159,7 @@ impl ChatRuntime {
     ) -> Result<(), Box<dyn std::error::Error>> {
         let model = build_model(&self.config, &self.profile, fake_response)?;
         let turn = self.run_turn(prompt, model.as_ref())?;
+        render_cli::render_chat_events(&turn.events);
         render_cli::render_system_line(&turn.evidence);
         render_cli::render_assistant_message(&turn.answer)?;
         Ok(())
@@ -205,6 +209,7 @@ impl ChatRuntime {
         Ok(ChatTurn {
             evidence: harness_turn.evidence_rendered,
             answer: harness_turn.answer,
+            events: harness_turn.events,
         })
     }
 
