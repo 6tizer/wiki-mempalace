@@ -55,6 +55,24 @@ planning, evaluation, prompting, structured events, and terminal UX.
 | 10 | Keyboard Navigation | Add session picker, tool collapse, plan panel, help overlay, and cancel. |
 | 11 | Snapshot + Harness Tests | Add regression coverage and closeout documentation. |
 
+## Implementation Status
+
+| PR | Theme | Status |
+| --- | --- | --- |
+| 1 | Harness Core State Machine | Merged PR #125. |
+| 2 | Task Planner v2 | Merged PR #126. |
+| 3 | Evaluator + Retry Policy | Merged PR #127. |
+| 4 | Prompt Runtime Builder | Merged PR #128. |
+| 5 | Structured Agent Events | Merged PR #129. |
+| 6 | TUI Message Blocks | Merged PR #130. |
+| 7 | TUI Layout + Footer | Merged PR #131. |
+| 8 | Tool Call UX | Merged PR #132. |
+| 9 | Theme System | Merged PR #133. |
+| 10 | Keyboard Navigation | Merged PR #134. |
+| 11 | Snapshot + Harness Tests | This closeout PR adds regression coverage and documentation sync. |
+
+Spec: [wiki-agent-runtime-upgrade](../specs/wiki-agent-runtime-upgrade/requirements.md).
+
 ## Execution Rules
 
 - Each PR must finish its own scope before the next PR starts.

@@ -648,3 +648,12 @@
 - Spec changes needed: 文档必须区分真实 CLI task 名称 `lint|governance|fixer|synthesis|search|memory-curator` 和内部 worker owner 字符串。
 - Tests or reviews that caught issues: `./scripts/e2e.sh` 捕捉 consume 输出字段和 mempalace CLI 参数语义；`rg` 捕捉旧 worker 名称残留。
 - Next plan note: PR8 合入后，wiki-agent 8 个 PR 的实现闭环完成；下一轮应只做实际使用反馈或新能力增量，不再混入本批 closeout。
+
+## 2026-05-07 / wiki-agent Runtime Upgrade
+
+- Scope: 完成 runtime-upgrade 11 PR 批次：harness loop、planner/evaluator/prompt runtime、structured events、TUI blocks/layout/footer/tool cards/theme/keyboard，以及 closeout 测试。
+- What worked: 每个 PR 合并后立即更新 main 并重建 Vera/GitNexus 索引，下一 PR 能基于新图谱继续做 impact/review，避免 stale index 误导。
+- What caused rework: CI 暴露 `wiki-cli` Notion env 测试会被并发环境变量污染；改用 test-only client 构造后去掉全局 env race。
+- Spec changes needed: 后续 agent runtime 增量必须继续写 spec 三件套；PRD 只做批次目标，具体行为合同放到 spec。
+- Tests or reviews that caught issues: harness event snapshot、retry bound、private web block、TUI message/layout snapshot 覆盖本批最容易回归的可见行为。
+- Next plan note: 本批合并后进入 Computer Use 验收；如 TUI 需要真异步 cancel，另开 streaming/cancellation spec，不混进 closeout。
