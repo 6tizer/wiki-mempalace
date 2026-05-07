@@ -11,6 +11,7 @@ mod manager;
 mod mcp_fallback;
 mod memory;
 mod planner;
+mod prompt;
 mod render_cli;
 mod roles;
 mod session_store;
