@@ -94,6 +94,8 @@ pub struct NotionArchivedRetirementApplyPlan {
     pub notion_page_ids: Vec<String>,
 }
 
+const SOURCE_MISSING_APPLY_ERROR: &str = "source_id no longer exists in DB snapshot";
+
 pub fn build_notion_archived_retirement_report(
     indexes: &[NotionPageIndexRecord],
     sources: &[RawArtifact],
@@ -220,13 +222,22 @@ pub fn build_notion_archived_retirement_apply_plan(
         match validate_apply_candidate(candidate, &source_by_id) {
             Ok((source_id, notion_page_id)) => {
                 let source_key = source_id.0.to_string();
-                if seen_sources.insert(source_key) && seen_pages.insert(notion_page_id.clone()) {
+                if !seen_sources.contains(&source_key) && !seen_pages.contains(&notion_page_id) {
+                    seen_sources.insert(source_key);
+                    seen_pages.insert(notion_page_id.clone());
                     source_ids.push(source_id);
                     notion_page_ids.push(notion_page_id);
                 }
             }
             Err(error) => {
                 stale_candidates += 1;
+                if error.error == SOURCE_MISSING_APPLY_ERROR {
+                    if let Some(notion_page_id) = resumable_missing_source_page_id(candidate) {
+                        if seen_pages.insert(notion_page_id.clone()) {
+                            notion_page_ids.push(notion_page_id);
+                        }
+                    }
+                }
                 errors.push(error);
             }
         }
@@ -289,7 +300,7 @@ pub fn collect_retired_source_files(
         if path.extension().and_then(|ext| ext.to_str()) != Some("md") {
             continue;
         }
-        let text = std::fs::read_to_string(path)?;
+        let text = read_retired_source_file(&root, path)?;
         let Some(frontmatter) = split_frontmatter(&text) else {
             continue;
         };
@@ -309,11 +320,33 @@ pub fn collect_retired_source_files(
     Ok(paths.into_iter().collect())
 }
 
-pub fn delete_retired_source_files(paths: &[PathBuf]) -> Result<usize, Box<dyn std::error::Error>> {
+fn preflight_retired_source_files_in_vault(
+    vault: Option<&Path>,
+    paths: &[PathBuf],
+) -> Result<(), Box<dyn std::error::Error>> {
+    for path in paths {
+        validate_retired_delete_target(vault, path)?;
+    }
+    Ok(())
+}
+
+pub fn delete_retired_source_files(
+    vault: Option<&Path>,
+    paths: &[PathBuf],
+) -> Result<usize, Box<dyn std::error::Error>> {
+    preflight_retired_source_files_in_vault(vault, paths)?;
     let mut deleted = 0;
     for path in paths {
-        std::fs::remove_file(path)?;
-        deleted += 1;
+        match std::fs::symlink_metadata(path) {
+            Ok(metadata) => {
+                validate_retired_delete_target(vault, path)?;
+                validate_retired_file_type(path, metadata.file_type())?;
+                std::fs::remove_file(path)?;
+                deleted += 1;
+            }
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+            Err(err) => return Err(Box::new(err)),
+        }
     }
     Ok(deleted)
 }
@@ -322,8 +355,11 @@ pub fn apply_retirement(
     eng: &mut LlmWikiEngine<NoopWikiHook>,
     repo: &SqliteRepository,
     apply_plan: &mut NotionArchivedRetirementApplyPlan,
+    vault: Option<&Path>,
     vault_files: &[PathBuf],
 ) -> Result<(), Box<dyn std::error::Error>> {
+    preflight_retired_source_files_in_vault(vault, vault_files)?;
+
     for source_id in &apply_plan.source_ids {
         eng.store.sources.remove(source_id);
         eng.audits.push(AuditRecord::new(
@@ -335,7 +371,7 @@ pub fn apply_retirement(
     let snapshot = eng.store.to_snapshot(&eng.audits);
     let deleted_index_rows =
         repo.save_snapshot_and_delete_notion_page_indexes(&snapshot, &apply_plan.notion_page_ids)?;
-    let deleted_vault_files = delete_retired_source_files(vault_files)?;
+    let deleted_vault_files = delete_retired_source_files(vault, vault_files)?;
     apply_plan.report.sources_removed = apply_plan.source_ids.len();
     apply_plan.report.index_rows_deleted = deleted_index_rows;
     apply_plan.report.vault_files_deleted = deleted_vault_files;
@@ -346,6 +382,116 @@ pub fn apply_retirement(
         .collect();
     apply_plan.report.applied_notion_page_ids = apply_plan.notion_page_ids.clone();
     Ok(())
+}
+
+fn read_retired_source_file(root: &Path, path: &Path) -> Result<String, std::io::Error> {
+    validate_retired_source_path(root, path)?;
+    validate_existing_retired_parent_chain(root, path)?;
+    let metadata = std::fs::symlink_metadata(path)?;
+    validate_retired_file_type(path, metadata.file_type())?;
+    std::fs::read_to_string(path)
+}
+
+fn validate_retired_delete_target(vault: Option<&Path>, path: &Path) -> Result<(), std::io::Error> {
+    match std::fs::symlink_metadata(path) {
+        Ok(metadata) => {
+            if let Some(vault) = vault {
+                let root = vault.join("sources");
+                validate_retired_source_path(&root, path)?;
+                validate_existing_retired_parent_chain(&root, path)?;
+            }
+            validate_retired_file_type(path, metadata.file_type())
+        }
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(err) => Err(err),
+    }
+}
+
+fn validate_retired_file_type(
+    path: &Path,
+    file_type: std::fs::FileType,
+) -> Result<(), std::io::Error> {
+    if file_type.is_symlink() {
+        return Err(invalid_retired_source_path(
+            path,
+            "retired source file must not be a symlink",
+        ));
+    }
+    if !file_type.is_file() {
+        return Err(invalid_retired_source_path(
+            path,
+            "retired source path must be a regular file",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_existing_retired_parent_chain(root: &Path, path: &Path) -> Result<(), std::io::Error> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| invalid_retired_source_path(path, "retired source path must have parent"))?;
+    let relative = parent.strip_prefix(root).map_err(|_| {
+        invalid_retired_source_path(path, "retired source must stay under sources/")
+    })?;
+    validate_retired_dir(root)?;
+    let mut current = root.to_path_buf();
+    for component in relative.components() {
+        let std::path::Component::Normal(name) = component else {
+            return Err(invalid_retired_source_path(
+                path,
+                "retired source path contains unsafe component",
+            ));
+        };
+        current.push(name);
+        validate_retired_dir(&current)?;
+    }
+    Ok(())
+}
+
+fn validate_retired_dir(path: &Path) -> Result<(), std::io::Error> {
+    let metadata = std::fs::symlink_metadata(path)?;
+    let file_type = metadata.file_type();
+    if file_type.is_symlink() {
+        return Err(invalid_retired_source_path(
+            path,
+            "retired source directory must not be a symlink",
+        ));
+    }
+    if !file_type.is_dir() {
+        return Err(invalid_retired_source_path(
+            path,
+            "retired source directory must be a directory",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_retired_source_path(root: &Path, path: &Path) -> Result<(), std::io::Error> {
+    let relative = path.strip_prefix(root).map_err(|_| {
+        invalid_retired_source_path(path, "retired source must stay under sources/")
+    })?;
+    if relative.as_os_str().is_empty() {
+        return Err(invalid_retired_source_path(
+            path,
+            "retired source path must not be sources/",
+        ));
+    }
+    for component in relative.components() {
+        if !matches!(component, std::path::Component::Normal(_)) {
+            return Err(invalid_retired_source_path(
+                path,
+                "retired source path contains unsafe component",
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn invalid_retired_source_path(path: &Path, reason: &str) -> std::io::Error {
+    std::io::Error::new(
+        std::io::ErrorKind::InvalidInput,
+        format!("{reason}: {}", path.display()),
+    )
 }
 
 pub fn write_notion_archived_retirement_apply_report(
@@ -382,10 +528,7 @@ fn validate_apply_candidate(
         .map_err(|err| apply_error(candidate, &format!("invalid source_id: {err}")))?;
     let source_id = SourceId(source_uuid);
     let Some(source) = source_by_id.get(&candidate.source_id).copied() else {
-        return Err(apply_error(
-            candidate,
-            "source_id no longer exists in DB snapshot",
-        ));
+        return Err(apply_error(candidate, SOURCE_MISSING_APPLY_ERROR));
     };
     if !candidate.source_uri.is_empty() && source.uri != candidate.source_uri {
         return Err(apply_error(
@@ -410,6 +553,25 @@ fn validate_apply_candidate(
         ));
     }
     Ok((source_id, notion_page_id))
+}
+
+fn resumable_missing_source_page_id(
+    candidate: &NotionArchivedRetirementCandidate,
+) -> Option<String> {
+    if candidate.action_type != "retire_notion_source" {
+        return None;
+    }
+    uuid::Uuid::parse_str(&candidate.source_id).ok()?;
+    let (db_id, source_page_id) = parse_notion_uri(&candidate.source_uri)?;
+    if db_id != candidate.db_id {
+        return None;
+    }
+    let source_page_id = canonical_notion_page_id(source_page_id);
+    let candidate_page_id = canonical_notion_page_id(&candidate.notion_page_id);
+    if source_page_id != candidate_page_id {
+        return None;
+    }
+    Some(candidate_page_id)
 }
 
 fn apply_error(
@@ -607,7 +769,8 @@ fn filename_timestamp(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use wiki_core::{RawArtifact, Scope, SourceId};
+    use wiki_core::{DomainSchema, RawArtifact, Scope, SourceId};
+    use wiki_storage::WikiRepository;
 
     fn source(id: SourceId, uri: &str, body: &str) -> RawArtifact {
         let mut source = RawArtifact::new(
@@ -772,12 +935,62 @@ mod tests {
         assert_eq!(apply_plan.source_ids, vec![source_id]);
         assert_eq!(
             apply_plan.notion_page_ids,
-            vec!["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string()]
+            vec![
+                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
+                "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_string()
+            ]
         );
         assert_eq!(apply_plan.report.safe_candidates, 2);
         assert_eq!(apply_plan.report.unsafe_candidates, 1);
         assert_eq!(apply_plan.report.stale_candidates, 1);
         assert_eq!(apply_plan.report.sources_planned, 1);
+        assert_eq!(apply_plan.report.index_rows_planned, 2);
+    }
+
+    #[test]
+    fn apply_plan_retains_page_id_for_missing_source_resume() {
+        let missing_id =
+            SourceId(uuid::Uuid::parse_str("22222222-2222-2222-2222-222222222222").unwrap());
+        let plan = NotionArchivedRetirementReport {
+            version: 1,
+            generated_at: "1970-01-01T00:00:00Z".to_string(),
+            mode: "dry_run".to_string(),
+            total_indexed_pages: 1,
+            archived_candidates: 1,
+            active_pages: 0,
+            missing_sources: 0,
+            fetch_errors: Vec::new(),
+            candidates: vec![NotionArchivedRetirementCandidate {
+                action_type: "retire_notion_source".to_string(),
+                db_id: "wechat".to_string(),
+                notion_page_id: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_string(),
+                notion_api_page_id: "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb".to_string(),
+                source_id: missing_id.0.to_string(),
+                source_uri: "notion://wechat/BBBBBBBB-BBBB-BBBB-BBBB-BBBBBBBBBBBB".to_string(),
+                title: "Missing".to_string(),
+                archived: true,
+                in_trash: false,
+                synced_at: "1970-01-01T00:00:00Z".to_string(),
+                reason: "test".to_string(),
+                apply_safe: true,
+            }],
+        };
+
+        let apply_plan = build_notion_archived_retirement_apply_plan(
+            &plan,
+            &[],
+            true,
+            OffsetDateTime::UNIX_EPOCH,
+        );
+
+        assert!(apply_plan.source_ids.is_empty());
+        assert_eq!(
+            apply_plan.notion_page_ids,
+            vec!["bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_string()]
+        );
+        assert_eq!(apply_plan.report.stale_candidates, 1);
+        assert_eq!(apply_plan.report.sources_planned, 0);
+        assert_eq!(apply_plan.report.index_rows_planned, 1);
     }
 
     #[test]
@@ -805,9 +1018,93 @@ mod tests {
         .unwrap();
 
         assert_eq!(paths, vec![retired.clone()]);
-        assert_eq!(delete_retired_source_files(&paths).unwrap(), 1);
+        assert_eq!(delete_retired_source_files(Some(vault), &paths).unwrap(), 1);
         assert!(!retired.exists());
         assert!(active.exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn delete_retired_source_files_rejects_symlink_and_leaves_target() {
+        let temp = tempfile::tempdir().unwrap();
+        let target = temp.path().join("target.md");
+        let link = temp.path().join("retired.md");
+        std::fs::write(&target, "target").unwrap();
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+
+        let err = delete_retired_source_files(None, &[link]).unwrap_err();
+
+        assert!(err
+            .to_string()
+            .contains("retired source file must not be a symlink"));
+        assert!(target.exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn delete_retired_source_files_rejects_symlink_parent_when_vault_known() {
+        let temp = tempfile::tempdir().unwrap();
+        let vault = temp.path().join("vault");
+        let outside_dir = temp.path().join("outside");
+        let target = outside_dir.join("retired.md");
+        std::fs::create_dir_all(&outside_dir).unwrap();
+        std::fs::create_dir_all(vault.join("sources")).unwrap();
+        std::fs::write(&target, "target").unwrap();
+        std::os::unix::fs::symlink(&outside_dir, vault.join("sources/wechat")).unwrap();
+        let path = vault.join("sources/wechat/retired.md");
+
+        let err = delete_retired_source_files(Some(&vault), &[path]).unwrap_err();
+
+        assert!(err
+            .to_string()
+            .contains("retired source directory must not be a symlink"));
+        assert!(target.exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn apply_retirement_preflights_vault_delete_before_db_mutation() {
+        let temp = tempfile::tempdir().unwrap();
+        let repo = SqliteRepository::open(temp.path().join("wiki.db")).unwrap();
+        let source_id =
+            SourceId(uuid::Uuid::parse_str("11111111-1111-1111-1111-111111111111").unwrap());
+        let mut eng = LlmWikiEngine::new(DomainSchema::permissive_default());
+        eng.store.sources.insert(
+            source_id,
+            source(
+                source_id,
+                "notion://wechat/AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA",
+                "# Archived title\nbody",
+            ),
+        );
+        repo.save_snapshot(&eng.store.to_snapshot(&eng.audits))
+            .unwrap();
+        let target = temp.path().join("target.md");
+        let link = temp.path().join("sources/wechat/retired.md");
+        write_file(&target, "target");
+        if let Some(parent) = link.parent() {
+            std::fs::create_dir_all(parent).unwrap();
+        }
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+        let mut apply_plan = NotionArchivedRetirementApplyPlan {
+            report: test_apply_report(),
+            source_ids: vec![source_id],
+            notion_page_ids: vec!["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string()],
+        };
+
+        let err = apply_retirement(&mut eng, &repo, &mut apply_plan, Some(temp.path()), &[link])
+            .unwrap_err();
+
+        assert!(err
+            .to_string()
+            .contains("retired source file must not be a symlink"));
+        assert!(eng.store.sources.contains_key(&source_id));
+        assert!(repo
+            .load_snapshot()
+            .unwrap()
+            .sources
+            .iter()
+            .any(|source| source.id == source_id));
     }
 
     fn write_file(path: &Path, body: &str) {
@@ -815,5 +1112,28 @@ mod tests {
             std::fs::create_dir_all(parent).unwrap();
         }
         std::fs::write(path, body).unwrap();
+    }
+
+    fn test_apply_report() -> NotionArchivedRetirementApplyReport {
+        NotionArchivedRetirementApplyReport {
+            version: 1,
+            generated_at: "1970-01-01T00:00:00Z".to_string(),
+            mode: "apply".to_string(),
+            plan_generated_at: "1970-01-01T00:00:00Z".to_string(),
+            actions_seen: 1,
+            safe_candidates: 1,
+            unsafe_candidates: 0,
+            stale_candidates: 0,
+            sources_planned: 1,
+            sources_removed: 0,
+            index_rows_planned: 1,
+            index_rows_deleted: 0,
+            vault_files_planned: 1,
+            vault_files_deleted: 0,
+            applied_source_ids: Vec::new(),
+            applied_notion_page_ids: Vec::new(),
+            vault_files: Vec::new(),
+            errors: Vec::new(),
+        }
     }
 }
