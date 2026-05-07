@@ -4,6 +4,7 @@ mod config;
 mod doctor;
 mod events;
 mod evidence;
+mod harness;
 mod llm_adapter;
 mod manager;
 mod mcp_fallback;
