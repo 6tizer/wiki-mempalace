@@ -1,6 +1,6 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-use super::app::{TuiAction, TuiApp};
+use super::app::{OverlayPanel, TuiAction, TuiApp};
 
 pub fn handle_key(app: &mut TuiApp, key: KeyEvent) -> TuiAction {
     match key.code {
@@ -9,8 +9,22 @@ pub fn handle_key(app: &mut TuiApp, key: KeyEvent) -> TuiAction {
             app.toggle_last_tool_collapse();
             TuiAction::None
         }
+        KeyCode::Char('r') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            app.toggle_overlay(OverlayPanel::Sessions);
+            TuiAction::None
+        }
+        KeyCode::Char('p') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            app.toggle_overlay(OverlayPanel::Plan);
+            TuiAction::None
+        }
+        KeyCode::Char('?') => {
+            app.toggle_overlay(OverlayPanel::Help);
+            TuiAction::None
+        }
         KeyCode::Esc => {
-            if app.input.is_empty() {
+            if app.clear_overlay() || app.cancel_thinking() {
+                TuiAction::None
+            } else if app.input.is_empty() {
                 TuiAction::Quit
             } else {
                 app.input.clear();
@@ -123,5 +137,33 @@ mod tests {
                 ..
             } if name == "wiki_query"
         )));
+    }
+
+    #[test]
+    fn ctrl_r_ctrl_p_question_and_esc_manage_overlays() {
+        let mut app = TuiApp::new("agent_manager");
+        assert_eq!(
+            handle_key(
+                &mut app,
+                KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL)
+            ),
+            TuiAction::None
+        );
+        assert_eq!(app.overlay, Some(OverlayPanel::Sessions));
+        assert_eq!(
+            handle_key(
+                &mut app,
+                KeyEvent::new(KeyCode::Char('p'), KeyModifiers::CONTROL)
+            ),
+            TuiAction::None
+        );
+        assert_eq!(app.overlay, Some(OverlayPanel::Plan));
+        assert_eq!(
+            handle_key(&mut app, key(KeyCode::Char('?'))),
+            TuiAction::None
+        );
+        assert_eq!(app.overlay, Some(OverlayPanel::Help));
+        assert_eq!(handle_key(&mut app, key(KeyCode::Esc)), TuiAction::None);
+        assert_eq!(app.overlay, None);
     }
 }

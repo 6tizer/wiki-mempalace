@@ -44,6 +44,9 @@ pub(crate) fn run(options: ChatOptions) -> Result<(), Box<dyn std::error::Error>
         runtime.web_mode().to_string(),
         backend,
     );
+    if let Ok(sessions) = runtime.render_sessions() {
+        app.set_sessions_text(&sessions);
+    }
     app.push_activity(format!("backend={backend} runtime=wiki-agent"));
     if let Some(prompt) = options.one_shot_prompt.clone() {
         submit_prompt(

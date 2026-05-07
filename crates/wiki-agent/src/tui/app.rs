@@ -9,6 +9,13 @@ pub enum ActivePanel {
     Activity,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum OverlayPanel {
+    Help,
+    Plan,
+    Sessions,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum TuiAction {
     None,
@@ -27,6 +34,7 @@ pub struct TuiApp {
     pub activity: Vec<MessageBlock>,
     pub input: String,
     pub active_panel: ActivePanel,
+    pub overlay: Option<OverlayPanel>,
     pub status: TuiStatus,
     pub history: Vec<String>,
     pub conversation_scroll: u16,
@@ -35,6 +43,8 @@ pub struct TuiApp {
     pub token_count: usize,
     pub tool_count: usize,
     pub latency_ms: Option<u128>,
+    pub plan: Vec<MessageBlock>,
+    pub sessions: Vec<MessageBlock>,
 }
 
 impl TuiApp {
@@ -50,6 +60,7 @@ impl TuiApp {
             activity: vec![MessageBlock::Thinking(format!("profile={profile}"))],
             input: String::new(),
             active_panel: ActivePanel::Conversation,
+            overlay: None,
             status: TuiStatus::Ready,
             history: Vec::new(),
             conversation_scroll: 0,
@@ -58,6 +69,8 @@ impl TuiApp {
             token_count: 0,
             tool_count: 0,
             latency_ms: None,
+            plan: Vec::new(),
+            sessions: Vec::new(),
         }
     }
 
@@ -109,6 +122,15 @@ impl TuiApp {
     pub fn push_events(&mut self, events: &[ChatEvent]) {
         for event in events {
             match event {
+                ChatEvent::PlanStarted { intent, actions } => {
+                    self.plan = vec![
+                        MessageBlock::Thinking(format!("intent={intent}")),
+                        MessageBlock::Thinking(format!("actions={}", actions.join(", "))),
+                    ];
+                    if let Some(line) = event.activity_line() {
+                        self.activity.push(MessageBlock::Thinking(line));
+                    }
+                }
                 ChatEvent::ToolStarted { name } => {
                     self.tool_count += 1;
                     self.activity.push(MessageBlock::ToolCall {
@@ -172,6 +194,53 @@ impl TuiApp {
 
     pub fn set_latency(&mut self, latency_ms: u128) {
         self.latency_ms = Some(latency_ms);
+    }
+
+    pub fn set_sessions_text(&mut self, sessions: &str) {
+        self.sessions = sessions
+            .lines()
+            .map(|line| MessageBlock::Thinking(line.to_string()))
+            .collect();
+    }
+
+    pub fn toggle_overlay(&mut self, overlay: OverlayPanel) {
+        self.overlay = if self.overlay == Some(overlay) {
+            None
+        } else {
+            Some(overlay)
+        };
+    }
+
+    pub fn clear_overlay(&mut self) -> bool {
+        let had_overlay = self.overlay.is_some();
+        self.overlay = None;
+        had_overlay
+    }
+
+    pub fn cancel_thinking(&mut self) -> bool {
+        if matches!(self.status, TuiStatus::Thinking) {
+            self.status = TuiStatus::Ready;
+            self.push_activity("cancel requested");
+            return true;
+        }
+        false
+    }
+
+    pub fn activity_view(&self) -> (&'static str, Vec<MessageBlock>) {
+        match self.overlay {
+            Some(OverlayPanel::Help) => (
+                "Help",
+                vec![
+                    MessageBlock::Thinking("Ctrl-R session picker".to_string()),
+                    MessageBlock::Thinking("Ctrl-P plan panel".to_string()),
+                    MessageBlock::Thinking("Ctrl-T tool collapse".to_string()),
+                    MessageBlock::Thinking("Esc closes overlays or clears input".to_string()),
+                ],
+            ),
+            Some(OverlayPanel::Plan) => ("Plan", self.plan.clone()),
+            Some(OverlayPanel::Sessions) => ("Sessions", self.sessions.clone()),
+            None => ("Activity", self.activity.clone()),
+        }
     }
 
     pub fn toggle_last_tool_collapse(&mut self) -> bool {
@@ -402,5 +471,21 @@ mod tests {
             summary: "low_evidence_retry".to_string(),
             collapsed: true,
         }));
+    }
+
+    #[test]
+    fn overlays_switch_activity_view() {
+        let mut app = TuiApp::new("agent_manager");
+        app.set_sessions_text("session-a\nsession-b");
+        app.toggle_overlay(OverlayPanel::Sessions);
+        let (title, sessions) = app.activity_view();
+        assert_eq!(title, "Sessions");
+        assert_eq!(sessions.len(), 2);
+
+        app.toggle_overlay(OverlayPanel::Plan);
+        let (title, _) = app.activity_view();
+        assert_eq!(title, "Plan");
+        assert!(app.clear_overlay());
+        assert_eq!(app.activity_view().0, "Activity");
     }
 }
