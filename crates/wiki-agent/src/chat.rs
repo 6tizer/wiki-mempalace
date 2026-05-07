@@ -175,12 +175,18 @@ impl ChatRuntime {
         model: &dyn ChatModel,
     ) -> Result<ChatTurn, Box<dyn std::error::Error>> {
         self.store.add_message(&self.session_id, "user", prompt)?;
+        let task_plan = planner::TaskPlan::for_chat(
+            prompt,
+            self.web,
+            &self.config.viewer_scope,
+            self.allow_private_web_search,
+        );
         let harness_turn = {
             let mut delegate = ChatHarnessDelegate {
                 runtime: self,
                 model,
             };
-            HarnessRuntime.run(prompt, &mut delegate)?
+            HarnessRuntime.run(prompt, &task_plan, &mut delegate)?
         };
         debug_assert!(!harness_turn.events.is_empty());
         debug_assert!(!harness_turn.observations.is_empty());
