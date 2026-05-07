@@ -1,6 +1,7 @@
 use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
 
 use super::app::{ActivePanel, TuiApp};
+use super::message::blocks_to_text;
 use super::theme;
 
 pub fn conversation(app: &TuiApp) -> Paragraph<'_> {
@@ -9,7 +10,7 @@ pub fn conversation(app: &TuiApp) -> Paragraph<'_> {
     } else {
         "Conversation"
     };
-    Paragraph::new(app.conversation.join("\n\n"))
+    Paragraph::new(blocks_to_text(&app.conversation, true))
         .block(
             Block::default()
                 .title(title)
@@ -31,7 +32,7 @@ pub fn activity(app: &TuiApp) -> Paragraph<'_> {
     } else {
         "Activity"
     };
-    Paragraph::new(app.activity.join("\n"))
+    Paragraph::new(blocks_to_text(&app.activity, false))
         .block(
             Block::default()
                 .title(title)

@@ -1,5 +1,6 @@
+use super::message::{MessageBlock, ToolCallStatus};
 use super::status::TuiStatus;
-use crate::events::{activity_lines, ChatEvent};
+use crate::events::ChatEvent;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ActivePanel {
@@ -16,8 +17,8 @@ pub enum TuiAction {
 
 #[derive(Clone, Debug)]
 pub struct TuiApp {
-    pub conversation: Vec<String>,
-    pub activity: Vec<String>,
+    pub conversation: Vec<MessageBlock>,
+    pub activity: Vec<MessageBlock>,
     pub input: String,
     pub active_panel: ActivePanel,
     pub status: TuiStatus,
@@ -34,7 +35,7 @@ impl TuiApp {
         let profile = profile.into();
         Self {
             conversation: Vec::new(),
-            activity: vec![format!("profile={profile}")],
+            activity: vec![MessageBlock::Thinking(format!("profile={profile}"))],
             input: String::new(),
             active_panel: ActivePanel::Conversation,
             status: TuiStatus::Ready,
@@ -48,37 +49,87 @@ impl TuiApp {
     }
 
     pub fn push_user(&mut self, message: &str) {
-        self.conversation.push(format!("user: {message}"));
+        self.conversation
+            .push(MessageBlock::User(message.to_string()));
     }
 
     pub fn push_assistant_message(&mut self, message: &str) {
         self.token_count += count_tokens(message);
-        self.conversation.push(format!("assistant: {message}"));
+        self.conversation
+            .push(MessageBlock::AssistantText(message.to_string()));
     }
 
     pub fn push_assistant_delta(&mut self, delta: &str) {
         self.token_count += count_tokens(delta);
         if let Some(last) = self.conversation.last_mut() {
-            if last.starts_with("assistant: ") {
-                last.push_str(delta);
+            if last.append_assistant_delta(delta) {
                 return;
             }
         }
-        self.conversation.push(format!("assistant: {delta}"));
+        self.conversation
+            .push(MessageBlock::AssistantText(delta.to_string()));
     }
 
     pub fn push_activity(&mut self, line: impl Into<String>) {
-        self.activity.push(line.into());
+        self.activity.push(MessageBlock::Thinking(line.into()));
+    }
+
+    pub fn push_error(&mut self, message: impl Into<String>) {
+        self.activity.push(MessageBlock::Error(message.into()));
+    }
+
+    pub fn push_evidence(&mut self, summary: impl Into<String>) {
+        self.activity.push(MessageBlock::Evidence(summary.into()));
     }
 
     pub fn push_events(&mut self, events: &[ChatEvent]) {
         for event in events {
-            if matches!(event, ChatEvent::ToolStarted { .. }) {
-                self.tool_count += 1;
+            match event {
+                ChatEvent::ToolStarted { name } => {
+                    self.tool_count += 1;
+                    self.activity.push(MessageBlock::ToolCall {
+                        name: name.clone(),
+                        status: ToolCallStatus::Running,
+                        duration_ms: None,
+                        summary: String::new(),
+                        collapsed: true,
+                    });
+                }
+                ChatEvent::ToolFinished {
+                    name,
+                    duration_ms,
+                    summary,
+                } => {
+                    self.activity.push(MessageBlock::ToolCall {
+                        name: name.clone(),
+                        status: ToolCallStatus::Succeeded,
+                        duration_ms: Some(*duration_ms),
+                        summary: summary.clone(),
+                        collapsed: true,
+                    });
+                }
+                ChatEvent::ToolFailed {
+                    name,
+                    duration_ms,
+                    error,
+                } => {
+                    self.activity.push(MessageBlock::ToolCall {
+                        name: name.clone(),
+                        status: ToolCallStatus::Failed,
+                        duration_ms: *duration_ms,
+                        summary: error.clone(),
+                        collapsed: false,
+                    });
+                }
+                ChatEvent::EvidenceReady { summary } => {
+                    self.activity.push(MessageBlock::Evidence(summary.clone()));
+                }
+                _ => {
+                    if let Some(line) = event.activity_line() {
+                        self.activity.push(MessageBlock::Thinking(line));
+                    }
+                }
             }
-        }
-        for line in activity_lines(events) {
-            self.push_activity(line);
         }
     }
 
@@ -178,7 +229,10 @@ mod tests {
         let mut app = TuiApp::new("agent_manager");
         app.push_assistant_delta("hello ");
         app.push_assistant_delta("world");
-        assert_eq!(app.conversation, vec!["assistant: hello world"]);
+        assert_eq!(
+            app.conversation,
+            vec![MessageBlock::AssistantText("hello world".to_string())]
+        );
         assert_eq!(app.token_count, 2);
     }
 
@@ -228,12 +282,22 @@ mod tests {
         ]);
 
         assert_eq!(app.tool_count, 1);
+        assert!(app.activity.contains(&MessageBlock::ToolCall {
+            name: "wiki_query".to_string(),
+            status: ToolCallStatus::Running,
+            duration_ms: None,
+            summary: String::new(),
+            collapsed: true,
+        }));
+        assert!(app.activity.contains(&MessageBlock::ToolCall {
+            name: "wiki_query".to_string(),
+            status: ToolCallStatus::Succeeded,
+            duration_ms: Some(4),
+            summary: "internal_results=1".to_string(),
+            collapsed: true,
+        }));
         assert!(app
             .activity
-            .contains(&"tool: wiki_query started".to_string()));
-        assert!(app
-            .activity
-            .contains(&"tool: wiki_query finished duration_ms=4 internal_results=1".to_string()));
-        assert!(app.activity.contains(&"answer: ready".to_string()));
+            .contains(&MessageBlock::Thinking("answer: ready".to_string())));
     }
 }

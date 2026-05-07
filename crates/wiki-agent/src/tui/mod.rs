@@ -1,6 +1,7 @@
 mod app;
 mod input;
 mod layout;
+mod message;
 mod panels;
 mod status;
 mod theme;
@@ -94,7 +95,7 @@ fn submit_prompt(
     match runtime.run_prompt(prompt, fake_response) {
         Ok(turn) => {
             app.push_events(&turn.events);
-            app.push_activity(turn.evidence);
+            app.push_evidence(turn.evidence);
             if turn.answer.is_empty() {
                 app.push_assistant_message("");
             } else {
@@ -105,7 +106,7 @@ fn submit_prompt(
             app.set_status(TuiStatus::Ready);
         }
         Err(err) => {
-            app.push_activity(format!("error: {err}"));
+            app.push_error(err.to_string());
             app.set_status(TuiStatus::Error(err.to_string()));
         }
     }
