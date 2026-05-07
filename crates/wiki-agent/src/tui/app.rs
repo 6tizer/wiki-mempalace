@@ -1,5 +1,6 @@
-use super::message::{MessageBlock, ToolCallStatus};
+use super::message::MessageBlock;
 use super::status::TuiStatus;
+use super::tool_call::ToolCallStatus;
 use crate::events::ChatEvent;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -147,6 +148,15 @@ impl TuiApp {
                 ChatEvent::EvidenceReady { summary } => {
                     self.activity.push(MessageBlock::Evidence(summary.clone()));
                 }
+                ChatEvent::RetryStarted { attempt, reason } => {
+                    self.activity.push(MessageBlock::ToolCall {
+                        name: format!("retry:{attempt}"),
+                        status: ToolCallStatus::Retrying,
+                        duration_ms: None,
+                        summary: reason.clone(),
+                        collapsed: false,
+                    });
+                }
                 _ => {
                     if let Some(line) = event.activity_line() {
                         self.activity.push(MessageBlock::Thinking(line));
@@ -162,6 +172,16 @@ impl TuiApp {
 
     pub fn set_latency(&mut self, latency_ms: u128) {
         self.latency_ms = Some(latency_ms);
+    }
+
+    pub fn toggle_last_tool_collapse(&mut self) -> bool {
+        for block in self.activity.iter_mut().rev() {
+            if let MessageBlock::ToolCall { collapsed, .. } = block {
+                *collapsed = !*collapsed;
+                return true;
+            }
+        }
+        false
     }
 
     pub fn toggle_panel(&mut self) {
@@ -357,5 +377,30 @@ mod tests {
         assert!(footer.contains("backend=native"));
         assert!(footer.contains("tokens=2"));
         assert!(footer.contains("latency_ms=42"));
+    }
+
+    #[test]
+    fn retry_event_and_collapse_toggle_use_tool_blocks() {
+        let mut app = TuiApp::new("agent_manager");
+        app.push_events(&[ChatEvent::RetryStarted {
+            attempt: 1,
+            reason: "low_evidence_retry".to_string(),
+        }]);
+
+        assert!(app.activity.contains(&MessageBlock::ToolCall {
+            name: "retry:1".to_string(),
+            status: ToolCallStatus::Retrying,
+            duration_ms: None,
+            summary: "low_evidence_retry".to_string(),
+            collapsed: false,
+        }));
+        assert!(app.toggle_last_tool_collapse());
+        assert!(app.activity.contains(&MessageBlock::ToolCall {
+            name: "retry:1".to_string(),
+            status: ToolCallStatus::Retrying,
+            duration_ms: None,
+            summary: "low_evidence_retry".to_string(),
+            collapsed: true,
+        }));
     }
 }

@@ -5,6 +5,10 @@ use super::app::{TuiAction, TuiApp};
 pub fn handle_key(app: &mut TuiApp, key: KeyEvent) -> TuiAction {
     match key.code {
         KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => TuiAction::Quit,
+        KeyCode::Char('t') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            app.toggle_last_tool_collapse();
+            TuiAction::None
+        }
         KeyCode::Esc => {
             if app.input.is_empty() {
                 TuiAction::Quit
@@ -99,5 +103,25 @@ mod tests {
         let mut app = TuiApp::new("agent_manager");
         let event = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL);
         assert_eq!(handle_key(&mut app, event), TuiAction::Quit);
+    }
+
+    #[test]
+    fn ctrl_t_toggles_last_tool_card() {
+        let mut app = TuiApp::new("agent_manager");
+        app.push_events(&[crate::events::ChatEvent::ToolFinished {
+            name: "wiki_query".to_string(),
+            duration_ms: 1,
+            summary: "internal_results=1".to_string(),
+        }]);
+        let event = KeyEvent::new(KeyCode::Char('t'), KeyModifiers::CONTROL);
+        assert_eq!(handle_key(&mut app, event), TuiAction::None);
+        assert!(app.activity.iter().any(|block| matches!(
+            block,
+            super::super::message::MessageBlock::ToolCall {
+                name,
+                collapsed: false,
+                ..
+            } if name == "wiki_query"
+        )));
     }
 }
